@@ -41,9 +41,12 @@ export interface RenderResult {
   ms: number;
 }
 
+// Hosts like Photoshop's UXP may not provide `performance`.
+const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
 /** Runs every enabled step over an RGBA image already scaled to working size. */
 export function render(src: Uint8ClampedArray, w: number, h: number, recipe: Recipe, frame = 0): RenderResult {
-  const t0 = performance.now();
+  const t0 = now();
   const n = w * h;
   const rgb = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -67,7 +70,7 @@ export function render(src: Uint8ClampedArray, w: number, h: number, recipe: Rec
     rgba[i * 4 + 2] = rgb[i * 3 + 2];
     rgba[i * 4 + 3] = src[i * 4 + 3] >= 128 ? 255 : 0;
   }
-  return { rgba, indices: ctx.indices, palette: ctx.indices ? ctx.palette : undefined, ms: performance.now() - t0 };
+  return { rgba, indices: ctx.indices, palette: ctx.indices ? ctx.palette : undefined, ms: now() - t0 };
 }
 
 /** Validates and normalises an imported recipe, dropping unknown steps. */
