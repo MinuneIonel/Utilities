@@ -1,5 +1,6 @@
 import { features, fold, hasDiacritics, matchCase, normalize, tokenize } from "./text.ts";
 import { guess, type Model } from "./model.ts";
+import { neuralScores, neuralStream } from "./neural.ts";
 
 export interface Alternative {
   form: string;
@@ -43,6 +44,7 @@ export function restore(input: string, model: Model, options: RestoreOptions = {
   const keepExisting = options.keepExisting ?? true;
   const text = normalize(input);
   const words = tokenize(text);
+  const stream = model.neural ? neuralStream(text, words) : null;
   const out: RestoredWord[] = [];
   let result = "";
   let pos = 0;
@@ -50,7 +52,7 @@ export function restore(input: string, model: Model, options: RestoreOptions = {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const lower = w.text.toLowerCase();
-    let alternatives = decide(model, words, i);
+    let alternatives = decide(model, words, i, stream);
     let source: RestoredWord["source"] = alternatives.length > 1 ? "context" : "dictionary";
     if (alternatives.length === 0) {
       const g = guess(model, w.key);
@@ -95,7 +97,12 @@ function agreesWith(typed: string, form: string): boolean {
   return true;
 }
 
-function decide(model: Model, words: ReturnType<typeof tokenize>, i: number): Alternative[] {
+function decide(
+  model: Model,
+  words: ReturnType<typeof tokenize>,
+  i: number,
+  stream: ReturnType<typeof neuralStream> | null,
+): Alternative[] {
   const key = words[i].key;
   const forms = model.forms.get(key);
   if (!forms) return [];
@@ -112,10 +119,21 @@ function decide(model: Model, words: ReturnType<typeof tokenize>, i: number): Al
     if (!bySig) continue;
     for (let j = 0; j < forms.length; j++) scores[j] += bySig.get(signature(forms[j])) ?? 0;
   }
-  // softmax for display, calibrated by the temperature
-  const max = Math.max(...scores);
-  const exps = Array.from(scores, (s) => Math.exp((s - max) * model.temperature));
-  const total = exps.reduce((a, b) => a + b, 0);
+  // perceptron log-probabilities, calibrated by the temperature
+  let max = Math.max(...scores);
+  let total = scores.reduce((a, s) => a + Math.exp((s - max) * model.temperature), 0);
+  for (let j = 0; j < forms.length; j++) scores[j] = (scores[j] - max) * model.temperature - Math.log(total);
+  // plus the neural helper's, for words the perceptron is unsure about
+  let scale = 1;
+  const net = model.neural;
+  if (net && stream && Math.exp(Math.max(...scores)) < net.gate) {
+    const nn = neuralScores(net, stream.tokens, stream.positions[i], key, forms);
+    for (let j = 0; j < forms.length; j++) scores[j] += net.weight * nn[j];
+    scale = net.temperature;
+  }
+  max = Math.max(...scores);
+  const exps = Array.from(scores, (s) => Math.exp((s - max) * scale));
+  total = exps.reduce((a, b) => a + b, 0);
   return forms
     .map((form, j) => ({ form, p: exps[j] / total, s: scores[j] }))
     .sort((a, b) => b.s - a.s)

@@ -1,6 +1,8 @@
 // The trained model: candidate forms per folded word, context weights, and a letter-level
 // guesser for words not in the lexicon. Built by training/train.py into public/model.dat.
 
+import type { Neural } from "./neural.ts";
+
 export interface Model {
   /** Folded word → candidate forms (lower case). Absent: ask the letter guesser. */
   forms: Map<string, string[]>;
@@ -13,6 +15,8 @@ export interface Model {
   /** letter + context window → restored letter. */
   chars: Map<string, string>;
   temperature: number;
+  /** Optional neural helper (public/neural.dat), attached after loading. */
+  neural?: Neural;
   stats: { words: number; ambiguous: number; weights: number };
 }
 

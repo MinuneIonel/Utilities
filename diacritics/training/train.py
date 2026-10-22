@@ -11,7 +11,7 @@ The model has three parts:
   3. a letter-level guesser for words the lexicon doesn't have.
 Tokenising and features mirror src/engine/text.ts exactly.
 """
-import collections, gzip, math, os, random, re, sys, time
+import collections, gzip, math, os, random, re, sys, time, unicodedata
 
 CLEAN, FORMS, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 EPOCHS = int(sys.argv[sys.argv.index('--epochs') + 1]) if '--epochs' in sys.argv else 5
@@ -25,7 +25,9 @@ def log(*a): print(f'[{time.time() - t0:6.0f}s]', *a, flush=True)
 
 # ---------------------------------------------------------------- text (mirror of text.ts)
 
-WORD = re.compile(r"[^\W\d_]+")
+# letters only, like \p{L}+ in JavaScript (Python's \w also takes ², ³, combining marks etc.)
+_NOT_LETTERS = ''.join(re.escape(chr(c)) for c in range(0x10000) if re.match(r'\w', chr(c)) and not unicodedata.category(chr(c)).startswith('L'))
+WORD = re.compile('[^\\W' + _NOT_LETTERS + ']+')
 FOLD = str.maketrans('ăâîșțşţĂÂÎȘȚŞŢ', 'aaiststAAISTST')
 MARKERS = {'^', '$', '.', ',', '#'}
 

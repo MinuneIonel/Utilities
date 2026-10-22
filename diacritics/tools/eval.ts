@@ -1,5 +1,5 @@
 // Strip diacritics from correctly written text, restore them, and count the differences.
-//   npm run eval -- test.txt [more.txt ...] [--lines 3000] [--errors]
+//   npm run eval -- test.txt [more.txt ...] [--lines 3000] [--errors] [--no-neural]
 import { readFileSync } from "node:fs";
 import { restore } from "../src/engine/restore.ts";
 import { fold } from "../src/engine/text.ts";
@@ -12,9 +12,9 @@ const temperature = args.includes("--temperature") ? Number(args[args.indexOf("-
 const files = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--lines" && args[i - 1] !== "--temperature");
 
 const t0 = performance.now();
-const model = loadModel();
+const model = loadModel(!args.includes("--no-neural"));
 if (temperature !== null) model.temperature = temperature;
-console.log(`model loaded in ${Math.round(performance.now() - t0)} ms`);
+console.log(`model loaded in ${Math.round(performance.now() - t0)} ms${model.neural ? " (with neural helper)" : ""}`);
 
 const strip = (s: string) => s.replace(/\p{L}+/gu, (w) => [...w].map((c, i) => (c === c.toLowerCase() ? fold(w)[i] : fold(w)[i].toUpperCase())).join(""));
 

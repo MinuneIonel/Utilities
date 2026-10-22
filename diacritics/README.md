@@ -1,6 +1,6 @@
 # Diacritice
 
-Restores Romanian diacritics (ă â î ș ț) in text typed without them. It runs entirely in the browser with a small statistical model, no LLM and no server.
+Restores Romanian diacritics (ă â î ș ț) in text typed without them. It runs entirely in the browser with a small statistical model and a tiny neural helper, no LLM and no server.
 
 ```sh
 cd diacritics
@@ -30,7 +30,8 @@ echo "Si daca ma intrebi, tara asta e frumoasa." | npm run restore --silent
 
 1. **Lexicon.** Every word is folded to plain letters ("fata"), and the lexicon lists the forms that fold to it (fata, fată, fața, față). It combines the words seen in the training text with all 1.36 million word forms generated from the Romanian Hunspell dictionary.
 2. **Context.** When a word has several forms, an averaged perceptron picks one from the words around it: the word before and after, the pair before and after, and the two together. Some weights belong to a single word ("ca" vs "că" after "spune"); others are shared by all words and look at the ending, so "o stenoza" becomes "o stenoză" even for rare words.
-3. **Unknown words** (names, new words, typos) are restored letter by letter from the letters around each a, i, s, t.
+3. **Neural helper.** For words the perceptron is less than 95% sure about (about 1 in 6 ambiguous words), a small window network (2.4M parameters, int8) reads the 6 words and punctuation marks on each side and re-scores the candidates. Its log-probabilities are added to the perceptron's. It only chooses between the lexicon's forms, so it can't invent or rewrite words. It cuts the remaining errors by about 10%. If `neural.dat` is missing, the app works without it.
+4. **Unknown words** (names, new words, typos) are restored letter by letter from the letters around each a, i, s, t.
 
 The engine in `src/engine/` is plain TypeScript with no DOM, and `restoreText(text, model)` is a text-in, text-out function.
 
@@ -40,16 +41,18 @@ Measured with `npm run eval` on text the model never saw: diacritics are strippe
 
 | Test text | Words | Words correct | Diacritic words restored | Unchanged text would be |
 | --- | ---: | ---: | ---: | ---: |
-| News (MOROCO test split) | 1,033,729 | **99.37%** | 98.84% | 71.3% |
-| Literature, Wikipedia, medical (UD RRT + SiMoNERo test) | 26,284 | **98.54%** | 97.71% | 70.5% |
+| News (MOROCO test split) | 1,033,729 | **99.43%** | 98.96% | 71.3% |
+| Literature, Wikipedia, medical (UD RRT + SiMoNERo test) | 26,284 | **98.67%** | 97.95% | 70.5% |
 
-The words it still gets wrong are mostly genuinely ambiguous ones: *ca / că*, *casa / casă*, *fata / fața / față*, *sau / său*. The orange "unsure" marks are calibrated: words shown below 80% are right about 80% of the time, so those are the ones worth a glance. Some errors counted against it are in the test text itself (news items typed partly without diacritics).
+Without the neural helper (`npm run eval -- --no-neural`) the scores are 99.37% and 98.54%.
 
-The model is 5 MB (gzipped), loads in about 2 seconds, and restores around 70,000 words a second.
+The words it still gets wrong are mostly genuinely ambiguous ones: *ca / că*, *casa / casă*, *fata / fața / față*, *sau / său*. The orange "unsure" marks are calibrated: words shown below 80% are right only about 70% of the time, while words above 95% are right 99% of the time, so the orange ones are worth a glance. Some errors counted against it are in the test text itself (news items typed partly without diacritics).
+
+The two model files are 5 MB and 2.2 MB (gzipped), load in about 2.5 seconds, and restore around 20,000 words a second.
 
 ## Training
 
-The model in `public/model.dat` is built by the scripts in `training/` (Python standard library only):
+The models in `public/` are built by the scripts in `training/` (Python standard library, plus numpy for the neural helper):
 
 ```sh
 cd training
@@ -57,6 +60,7 @@ cd training
 python3 prep.py raw clean                        # clean, modern-spelling text and test sets
 python3 unmunch.py raw/ro.dic raw/ro.aff > forms.txt
 python3 train.py clean forms.txt ../public/model.dat
+python3 neural.py clean ../public/model.dat ../public/neural.dat   # needs numpy, ~10 min
 cd .. && npm run eval -- training/clean/test_news.txt training/clean/test_ud.txt
 ```
 

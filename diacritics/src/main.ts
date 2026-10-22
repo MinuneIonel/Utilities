@@ -29,12 +29,16 @@ let timer = 0;
 // ---------------------------------------------------------------- worker
 
 const worker = new RestoreWorker();
-worker.postMessage({ type: "load", url: new URL("model.dat", document.baseURI).href } satisfies LoadRequest);
+worker.postMessage({
+  type: "load",
+  url: new URL("model.dat", document.baseURI).href,
+  neuralUrl: new URL("neural.dat", document.baseURI).href,
+} satisfies LoadRequest);
 worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
   const m = e.data;
   if (m.type === "ready") {
     ready = true;
-    status.textContent = `Model ready: ${m.words.toLocaleString()} words, ${m.ambiguous.toLocaleString()} decided by context (${Math.round(m.ms)} ms)`;
+    status.textContent = `Model ready: ${m.words.toLocaleString()} words, ${m.ambiguous.toLocaleString()} decided by context${m.neural ? ", neural helper on" : ""} (${Math.round(m.ms)} ms)`;
     schedule(0);
   } else if (m.type === "error") {
     status.textContent = `Could not load the model: ${m.message}`;
