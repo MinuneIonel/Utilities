@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Lab</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 1h7l3 3v11H3z' fill='%23e8ff59'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo"></span>PDF Lab</div>
+      <div class="group">
+        <button id="add-files" title="Add PDFs or images (or drop / paste them)">Add files</button>
+        <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+      </div>
+      <div class="group right">
+        <button id="preview" title="Build the PDF and open it in a new tab">Preview</button>
+        <button id="download-split" title="Split the result into several files (.zip)">Split .zip</button>
+        <button id="download" class="primary">Download PDF</button>
+      </div>
+    </header>
+    <main class="layout">
+      <aside class="panel">
+        <section class="card">
+          <h2>Files</h2>
+          <ul id="files" class="files"></ul>
+          <p class="hint" id="files-empty">
+            Add PDFs or images. Each file's pages are appended to the document.
+          </p>
+        </section>
+
+        <details class="card tool" id="forms-card" hidden>
+          <summary>Form fields</summary>
+          <div id="forms"></div>
+          <label class="check"><input type="checkbox" id="flatten" /> Flatten (make fields permanent)</label>
+        </details>
+
+        <details class="card tool">
+          <summary>Watermark</summary>
+          <label class="check"><input type="checkbox" id="wm-on" /> Add watermark</label>
+          <div class="row">
+            <label for="wm-text">Text</label><input type="text" id="wm-text" value="CONFIDENTIAL" />
+          </div>
+          <div class="row">
+            <label for="wm-size">Size</label
+            ><input type="range" id="wm-size" min="12" max="160" value="64" /><output></output>
+          </div>
+          <div class="row">
+            <label for="wm-opacity">Opacity</label
+            ><input type="range" id="wm-opacity" min="5" max="100" value="20" /><output></output>
+          </div>
+          <div class="row">
+            <label for="wm-angle">Angle</label
+            ><input type="range" id="wm-angle" min="-90" max="90" step="15" value="45" /><output></output>
+          </div>
+          <div class="row">
+            <label for="wm-color">Color</label><input type="color" id="wm-color" value="#ff3b30" />
+          </div>
+        </details>
+
+        <details class="card tool">
+          <summary>Page numbers</summary>
+          <label class="check"><input type="checkbox" id="pn-on" /> Add page numbers</label>
+          <div class="row">
+            <label for="pn-format">Format</label><input type="text" id="pn-format" value="{n} / {total}" />
+          </div>
+          <div class="row">
+            <label for="pn-pos">Position</label>
+            <select id="pn-pos">
+              <option value="bottom-center">Bottom center</option>
+              <option value="bottom-right">Bottom right</option>
+              <option value="bottom-left">Bottom left</option>
+              <option value="top-center">Top center</option>
+              <option value="top-right">Top right</option>
+              <option value="top-left">Top left</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="pn-size">Size</label
+            ><input type="range" id="pn-size" min="6" max="24" value="10" /><output></output>
+          </div>
+          <div class="row">
+            <label for="pn-start">Start at</label><input type="number" id="pn-start" value="1" min="0" />
+          </div>
+        </details>
+
+        <details class="card tool">
+          <summary>Document info</summary>
+          <div class="row"><label for="meta-title">Title</label><input type="text" id="meta-title" /></div>
+          <div class="row"><label for="meta-author">Author</label><input type="text" id="meta-author" /></div>
+          <div class="row">
+            <label for="meta-subject">Subject</label><input type="text" id="meta-subject" />
+          </div>
+          <div class="row">
+            <label for="meta-keywords">Keywords</label
+            ><input type="text" id="meta-keywords" placeholder="comma separated" />
+          </div>
+        </details>
+
+        <details class="card tool">
+          <summary>Password</summary>
+          <label class="check"><input type="checkbox" id="pw-on" /> Protect with a password</label>
+          <div class="row">
+            <label for="pw-user">Open password</label><input type="text" id="pw-user" autocomplete="off" />
+          </div>
+          <div class="row">
+            <label for="pw-owner">Owner password</label
+            ><input type="text" id="pw-owner" autocomplete="off" placeholder="same as open" />
+          </div>
+          <label class="check"><input type="checkbox" id="pw-print" checked /> Allow printing</label>
+          <label class="check"><input type="checkbox" id="pw-copy" checked /> Allow copying text</label>
+          <label class="check"><input type="checkbox" id="pw-modify" checked /> Allow editing</label>
+          <p class="hint">Files you opened with a password are saved without one unless you set it here.</p>
+        </details>
+
+        <details class="card tool">
+          <summary>Compress</summary>
+          <div class="row">
+            <label for="cz-mode">Mode</label>
+            <select id="cz-mode">
+              <option value="none">Off</option>
+              <option value="lossless">Lossless (restructure)</option>
+              <option value="raster">Strong (pages to JPEG)</option>
+            </select>
+          </div>
+          <div class="row raster">
+            <label for="cz-dpi">Resolution</label
+            ><input type="range" id="cz-dpi" min="50" max="300" step="25" value="125" /><output></output>
+          </div>
+          <div class="row raster">
+            <label for="cz-quality">Quality</label
+            ><input type="range" id="cz-quality" min="20" max="95" step="5" value="70" /><output></output>
+          </div>
+          <p class="hint">
+            Strong mode turns every page into a picture: much smaller for scans, but text can no longer be
+            selected.
+          </p>
+        </details>
+
+        <details class="card tool">
+          <summary>Split</summary>
+          <div class="row">
+            <label for="sp-mode">Split by</label>
+            <select id="sp-mode">
+              <option value="every">Every N pages</option>
+              <option value="ranges">Page ranges</option>
+            </select>
+          </div>
+          <div class="row sp-every">
+            <label for="sp-n">Pages per file</label><input type="number" id="sp-n" value="1" min="1" />
+          </div>
+          <div class="row sp-ranges">
+            <label for="sp-ranges">Ranges</label
+            ><input type="text" id="sp-ranges" placeholder="1-3; 4-6; 7-" />
+          </div>
+          <p class="hint">
+            Use "Split .zip" to download. Separate files with <kbd>;</kbd>, pages with <kbd>,</kbd>.
+          </p>
+        </details>
+      </aside>
+
+      <section class="viewer" id="viewer">
+        <div class="grid-bar">
+          <button id="sel-all" title="Select all pages (Ctrl+A)">Select all</button>
+          <button id="rot-left" title="Rotate selected left">↺</button>
+          <button id="rot-right" title="Rotate selected right">↻</button>
+          <button id="dup" title="Duplicate selected">Duplicate</button>
+          <button id="del" title="Delete selected (Delete)">Delete</button>
+          <button id="extract" title="Download only the selected pages">Extract</button>
+          <button id="edit" title="Edit the selected page (double-click a page)">Edit page</button>
+          <span class="spacer"></span>
+          <label class="inline" title="Thumbnail size"
+            >Size <input type="range" id="thumb-size" min="100" max="320" value="170"
+          /></label>
+          <span id="stats"></span>
+        </div>
+        <div class="grid-wrap" id="grid-wrap">
+          <ol class="grid" id="grid"></ol>
+          <div class="empty" id="empty">
+            <p>Drop PDFs or images here</p>
+            <button id="empty-add" class="primary">Add files</button>
+          </div>
+        </div>
+
+        <div class="editor" id="editor" hidden>
+          <div class="editor-bar">
+            <div class="group" id="tools">
+              <button data-tool="select" title="Select and move (V)">Select</button>
+              <button data-tool="text" title="Add text (T)">Text</button>
+              <button data-tool="highlight" title="Highlight (H)">Highlight</button>
+              <button data-tool="whiteout" title="Cover with white (W)">Whiteout</button>
+              <button data-tool="box" title="Rectangle (R)">Box</button>
+              <button data-tool="draw" title="Freehand (D)">Draw</button>
+              <button id="tool-image" title="Place an image or signature">Image</button>
+            </div>
+            <div class="group" id="props">
+              <input type="color" id="prop-color" title="Color" />
+              <label class="inline" id="prop-size-wrap"
+                >Size <input type="number" id="prop-size" min="1" max="400"
+              /></label>
+              <label class="inline">Opacity <input type="range" id="prop-opacity" min="5" max="100" /></label>
+              <button id="prop-delete" title="Delete (Del)">Delete</button>
+            </div>
+            <div class="group right">
+              <button id="ed-prev" title="Previous page (PgUp)">‹</button>
+              <span id="ed-label"></span>
+              <button id="ed-next" title="Next page (PgDn)">›</button>
+              <button id="ed-done" class="primary">Done</button>
+            </div>
+          </div>
+          <div class="editor-stage" id="stage">
+            <div class="sheet" id="sheet">
+              <canvas id="sheet-canvas"></canvas>
+              <div class="layer" id="layer"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="drop" id="drop">Drop PDFs or images</div>
+        <div class="busy" id="busy" hidden><span id="busy-text">Working…</span></div>
+        <div class="toast" id="toast"></div>
+      </section>
+    </main>
+    <input
+      type="file"
+      id="file-input"
+      accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/gif,image/bmp"
+      multiple
+      hidden
+    />
+    <input type="file" id="image-input" accept="image/*" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
