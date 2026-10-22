@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dither Lab</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM1 1h1v1H1zM3 1h1v1H3zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3z' fill='%23e8ff59'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo"></span>Dither Lab</div>
+      <div class="group">
+        <button id="open-image" title="Open an image (or drop / paste one)">Image</button>
+        <button id="open-video" title="Open a video file">Video</button>
+        <button id="open-webcam" title="Use your webcam">Webcam</button>
+        <button id="open-sample" title="Load the sample image">Sample</button>
+      </div>
+      <div class="group">
+        <select id="recipe-menu" title="Recipes"></select>
+        <button id="recipe-save" title="Save the current stack as a recipe">Save</button>
+        <button id="recipe-share" title="Copy a link containing this recipe">Share link</button>
+        <button id="recipe-export" title="Download the recipe as JSON">Export</button>
+        <button id="recipe-import" title="Load a recipe JSON file">Import</button>
+      </div>
+      <div class="group right">
+        <label class="inline" title="Export size multiplier">Scale
+          <select id="export-scale">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+            <option value="8">8×</option>
+            <option value="src" selected>Source size</option>
+          </select>
+        </label>
+        <button id="export-png" class="primary">PNG</button>
+        <button id="export-svg" title="Vector export (last step must be Dither)">SVG</button>
+        <button id="record" title="Record the output to a video file">● Rec</button>
+      </div>
+    </header>
+    <main class="layout">
+      <aside class="panel">
+        <section class="card global">
+          <div class="row">
+            <label for="pixel-size">Pixel size</label>
+            <input type="range" id="pixel-size" min="1" max="16" step="1" />
+            <output id="pixel-size-out"></output>
+          </div>
+          <div class="hint" id="source-info">No source</div>
+        </section>
+        <div class="stack-head">
+          <h2>Stack</h2>
+          <select id="add-step"><option value="">+ Add step</option></select>
+        </div>
+        <ol id="stack" class="stack"></ol>
+        <p class="hint">Steps run top to bottom. Drag the handle to reorder. Hold <kbd>Space</kbd> or the compare button to see the original.</p>
+      </aside>
+      <section class="viewer" id="viewer">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="out"></canvas>
+          <canvas id="work" hidden></canvas>
+        </div>
+        <div class="viewer-bar">
+          <button id="zoom-fit">Fit</button>
+          <button id="zoom-out">−</button>
+          <span id="zoom-label">100%</span>
+          <button id="zoom-in">+</button>
+          <button id="compare" title="Hold to see the original">Compare</button>
+          <button id="pause" hidden>Pause</button>
+          <span class="spacer"></span>
+          <span id="stats"></span>
+        </div>
+        <div class="drop" id="drop">Drop an image, video or recipe</div>
+        <div class="toast" id="toast"></div>
+      </section>
+    </main>
+    <input type="file" id="file-image" accept="image/*" hidden />
+    <input type="file" id="file-video" accept="video/*" hidden />
+    <input type="file" id="file-recipe" accept=".json,application/json" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
