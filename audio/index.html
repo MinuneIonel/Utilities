@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Lab</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M0 3h1v2H0zM2 1h1v6H2zM4 2h1v4H4zM6 0h1v8H6z' fill='%23e8ff59'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo"></span>Audio Lab</div>
+      <div class="group">
+        <button id="open" title="Open audio or video files (or drop them anywhere)">Open files</button>
+        <input id="file-input" type="file" accept="audio/*,video/*,.flac,.opus,.ogg,.m4a,.aac,.wav,.aiff,.wma,.amr" multiple hidden />
+      </div>
+      <div class="group right">
+        <span id="status" class="status"></span>
+        <button id="convert-all" title="Convert every file in the list">Convert all</button>
+        <button id="convert" class="primary" title="Convert the selected file (Ctrl+Enter)">Convert</button>
+      </div>
+    </header>
+    <main class="layout">
+      <aside class="panel">
+        <section class="card">
+          <h2>Output</h2>
+          <label class="row">Format <select id="format"></select></label>
+          <label class="row" id="bitrate-row">Bitrate <select id="bitrate"></select></label>
+          <label class="row">Sample rate
+            <select id="sample-rate">
+              <option value="">Keep source</option>
+              <option value="8000">8 kHz</option>
+              <option value="16000">16 kHz</option>
+              <option value="22050">22.05 kHz</option>
+              <option value="24000">24 kHz</option>
+              <option value="32000">32 kHz</option>
+              <option value="44100">44.1 kHz</option>
+              <option value="48000">48 kHz</option>
+              <option value="96000">96 kHz</option>
+            </select>
+          </label>
+          <label class="row">Channels
+            <select id="channels">
+              <option value="">Keep source</option>
+              <option value="1">Mono</option>
+              <option value="2">Stereo</option>
+            </select>
+          </label>
+          <p class="hint" id="estimate"></p>
+        </section>
+        <section class="card">
+          <h2>Trim</h2>
+          <label class="check"><input type="checkbox" id="trim-on" /> Keep only the selection</label>
+          <div class="row"><span>Start</span><input id="trim-start" type="text" spellcheck="false" /></div>
+          <div class="row"><span>End</span><input id="trim-end" type="text" spellcheck="false" /></div>
+          <p class="hint">Drag on the waveform to select. Times accept <code>1:23.5</code> or seconds.</p>
+        </section>
+        <section class="card">
+          <h2>Shape</h2>
+          <label class="row">Fade in <span class="num"><input id="fade-in" type="number" min="0" step="0.1" value="0" /><i>s</i></span></label>
+          <label class="row">Fade out <span class="num"><input id="fade-out" type="number" min="0" step="0.1" value="0" /><i>s</i></span></label>
+          <label class="row">Gain <span class="num"><input id="gain" type="number" min="-30" max="30" step="0.5" value="0" /><i>dB</i></span></label>
+          <label class="check"><input type="checkbox" id="normalize" /> Normalize loudness (−16 LUFS)</label>
+        </section>
+      </aside>
+      <section class="stage">
+        <div id="drop" class="drop">
+          <p><strong>Drop audio or video files here</strong></p>
+          <p class="hint">MP3, WAV, FLAC, AAC/M4A, Ogg, Opus, AIFF, WMA, and the audio track of most videos. Nothing leaves your computer.</p>
+        </div>
+        <div id="editor" class="editor" hidden>
+          <div class="file-head">
+            <span id="file-name" class="file-name"></span>
+            <span id="file-info" class="hint"></span>
+          </div>
+          <div id="waveform" class="waveform"></div>
+          <div class="transport">
+            <button id="play" title="Play or pause (Space)">Play</button>
+            <button id="play-sel" title="Play the selection">Play selection</button>
+            <button id="select-all" title="Select the whole file">Select all</button>
+            <span id="time" class="time">0:00.0</span>
+            <label class="inline right">Zoom <input id="zoom" type="range" min="0" max="400" value="0" /></label>
+          </div>
+        </div>
+        <div class="lists">
+          <section>
+            <h2>Files</h2>
+            <ul id="files" class="list"></ul>
+          </section>
+          <section>
+            <h2>Results</h2>
+            <ul id="results" class="list"></ul>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
