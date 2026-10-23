@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { color: #ddd; font-size: 12px; padding: 10px; margin: 0; }
+      h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #999; margin: 14px 0 6px; }
+      .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+      .row label { width: 72px; color: #aaa; }
+      .row select, .row input[type="range"] { flex: 1; }
+      textarea { width: 100%; height: 52px; font-size: 11px; box-sizing: border-box; }
+      button { margin-top: 6px; }
+      #apply { width: 100%; height: 32px; font-weight: bold; }
+      #steps { margin: 0; padding-left: 18px; color: #bbb; }
+      #steps .off { color: #666; text-decoration: line-through; }
+      #status { margin-top: 10px; color: #9c9; min-height: 16px; }
+      #status.error { color: #e88; }
+      .hint { color: #888; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <label for="recipe">Recipe</label>
+      <select id="recipe"></select>
+    </div>
+    <div class="row">
+      <label for="pixel">Pixel size</label>
+      <input type="range" id="pixel" min="1" max="16" step="1" />
+      <span id="pixel-out"></span>
+    </div>
+    <div class="row">
+      <label for="new-layer">New layer</label>
+      <input type="checkbox" id="new-layer" checked />
+    </div>
+    <button id="apply">Apply to layer</button>
+    <div id="status"></div>
+
+    <h3>Stack</h3>
+    <ol id="steps"></ol>
+
+    <h3>Import from the app</h3>
+    <textarea id="import" placeholder="Paste a share link or recipe JSON from Dither Lab"></textarea>
+    <div class="row">
+      <button id="import-btn">Import</button>
+      <button id="delete-btn">Remove selected</button>
+    </div>
+    <p class="hint">Design a recipe in the Dither Lab app, use Share link or Export, and paste it here.</p>
+    <script src="index.js"></script>
+  </body>
+</html>
