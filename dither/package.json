@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:photoshop": "vite build --config plugins/photoshop/vite.config.ts",
+    "plugins": "node --experimental-strip-types plugins/generate.ts && npm run build:photoshop"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

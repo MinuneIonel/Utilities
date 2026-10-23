@@ -26,13 +26,11 @@ src/engine/   pure TypeScript, no DOM: palettes, color matching, filters, dither
 src/worker.ts runs the engine off the main thread
 src/ui/       effect stack panel
 src/main.ts   sources, viewer, recipes menu, export
-plugins/isf/  shader version for VJ / video hosts
+plugins/      Resolume, TouchDesigner, Resolve and Photoshop versions
 ```
 
-The engine has no browser dependencies, so it can be reused in a Photoshop UXP plugin.
+The engine has no browser dependencies; the Photoshop plugin bundles it directly.
 
-## Plugin hosts
+## Plugins
 
-`plugins/isf/DitherLab.fs` is an [ISF](https://isf.video) shader with the ordered, halftone, noise and threshold modes and a palette of up to 8 colors. ISF loads in Resolume, and the GLSL inside ports directly to a TouchDesigner GLSL TOP or a DaVinci Resolve DCTL.
-
-Error diffusion processes pixels in order, so it can't run as a shader; video hosts would need a native plugin for it.
+Resolume, TouchDesigner, DaVinci Resolve and Photoshop versions live in [`plugins/`](plugins/). See the [plugin README](plugins/README.md) for install steps.

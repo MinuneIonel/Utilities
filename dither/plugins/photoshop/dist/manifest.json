@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 5,
+  "id": "com.minuneionel.ditherlab",
+  "name": "Dither Lab",
+  "version": "0.1.0",
+  "main": "index.html",
+  "host": { "app": "PS", "minVersion": "25.0.0" },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "ditherLabPanel",
+      "label": { "default": "Dither Lab" },
+      "minimumSize": { "width": 240, "height": 320 },
+      "maximumSize": { "width": 2000, "height": 2000 },
+      "preferredDockedSize": { "width": 280, "height": 520 },
+      "preferredFloatingSize": { "width": 300, "height": 560 }
+    }
+  ]
+}
