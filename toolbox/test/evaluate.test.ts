@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ResultCache, evaluate, topoSort } from "../src/runtime/evaluate.ts";
-import type { Graph, NodeDef, RunContext } from "../src/runtime/types.ts";
+import type { Graph, NodeDef, RunContext, Value } from "../src/runtime/types.ts";
 
 // Text nodes keep the tests free of canvases: "src" emits params.text, "upper" upper-cases, "save" is a job.
 let runs: string[] = [];
@@ -123,4 +123,45 @@ test("the cache drops the oldest entries past its byte budget", () => {
   cache.set("b", { t: { kind: "text", text: "def" } }); // 12 bytes total, so "a" goes
   assert.equal(cache.get("a"), undefined);
   assert.ok(cache.get("b"));
+});
+
+test("a wire between different port types goes through a converter", async () => {
+  const lenDefs: NodeDef[] = [
+    ...defs,
+    {
+      type: "len", title: "Length", category: "text", description: "", params: [],
+      inputs: [{ key: "n", label: "Number", type: "grid" }],
+      outputs: [{ key: "text", label: "Text", type: "text" }],
+      defaults: () => ({}), kind: "frame",
+      async run(i) {
+        return { text: { kind: "text", text: `got ${(i.n as { text: string }).text}` } };
+      },
+    },
+  ];
+  const g: Graph = {
+    version: 1,
+    nodes: [
+      { id: "a", type: "src", params: { text: "abc" }, position: { x: 0, y: 0 } },
+      { id: "b", type: "len", params: {}, position: { x: 0, y: 0 } },
+    ],
+    edges: [{ id: "1", source: "a", sourceHandle: "text", target: "b", targetHandle: "n" }],
+  };
+  const reg = new Map(lenDefs.map((d) => [d.type, d]));
+  const without = await evaluate(g, { registry: reg, ctx: renderCtx, cache: new ResultCache() });
+  assert.equal(without.get("b")!.status, "waiting");
+  let conversions = 0;
+  const converters = [
+    {
+      from: "text" as const, to: "grid" as const, label: "count",
+      async convert(v: Value) {
+        conversions++;
+        return { kind: "text" as const, text: String((v as { text: string }).text.length) };
+      },
+    },
+  ];
+  const cache = new ResultCache();
+  const r = await evaluate(g, { registry: reg, ctx: renderCtx, cache, converters });
+  assert.equal(textOf(r, "b"), "got 3");
+  await evaluate(g, { registry: reg, ctx: renderCtx, cache, converters });
+  assert.equal(conversions, 1, "a cache hit skips the conversion");
 });

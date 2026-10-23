@@ -2,6 +2,7 @@ import { REGISTRY } from "../nodes";
 import { bridge } from "../platform";
 import type { ParamDef, Params } from "../runtime/types";
 import type { ToolFlowNode } from "./context";
+import { AsciiPanel } from "./AsciiPanel";
 import { DitherPanel } from "./DitherPanel";
 
 function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
@@ -11,7 +12,14 @@ function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: un
         <div className="field">
           <label>{def.label}</label>
           <input type="range" min={def.min} max={def.max} step={def.step} value={Number(value)} onChange={(e) => set(e.target.valueAsNumber)} />
-          <output>{String(value)}</output>
+          <input
+            type="number"
+            className="num"
+            min={def.min}
+            max={def.max}
+            value={Number(value)}
+            onChange={(e) => Number.isFinite(e.target.valueAsNumber) && set(e.target.valueAsNumber)}
+          />
         </div>
       );
     case "select":
@@ -28,7 +36,12 @@ function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: un
         </div>
       );
     case "text":
-      return (
+      return def.multiline ? (
+        <div className="field stacked">
+          <label>{def.label}</label>
+          <textarea rows={10} value={String(value ?? "")} onChange={(e) => set(e.target.value)} spellCheck={false} />
+        </div>
+      ) : (
         <div className="field">
           <label>{def.label}</label>
           <input type="text" value={String(value ?? "")} onChange={(e) => set(e.target.value)} />
@@ -57,14 +70,15 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
     <aside className="inspector">
       <h2>{def.title}</h2>
       <p className="hint">{def.description}</p>
-      {def.params.map((d) =>
-        d.kind === "custom" && d.key === "recipe" ? (
-          <DitherPanel key={node.id} value={p.recipe} onChange={set("recipe")} />
-        ) : (
-          <Field key={d.key} def={d} value={p[d.key]} set={set(d.key)} />
-        ),
-      )}
-      {def.type === "output.save-image" && (
+      {def.params
+        .filter((d) => def.visible?.(d.key, p) ?? true)
+        .map((d) => {
+          if (d.kind !== "custom") return <Field key={d.key} def={d} value={p[d.key]} set={set(d.key)} />;
+          if (def.type === "dither.recipe") return <DitherPanel key={node.id} value={p.recipe} onChange={set("recipe")} />;
+          if (def.type === "ascii.convert") return <AsciiPanel key={node.id} value={p.settings} onChange={set("settings")} />;
+          return null;
+        })}
+      {def.saves && (
         <div className="field">
           <label>Folder</label>
           {bridge ? (

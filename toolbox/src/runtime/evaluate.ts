@@ -1,4 +1,4 @@
-import type { Graph, GraphNode, NodeDef, NodeResult, RunContext, Value } from "./types";
+import type { Converter, Graph, GraphNode, NodeDef, NodeResult, PortType, RunContext, Value } from "./types";
 
 /** Results kept between runs, keyed by node type + params + input keys. */
 export class ResultCache {
@@ -43,6 +43,7 @@ function sizeOf(outputs: Record<string, Value>): number {
   for (const v of Object.values(outputs)) {
     if (v.kind === "image") n += v.data.byteLength;
     else if (v.kind === "file") n += v.bytes.byteLength;
+    else if (v.kind === "grid") n += v.grid.codes.byteLength + v.grid.colors.byteLength;
     else n += v.text.length * 2;
   }
   return n;
@@ -56,6 +57,10 @@ export function hash(s: string): string {
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export function findConverter(converters: readonly Converter[], from: PortType, to: PortType): Converter | undefined {
+  return converters.find((c) => c.from === from && c.to === to);
 }
 
 /** Orders nodes so every node comes after the nodes feeding it. Throws on a cycle. */
@@ -80,6 +85,8 @@ export interface EvaluateOptions {
   registry: ReadonlyMap<string, NodeDef>;
   ctx: RunContext;
   cache: ResultCache;
+  /** Applied automatically when a wire joins two different port types. */
+  converters?: readonly Converter[];
   /** Called as each node finishes, so the UI can update node by node. */
   onNode?: (id: string, result: NodeResult) => void;
   /** Returning true stops the run before the next node (a newer request arrived). */
@@ -91,7 +98,7 @@ export interface EvaluateOptions {
  * in preview mode, job nodes only show their last rendered result.
  */
 export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
-  const { registry, ctx, cache, onNode, cancelled } = opts;
+  const { registry, ctx, cache, onNode, cancelled, converters = [] } = opts;
   const results = new Map<string, NodeResult>();
   const finish = (id: string, r: NodeResult) => {
     results.set(id, r);
@@ -108,6 +115,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
 
     const inputs: Record<string, Value | undefined> = {};
     const inputKeys: string[] = [];
+    const toConvert: [string, Converter, Value][] = [];
     let missing: string | undefined;
     for (const port of def.inputs) {
       const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
@@ -117,8 +125,18 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
         continue;
       }
-      inputs[port.key] = value;
-      inputKeys.push(`${port.key}=${upstream.key}:${edge.sourceHandle}`);
+      const fromType = registry.get(graph.nodes.find((n) => n.id === edge.source)!.type)?.outputs.find((p) => p.key === edge.sourceHandle)?.type;
+      const converting = !!fromType && fromType !== port.type;
+      if (converting) {
+        const conv = findConverter(converters, fromType!, port.type);
+        if (!conv) {
+          missing ??= `Can't turn ${fromType} into ${port.type}`;
+          continue;
+        }
+        // Converted only if the node actually runs (not on a cache hit).
+        toConvert.push([port.key, conv, value]);
+      } else inputs[port.key] = value;
+      inputKeys.push(`${port.key}=${upstream.key}:${edge.sourceHandle}${converting ? `>${port.type}` : ""}`);
     }
     if (missing) {
       finish(node.id, { status: "waiting", outputs: {}, error: missing });
@@ -143,6 +161,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
 
     const t0 = Date.now();
     try {
+      for (const [k, conv, v] of toConvert) inputs[k] = await conv.convert(v);
       const outputs = await def.run(inputs, node.params, ctx);
       cache.set(key, outputs);
       if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });

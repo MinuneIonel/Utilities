@@ -12,6 +12,9 @@ export interface NodeRuntime {
   error?: string;
   bitmap?: ImageBitmap;
   size?: { width: number; height: number };
+  /** Text output (possibly cut short). */
+  text?: string;
+  fileInfo?: { name: string; bytes: number };
   /** Where a Save node last wrote its file. */
   savedTo?: string;
 }

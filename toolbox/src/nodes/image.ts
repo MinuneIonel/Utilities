@@ -20,7 +20,7 @@ export async function decodeImage(blob: Blob, maxSide = Infinity): Promise<Image
   g.imageSmoothingQuality = "high";
   g.drawImage(bmp, 0, 0, w, h);
   bmp.close();
-  return { kind: "image", width: w, height: h, data: g.getImageData(0, 0, w, h).data };
+  return { kind: "image", width: w, height: h, data: g.getImageData(0, 0, w, h).data, scale: s };
 }
 
 /** Resamples to w × h; `smooth` false keeps hard pixel edges (for upscaling dithered output). */
@@ -32,7 +32,7 @@ export function scaleImage(img: ImageValue, w: number, h: number, smooth: boolea
   dst.g.imageSmoothingEnabled = smooth;
   dst.g.imageSmoothingQuality = "high";
   dst.g.drawImage(src.c, 0, 0, w, h);
-  return { kind: "image", width: w, height: h, data: dst.g.getImageData(0, 0, w, h).data };
+  return { kind: "image", width: w, height: h, data: dst.g.getImageData(0, 0, w, h).data, scale: img.scale };
 }
 
 export async function encodeImage(img: ImageValue, mime: string, quality: number): Promise<Uint8Array> {

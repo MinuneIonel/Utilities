@@ -19,12 +19,19 @@ export function Bitmap({ bitmap, className }: { bitmap?: ImageBitmap; className?
   return <canvas ref={ref} className={className} hidden={!bitmap} />;
 }
 
+const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
 function statusLine(rt: NodeRuntime | undefined): string {
   if (!rt) return "";
   if (rt.status === "running") return "Running…";
   if (rt.savedTo) return `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
   if (rt.status === "waiting" || rt.status === "error" || rt.status === "skipped") return rt.error ?? "";
-  const size = rt.size ? `${rt.size.width}×${rt.size.height}` : "";
+  if (rt.fileInfo) return `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
+  const size = rt.size
+    ? `${rt.size.width}×${rt.size.height}`
+    : rt.text !== undefined
+      ? `${rt.text.length.toLocaleString()} chars`
+      : "";
   if (rt.status === "cached") return size ? `${size} · cached` : "cached";
   return [size, rt.ms !== undefined ? `${rt.ms} ms` : ""].filter(Boolean).join(" · ");
 }
@@ -83,6 +90,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
         </div>
       )}
       <Bitmap bitmap={rt?.bitmap} className="tnode-thumb" />
+      {rt?.text !== undefined && !rt.bitmap && <pre className="tnode-text">{rt.text.slice(0, 600)}</pre>}
       <div className={`tnode-status s-${rt?.status ?? "idle"}`}>{statusLine(rt)}</div>
     </div>
   );

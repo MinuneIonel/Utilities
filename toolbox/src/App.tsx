@@ -10,7 +10,8 @@ import {
   type Connection,
   type Edge,
 } from "@xyflow/react";
-import { NODE_DEFS, REGISTRY } from "./nodes";
+import { CONVERTERS, NODE_DEFS, REGISTRY } from "./nodes";
+import { findConverter } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, serializeGraph, starterGraph } from "./graphs";
 import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
@@ -21,6 +22,7 @@ import { Inspector } from "./ui/Inspector";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 
 const STORE = "toolbox.graph";
+const VIEW_STORE = "toolbox.view";
 const nodeTypes = { tool: ToolNode };
 const CATEGORY_LABEL: Record<string, string> = {
   input: "Input",
@@ -82,6 +84,20 @@ export function App() {
   const [outputs, setOutputs] = useState<OutputEntry[]>([]);
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
+  const [view, setView] = useState<{ backdrop: boolean; panel: boolean }>(() => {
+    try {
+      return { backdrop: true, panel: false, ...JSON.parse(localStorage.getItem(VIEW_STORE) ?? "{}") };
+    } catch {
+      return { backdrop: true, panel: false };
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_STORE, JSON.stringify(view));
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [view]);
   const flow = useReactFlow<ToolFlowNode, Edge>();
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -98,7 +114,9 @@ export function App() {
           ms: u.ms,
           error: u.error,
           bitmap,
-          size: u.size,
+          size: u.size ?? (hasOutput ? old?.size : undefined),
+          text: u.text,
+          fileInfo: u.fileInfo,
           savedTo: u.mode === "preview" && u.status === "cached" ? old?.savedTo : undefined,
         },
       };
@@ -241,7 +259,8 @@ export function App() {
       const t = flow.getNode(c.target);
       if (!s || !t || s.id === t.id) return false;
       const a = portType(s.data.type, "outputs", c.sourceHandle ?? null);
-      if (!a || a !== portType(t.data.type, "inputs", c.targetHandle ?? null)) return false;
+      const b = portType(t.data.type, "inputs", c.targetHandle ?? null);
+      if (!a || !b || (a !== b && !findConverter(CONVERTERS, a, b))) return false;
       // Refuse wires that would make a loop: the target must not already feed the source.
       const seen = new Set<string>();
       const stack = [t.id];
@@ -280,9 +299,15 @@ export function App() {
         addNode(type, pos);
         return;
       }
-      const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+      const all = [...e.dataTransfer.files];
+      const isText = (f: File) => f.type.startsWith("text/") || /\.(txt|md|csv|srt)$/i.test(f.name);
+      all.filter(isText).forEach(async (f, i) => {
+        const id = addNode("input.text", { x: pos.x, y: pos.y + i * 40 });
+        setParams(id, { text: await f.text() });
+      });
+      const files = all.filter((f) => f.type.startsWith("image/"));
       if (!files.length) {
-        if (e.dataTransfer.files.length) flash("Only images work so far. Video, audio and PDF are coming.");
+        if (all.length && !all.some(isText)) flash("Images and text files work so far. Video, audio and PDF are coming.");
         return;
       }
       // Fill empty file inputs first, then add new ones.
@@ -292,11 +317,31 @@ export function App() {
         setNodeFile(target, f);
       });
     },
-    [addNode, flash, flow, setNodeFile],
+    [addNode, flash, flow, setNodeFile, setParams],
   );
 
   const selected = nodes.find((n) => n.selected);
   const selectedRt = selected ? runtime[selected.id] : undefined;
+  // Like TouchDesigner's background view: the selected node's output, or the last one selected.
+  const lastShown = useRef<string | undefined>(undefined);
+  if (selected) lastShown.current = selected.id;
+  const shownId = nodes.some((n) => n.id === lastShown.current) ? lastShown.current : undefined;
+  const shown = shownId ? runtime[shownId] : undefined;
+  const shownTitle = shownId ? REGISTRY.get(nodes.find((n) => n.id === shownId)!.data.type)?.title : undefined;
+
+  // Wires that pass through a converter are dashed and labelled with it.
+  const displayEdges = useMemo(
+    () =>
+      edges.map((e) => {
+        const s = nodes.find((n) => n.id === e.source);
+        const t = nodes.find((n) => n.id === e.target);
+        const a = s && portType(s.data.type, "outputs", e.sourceHandle ?? null);
+        const b = t && portType(t.data.type, "inputs", e.targetHandle ?? null);
+        const conv = a && b && a !== b ? findConverter(CONVERTERS, a, b) : undefined;
+        return conv ? { ...e, label: conv.label, className: "converted" } : e;
+      }),
+    [edges, nodes],
+  );
   const categories = [...new Set(NODE_DEFS.map((d) => d.category))];
 
   return (
@@ -314,6 +359,16 @@ export function App() {
             </div>
             <div className="message">{message}</div>
             <div className="group right">
+              <button
+                className={view.backdrop ? "active" : ""}
+                onClick={() => setView((v) => ({ ...v, backdrop: !v.backdrop }))}
+                title="Show the selected node's output behind the graph"
+              >
+                Background
+              </button>
+              <button className={view.panel ? "active" : ""} onClick={() => setView((v) => ({ ...v, panel: !v.panel }))} title="Preview panel under the graph">
+                Panel
+              </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
               <button className="primary" onClick={render} disabled={rendering} title="Render (⌘R)">
                 {rendering ? "Rendering…" : "Render"}
@@ -344,7 +399,7 @@ export function App() {
               <p className="hint">Click or drag a node onto the canvas. Drop images anywhere.</p>
             </aside>
 
-            <section className="center">
+            <section className={`center${view.panel ? "" : " no-panel"}`}>
               <div
                 className="canvas"
                 ref={canvasRef}
@@ -355,9 +410,15 @@ export function App() {
                 onDragLeave={() => setDropping(false)}
                 onDrop={onDrop}
               >
+                {view.backdrop && shown && (shown.bitmap || shown.text !== undefined) && (
+                  <div className="backdrop">
+                    {shown.bitmap ? <Bitmap bitmap={shown.bitmap} className="backdrop-img" /> : <pre className="backdrop-text">{shown.text}</pre>}
+                    <span className="backdrop-label">{shownTitle}</span>
+                  </div>
+                )}
                 <ReactFlow
                   nodes={nodes}
-                  edges={edges}
+                  edges={displayEdges}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
@@ -374,6 +435,7 @@ export function App() {
                 </ReactFlow>
                 {dropping && <div className="drop">Drop images to add them</div>}
               </div>
+              {view.panel && (
               <div className="preview">
                 <div className="preview-bar">
                   <strong>{selected ? REGISTRY.get(selected.data.type)?.title : "Preview"}</strong>
@@ -382,9 +444,14 @@ export function App() {
                   </span>
                 </div>
                 <div className="preview-body">
-                  <Bitmap bitmap={selectedRt?.bitmap} className="preview-canvas" />
+                  {selectedRt?.bitmap ? (
+                    <Bitmap bitmap={selectedRt.bitmap} className="preview-canvas" />
+                  ) : (
+                    selectedRt?.text !== undefined && <pre className="preview-text">{selectedRt.text}</pre>
+                  )}
                 </div>
               </div>
+              )}
             </section>
 
             <Inspector node={selected} onParams={setParams} />

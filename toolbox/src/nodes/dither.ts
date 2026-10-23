@@ -30,7 +30,8 @@ export const ditherRecipe: NodeDef = {
   async run(inputs, params) {
     const src = inputs.image as ImageValue;
     const recipe: Recipe = parseRecipe(params.recipe);
-    const ps = Math.max(1, recipe.pixelSize);
+    // Pixel size is in full-size pixels; a downscaled preview frame needs proportionally smaller ones.
+    const ps = Math.max(1, recipe.pixelSize * (src.scale ?? 1));
     let w = Math.max(1, Math.round(src.width / ps));
     let h = Math.max(1, Math.round(src.height / ps));
     const s = Math.min(1, MAX_WORK / Math.max(w, h));
@@ -38,7 +39,7 @@ export const ditherRecipe: NodeDef = {
     h = Math.max(1, Math.round(h * s));
     const work = scaleImage(src, w, h, true);
     const out = render(work.data, w, h, recipe);
-    const image: ImageValue = { kind: "image", width: w, height: h, data: out.rgba };
+    const image: ImageValue = { kind: "image", width: w, height: h, data: out.rgba, scale: src.scale };
     if (params.size === "pixels") return { image };
     return { image: scaleImage(image, src.width, src.height, false) };
   },
