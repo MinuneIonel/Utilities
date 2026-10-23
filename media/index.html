@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Media Lab</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23111214'/%3E%3Cpath d='M3 4h10v8H3z' fill='none' stroke='%23e8ff59' stroke-width='1.6'/%3E%3Cpath d='M6 6.5v3l3-1.5z' fill='%23e8ff59'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo">▣</span>Media Lab</div>
+      <div class="group">
+        <button id="add-files" title="Add images or videos (or drop / paste them)">Add files</button>
+        <input id="file-input" type="file" multiple accept="image/*,video/*,.mkv,.avi,.wmv,.flv,.mts,.m2ts,.ts,.3gp" hidden />
+        <button id="clear" title="Remove every file">Clear</button>
+      </div>
+      <div class="group right">
+        <span id="queue-stats" class="stats"></span>
+        <button id="download-all" title="Download every finished file in one .zip" disabled>Download all (.zip)</button>
+        <button id="convert-all" class="primary" title="Convert every file with the current settings" disabled>Convert all</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel">
+        <div class="tabs" role="tablist">
+          <button id="tab-image" class="tab active" role="tab">Images</button>
+          <button id="tab-video" class="tab" role="tab">Videos &amp; GIFs</button>
+        </div>
+        <p class="hint">Settings apply to every file of that kind. Crop and trim belong to each file.</p>
+
+        <!-- ----------------------------------------------------------- shared -->
+        <section class="section">
+          <h2>Crop</h2>
+          <div class="row"><label for="crop-aspect">Aspect</label>
+            <select id="crop-aspect">
+              <option value="free">Free</option>
+              <option value="source">Original</option>
+              <option value="1">1:1 square</option>
+              <option value="1.3333">4:3</option>
+              <option value="1.5">3:2</option>
+              <option value="1.7778">16:9</option>
+              <option value="0.5625">9:16 vertical</option>
+              <option value="0.8">4:5 portrait</option>
+              <option value="2.3333">21:9</option>
+            </select>
+          </div>
+          <div class="row nums"><span class="lbl">Area</span>
+            <div class="quad">
+              <label>X<input id="crop-x" type="number" min="0" title="Left" /></label>
+              <label>Y<input id="crop-y" type="number" min="0" title="Top" /></label>
+              <label>W<input id="crop-w" type="number" min="1" title="Width" /></label>
+              <label>H<input id="crop-h" type="number" min="1" title="Height" /></label>
+            </div>
+          </div>
+          <div class="buttons">
+            <button id="crop-reset">Reset</button>
+            <button id="crop-all" title="Use the same crop (in proportion) on every file of this kind">Apply to all</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>Rotate &amp; flip</h2>
+          <div class="buttons">
+            <button id="rot-left" title="Rotate left">⟲ 90°</button>
+            <button id="rot-right" title="Rotate right">⟳ 90°</button>
+            <button id="flip-h" title="Mirror left to right">⇋ Flip</button>
+            <button id="flip-v" title="Mirror top to bottom">⇵ Flip</button>
+          </div>
+          <div class="hint" id="orient-label"></div>
+        </section>
+
+        <section class="section">
+          <h2>Resize</h2>
+          <div class="row"><label for="resize-mode">Size</label>
+            <select id="resize-mode">
+              <option value="none">Keep size</option>
+              <option value="percent">Percent</option>
+              <option value="box">Width / height</option>
+              <option value="long-edge">Longest side</option>
+            </select>
+          </div>
+          <div class="row" data-resize="percent"><label for="resize-percent">Percent</label><input id="resize-percent" type="range" min="5" max="200" step="5" /><output id="resize-percent-out"></output></div>
+          <div class="row" data-resize="box"><label>Box</label>
+            <div class="pair"><input id="resize-w" type="number" min="1" placeholder="auto" title="Width" /><span>×</span><input id="resize-h" type="number" min="1" placeholder="auto" title="Height" /></div>
+          </div>
+          <div class="row" data-resize="box"><label for="resize-fit">Fit</label>
+            <select id="resize-fit">
+              <option value="contain">Fit inside</option>
+              <option value="cover">Fill and trim</option>
+              <option value="fill">Stretch</option>
+            </select>
+          </div>
+          <div class="row" data-resize="long-edge"><label for="resize-long">Pixels</label>
+            <div class="pair"><input id="resize-long" type="number" min="1" /><select id="resize-long-preset" title="Common sizes">
+              <option value="">Presets</option><option>3840</option><option>2560</option><option>1920</option><option>1280</option><option>1080</option><option>720</option><option>480</option><option>320</option>
+            </select></div>
+          </div>
+          <div class="row toggle-row" data-resize="box long-edge"><label for="resize-up">Enlarge</label><input id="resize-up" type="checkbox" title="Allow making small files bigger" /></div>
+        </section>
+
+        <!-- ----------------------------------------------------------- images -->
+        <section class="section" data-kind="image">
+          <h2>Image output</h2>
+          <div class="row"><label for="img-format">Format</label>
+            <select id="img-format">
+              <option value="same">Same as input</option>
+              <option value="jpeg">JPEG (MozJPEG)</option>
+              <option value="webp">WebP</option>
+              <option value="avif">AVIF</option>
+              <option value="png">PNG (oxipng)</option>
+            </select>
+          </div>
+          <div class="row" data-lossy><label for="img-quality">Quality</label><input id="img-quality" type="range" min="1" max="100" /><output id="img-quality-out"></output></div>
+          <div class="row toggle-row" data-lossless><label for="img-lossless">Lossless</label><input id="img-lossless" type="checkbox" /></div>
+          <div class="row" data-lossy><label for="img-max">Max size</label>
+            <div class="pair"><input id="img-max" type="number" min="1" placeholder="no limit" /><span>KB</span></div>
+          </div>
+          <div class="row" data-png><label for="img-png">Optimize</label><input id="img-png" type="range" min="0" max="6" /><output id="img-png-out"></output></div>
+          <div class="row" data-jpeg><label for="img-bg">Background</label><div class="color-pick"><input id="img-bg" type="color" /><span class="hint">for transparent areas</span></div></div>
+        </section>
+
+        <!-- ----------------------------------------------------------- videos -->
+        <section class="section" data-kind="video">
+          <h2>Trim</h2>
+          <div class="row nums"><label>From / to</label>
+            <div class="pair"><input id="trim-start" type="text" placeholder="0:00" /><span>–</span><input id="trim-end" type="text" placeholder="end" /></div>
+          </div>
+          <div class="buttons">
+            <button id="trim-in" title="Start at the playhead (I)">[ Set start</button>
+            <button id="trim-out" title="End at the playhead (O)">Set end ]</button>
+            <button id="trim-reset">Whole clip</button>
+          </div>
+          <div class="hint" id="trim-label"></div>
+        </section>
+
+        <section class="section" data-kind="video">
+          <h2>Video output</h2>
+          <div class="row"><label for="vid-container">Format</label>
+            <select id="vid-container">
+              <option value="mp4">MP4</option>
+              <option value="webm">WebM</option>
+              <option value="mov">MOV</option>
+              <option value="mkv">MKV</option>
+              <option value="gif">GIF (animated)</option>
+            </select>
+          </div>
+          <div class="row" data-notgif><label for="vid-codec">Codec</label>
+            <select id="vid-codec">
+              <option value="auto">Automatic</option>
+              <option value="avc">H.264</option>
+              <option value="hevc">H.265 / HEVC</option>
+              <option value="av1">AV1</option>
+              <option value="vp9">VP9</option>
+              <option value="vp8">VP8</option>
+            </select>
+          </div>
+          <div class="row" data-notgif><label for="vid-rate">Compress by</label>
+            <select id="vid-rate">
+              <option value="quality">Quality</option>
+              <option value="size">Target file size</option>
+              <option value="bitrate">Bitrate</option>
+              <option value="copy">No re-encode (fast)</option>
+            </select>
+          </div>
+          <div class="row" data-rate="quality"><label for="vid-level">Quality</label>
+            <select id="vid-level">
+              <option value="very-high">Very high</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="very-low">Very low</option>
+            </select>
+          </div>
+          <div class="row" data-rate="size"><label for="vid-mb">Size</label><div class="pair"><input id="vid-mb" type="number" min="0.1" step="0.1" /><span>MB</span></div></div>
+          <div class="row" data-rate="bitrate"><label for="vid-kbps">Bitrate</label><div class="pair"><input id="vid-kbps" type="number" min="50" step="50" /><span>kbps</span></div></div>
+          <div class="row"><label for="vid-fps">Frame rate</label>
+            <select id="vid-fps">
+              <option value="0">Same as source</option>
+              <option>60</option><option>30</option><option>25</option><option>24</option><option>15</option><option>12</option><option>10</option>
+            </select>
+          </div>
+          <div class="row" data-notgif><label for="vid-audio">Audio</label>
+            <select id="vid-audio">
+              <option value="keep">Keep</option>
+              <option value="remove">Remove</option>
+            </select>
+          </div>
+          <div class="row" data-notgif data-audio><label for="vid-akbps">Audio rate</label>
+            <select id="vid-akbps"><option>64</option><option>96</option><option>128</option><option>192</option><option>256</option><option>320</option></select>
+          </div>
+          <div class="hint" id="vid-hint"></div>
+        </section>
+      </aside>
+
+      <section class="viewer" id="viewer">
+        <div class="stage" id="stage">
+          <div class="empty" id="empty">
+            <div class="big">Drop images or videos here</div>
+            <div class="hint">JPEG, PNG, WebP, AVIF, GIF, MP4, MOV, WebM, MKV, AVI… Everything stays on this computer.</div>
+            <button id="empty-add" class="primary">Add files</button>
+          </div>
+          <div class="media-wrap" id="media-wrap" hidden>
+            <div class="media" id="media"></div>
+            <div class="crop-layer" id="crop-layer">
+              <div class="crop-box" id="crop-box">
+                <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i>
+                <i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="timeline" id="timeline" hidden>
+          <button id="play" class="icon" title="Play / pause (Space)">▶</button>
+          <div class="track" id="track">
+            <div class="trim-range" id="trim-range"></div>
+            <input id="scrub" type="range" min="0" max="1000" value="0" />
+          </div>
+          <span id="time" class="stats"></span>
+        </div>
+        <div class="viewer-bar">
+          <div class="seg" id="view-seg">
+            <button id="view-orig" class="active">Original</button>
+            <button id="view-result" disabled>Result</button>
+          </div>
+          <span class="spacer"></span>
+          <span id="info" class="stats"></span>
+          <button id="convert-one" title="Convert just this file">Convert this</button>
+        </div>
+        <div class="drop" id="drop">Drop files to add them</div>
+        <div class="toast" id="toast"></div>
+      </section>
+
+      <aside class="queue">
+        <h2>Files</h2>
+        <ul id="queue-list"></ul>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
