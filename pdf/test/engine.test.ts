@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts, degrees } from "@cantoo/pdf-lib";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -16,7 +17,7 @@ import {
   type Source,
 } from "../src/engine";
 
-const font = new Uint8Array(readFileSync("node_modules/dejavu-fonts-ttf/ttf/DejaVuSans.ttf"));
+const font = new Uint8Array(readFileSync(createRequire(import.meta.url).resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf")));
 
 // 1x1 red PNG
 const PNG = Uint8Array.from(
