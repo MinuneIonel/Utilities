@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { INPUT_ACCEPT, REGISTRY } from "../nodes";
-import { ActionsContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./context";
+import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./context";
 
 export function Bitmap({ bitmap, className }: { bitmap?: ImageBitmap; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -45,6 +45,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const rt = useContext(RuntimeContext)[id];
   const actions = useContext(ActionsContext);
   const shapes = useContext(ShapesContext);
+  const previewed = useContext(PreviewContext) === id;
   const fileRef = useRef<HTMLInputElement>(null);
   if (!def) return <div className="tnode error">Unknown node {data.type}</div>;
   const accept = INPUT_ACCEPT[def.type];
@@ -65,6 +66,20 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
         <span className={`badge ${def.kind}`} title={def.kind === "frame" ? "Previews live" : "Runs on Render"}>
           {def.kind === "frame" ? "live" : "render"}
         </span>
+        <button
+          className={`nodrag preview-toggle${previewed ? " on" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            actions.togglePreview(id);
+          }}
+          title={previewed ? "Stop showing this node in the background (⌥-click the node)" : "Show this node in the background (⌥-click the node)"}
+          aria-pressed={previewed}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <circle cx="8" cy="8" r="2.2" fill="currentColor" />
+          </svg>
+        </button>
       </div>
       <div className="tnode-ports">
         <div>

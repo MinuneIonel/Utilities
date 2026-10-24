@@ -18,11 +18,12 @@ import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./pla
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
 import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
-import { ActionsContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
+import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
 import { NodeMenu } from "./ui/NodeMenu";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 import { Webcams, type CamSpec } from "./ui/webcam";
+import logoUrl from "../build/icon.svg?url";
 
 const STORE = "toolbox.graph";
 const VIEW_STORE = "toolbox.view";
@@ -91,7 +92,7 @@ export function App() {
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [view, setView] = useState<{ backdrop: boolean; panel: boolean }>(() => {
+  const [view, setView] = useState<{ backdrop: boolean; panel: boolean; preview?: string }>(() => {
     try {
       return { backdrop: true, panel: false, ...JSON.parse(localStorage.getItem(VIEW_STORE) ?? "{}") };
     } catch {
@@ -212,6 +213,12 @@ export function App() {
       setParams(nodeId, { assetId, name: file.name });
     },
     [client, setParams],
+  );
+
+  // The background shows one chosen node (its eye button, or ⌥-click), not whatever is selected.
+  const togglePreview = useCallback(
+    (id: string) => setView((v) => (v.preview === id ? { ...v, preview: undefined } : { ...v, preview: id, backdrop: true })),
+    [],
   );
 
   const setNodeFiles = useCallback(
@@ -440,10 +447,8 @@ export function App() {
 
   const selected = nodes.find((n) => n.selected);
   const selectedRt = selected ? runtime[selected.id] : undefined;
-  // Like TouchDesigner's background view: the selected node's output, or the last one selected.
-  const lastShown = useRef<string | undefined>(undefined);
-  if (selected) lastShown.current = selected.id;
-  const shownId = nodes.some((n) => n.id === lastShown.current) ? lastShown.current : undefined;
+  // Like TouchDesigner's background view, for the node picked with its eye button.
+  const shownId = nodes.some((n) => n.id === view.preview) ? view.preview : undefined;
   const shown = shownId ? runtime[shownId] : undefined;
   const shownTitle = shownId ? REGISTRY.get(nodes.find((n) => n.id === shownId)!.data.type)?.title : undefined;
 
@@ -465,11 +470,12 @@ export function App() {
   return (
     <ShapesContext.Provider value={shapes}>
     <RuntimeContext.Provider value={runtime}>
-      <ActionsContext.Provider value={{ setNodeFile, setNodeFiles }}>
+      <PreviewContext.Provider value={shownId}>
+      <ActionsContext.Provider value={{ setNodeFile, setNodeFiles, togglePreview }}>
         <div className="app">
           <header className="topbar">
             <div className="brand">
-              <span className="logo" /> TOOLBOX
+              <img className="logo" src={logoUrl} alt="" /> TOOLBOX
             </div>
             <div className="group">
               <button onClick={() => commands.current.new()}>New</button>
@@ -550,6 +556,8 @@ export function App() {
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
                   onConnectEnd={onConnectEnd}
+                  onNodeClick={(e, n) => e.altKey && togglePreview(n.id)}
+                  connectionRadius={26}
                   onPaneContextMenu={(e) => {
                     e.preventDefault();
                     openMenu({ x: e.clientX, y: e.clientY });
@@ -617,6 +625,7 @@ export function App() {
           </footer>
         </div>
       </ActionsContext.Provider>
+      </PreviewContext.Provider>
     </RuntimeContext.Provider>
     </ShapesContext.Provider>
   );

@@ -39,6 +39,8 @@ function createWindow() {
     title: "Toolbox",
     backgroundColor: "#111214",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    // Centred in the 52 px top bar.
+    trafficLightPosition: { x: 18, y: 19 },
     webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
   });
   win.loadURL(devUrl ?? "app://toolbox/index.html");

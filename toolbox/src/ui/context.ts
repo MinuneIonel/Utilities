@@ -33,6 +33,11 @@ export const ShapesContext = createContext<ReadonlyMap<string, Shape>>(new Map()
 export interface Actions {
   setNodeFile(nodeId: string, file: File): void;
   setNodeFiles(nodeId: string, files: File[]): void;
+  /** Shows this node's output behind the graph, or stops showing it. */
+  togglePreview(nodeId: string): void;
 }
 
-export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {} });
+export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {} });
+
+/** The node whose output fills the background, if any. */
+export const PreviewContext = createContext<string | undefined>(undefined);
