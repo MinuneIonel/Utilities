@@ -224,6 +224,7 @@ export const webcam: NodeDef = {
   ],
   defaults: () => ({ resolution: "1280x720", mirror: true }),
   kind: "frame",
+  live: true,
   // Each new camera frame is a new input.
   cacheKey: (_p, ctx) => `${ctx.mode}:${ctx.cameras?.get(ctx.nodeId ?? "")?.version ?? 0}`,
   async run(_inputs, _params, ctx) {
@@ -254,9 +255,23 @@ export function frameImage(v: Value): ImageValue {
   throw new Error(`Can't encode ${v.kind} frames as video`);
 }
 
-/** Most encoders need even sizes; trims the last row or column if needed. */
+/**
+ * A frame at exactly w × h. Most encoders need even sizes, so a frame one pixel
+ * over loses its last row or column; a frame of another size (a slideshow of
+ * mixed photos) is scaled to fit and centred on black.
+ */
 function evenFrame(img: ImageValue, w: number, h: number): Uint8ClampedArray {
   if (img.width === w && img.height === h) return img.data;
+  if (img.width - w > 1 || img.height - h > 1 || img.width < w || img.height < h) {
+    const s = Math.min(w / img.width, h / img.height);
+    const fit = scaleImage(img, Math.max(1, Math.round(img.width * s)), Math.max(1, Math.round(img.height * s)), true);
+    const out = new Uint8ClampedArray(w * h * 4);
+    for (let i = 3; i < out.length; i += 4) out[i] = 255;
+    const x0 = Math.floor((w - fit.width) / 2);
+    const y0 = Math.floor((h - fit.height) / 2);
+    for (let y = 0; y < fit.height; y++) out.set(fit.data.subarray(y * fit.width * 4, (y + 1) * fit.width * 4), ((y0 + y) * w + x0) * 4);
+    return out;
+  }
   const out = new Uint8ClampedArray(w * h * 4);
   const rows = Math.min(h, img.height);
   const cols = Math.min(w, img.width) * 4;
@@ -404,11 +419,15 @@ async function audioTrackFor(source: Blob, format: OutputFormat, output: Output)
 async function encodeGif(v: VideoValue, fps: number, progress: ((f: number, l?: string) => void) | undefined, signal?: AbortSignal): Promise<Uint8Array> {
   const gif = GIFEncoder();
   let n = 0;
+  let size: { w: number; h: number } | undefined;
   for await (const f of paced(v.frames(signal), fps || 12)) {
     if (signal?.aborted) throw new Error("Cancelled");
     const img = frameImage(f.value);
-    const palette = quantize(img.data, 256);
-    gif.writeFrame(applyPalette(img.data, palette), img.width, img.height, { palette, delay: Math.round(f.duration * 1000) });
+    // Every frame takes the first one's size: GIF frames can't be larger than the image.
+    size ??= { w: img.width, h: img.height };
+    const data = evenFrame(img, size.w, size.h);
+    const palette = quantize(data, 256);
+    gif.writeFrame(applyPalette(data, palette), size.w, size.h, { palette, delay: Math.round(f.duration * 1000) });
     n++;
     if (v.duration > 0) progress?.(Math.min(0.99, f.timestamp / v.duration), `GIF frame ${n}`);
   }
@@ -497,14 +516,28 @@ export const extractAudio: NodeDef = {
   async run(inputs) {
     const v = inputs.video as VideoValue;
     if (!v.audioSource) throw new Error("This video has no sound");
-    const name = (v.audioSource as File).name || "video.mp4";
-    const audio: AudioValue = {
-      kind: "audio",
-      name,
-      mime: v.audioSource.type || "video/mp4",
-      bytes: new Uint8Array(await v.audioSource.arrayBuffer()),
-      duration: v.duration || undefined,
-    };
-    return { audio };
+    return { audio: await soundOf(v.audioSource, v.duration || undefined) };
   },
 };
+
+const sounds = new WeakMap<Blob, Promise<AudioValue>>();
+/**
+ * A file's sound as an audio value, read once per file. Moving a video's playhead
+ * re-runs everything after it; handing back the same bytes lets the waveform
+ * (which decodes the whole track) come from its cache instead.
+ */
+export function soundOf(blob: Blob, duration?: number): Promise<AudioValue> {
+  let p = sounds.get(blob);
+  if (!p) {
+    p = blob.arrayBuffer().then((b) => ({
+      kind: "audio" as const,
+      name: (blob as File).name || "video.mp4",
+      mime: blob.type || "video/mp4",
+      bytes: new Uint8Array(b),
+      duration,
+    }));
+    sounds.set(blob, p);
+    p.catch(() => sounds.delete(blob));
+  }
+  return p;
+}

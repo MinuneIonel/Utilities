@@ -62,14 +62,19 @@ function sizeOf(outputs: Record<string, Value>): number {
   return n;
 }
 
-/** FNV-1a over a string, as 8 hex digits. Enough to tell params apart, not a security hash. */
+/**
+ * Two FNV-1a passes with different seeds, as 16 hex digits. Not a security hash,
+ * but 64 bits keep cache keys from colliding (32 bits start to after tens of thousands).
+ */
 export function hash(s: string): string {
-  let h = 0x811c9dc5;
+  let a = 0x811c9dc5;
+  let b = 0x050c5d1f;
   for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x01000193) ^ (b >>> 15);
   }
-  return (h >>> 0).toString(16).padStart(8, "0");
+  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 
 export function findConverter(converters: readonly Converter[], from: PortType, to: PortType): Converter | undefined {
@@ -236,6 +241,8 @@ export interface EvaluateOptions {
 export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
   const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [] } = opts;
   const results = new Map<string, NodeResult>();
+  // Nodes fed, directly or not, by a live node.
+  const live = new Set<string>();
   const finish = (id: string, r: NodeResult) => {
     results.set(id, r);
     onNode?.(id, r);
@@ -255,8 +262,10 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
     const seqKeys: string[] = [];
     const frameConvs: Record<string, Converter | undefined> = {};
     let missing: string | undefined;
+    if (def.live) live.add(node.id);
     for (const port of def.inputs) {
       const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
+      if (edge && live.has(edge.source)) live.add(node.id);
       const upstream = edge && results.get(edge.source);
       const value = edge && upstream?.outputs[edge.sourceHandle];
       if (!value || !upstream?.key) {
@@ -320,7 +329,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
       const outputs = seqKeys.length
         ? await mapNode(def, node.params, inputs, seqKeys, frameConvs, nodeCtx)
         : await def.run(inputs, node.params, nodeCtx);
-      cache.set(key, outputs);
+      if (!live.has(node.id)) cache.set(key, outputs);
       if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
       finish(node.id, { status: "ok", outputs, key, ms: Date.now() - t0 });
     } catch (err) {

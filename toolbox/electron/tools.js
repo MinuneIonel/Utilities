@@ -73,6 +73,8 @@ function progressParser(tool, report) {
 }
 
 const jobs = new Map();
+/** Jobs cancelled before their process started (while yt-dlp downloads, or files are written). */
+const cancelled = new Set();
 
 /**
  * Runs `tool` with `args` in a fresh temp folder holding `files`, and returns
@@ -95,6 +97,7 @@ async function run(sender, id, tool, args, files) {
     const before = new Set(await readdir(dir));
     let log = "";
     const parse = progressParser(tool, report);
+    if (cancelled.has(id)) throw new Error("Cancelled");
     const code = await new Promise((resolve, reject) => {
       const p = spawn(bin, args, { cwd: dir });
       jobs.set(id, p);
@@ -116,6 +119,7 @@ async function run(sender, id, tool, args, files) {
     return { code, files: out, log };
   } finally {
     jobs.delete(id);
+    cancelled.delete(id);
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -124,6 +128,12 @@ export function registerTools() {
   ipcMain.handle("tools-info", () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET }));
   ipcMain.handle("tool-run", (e, id, tool, args, files) => run(e.sender, id, tool, args, files));
   ipcMain.handle("tool-cancel", (_e, id) => {
-    jobs.get(id)?.kill("SIGKILL");
+    const p = jobs.get(id);
+    if (p) p.kill("SIGKILL");
+    else cancelled.add(id);
+  });
+  // Don't leave ffmpeg or yt-dlp running after the app quits.
+  app.on("will-quit", () => {
+    for (const p of jobs.values()) p.kill("SIGKILL");
   });
 }

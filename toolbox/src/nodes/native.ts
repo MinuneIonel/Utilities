@@ -33,10 +33,18 @@ export const nativeTools = () => tools;
 
 /** The last useful line of a tool's log, for error messages. */
 export function lastError(log: string): string {
-  const lines = log.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const line = lines.reverse().find((l) => /error/i.test(l)) ?? lines[0] ?? "unknown error";
+  const lines = log.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).reverse();
+  // ffmpeg ends with thread bookkeeping ("Task finished with error code: -22 (Invalid argument)");
+  // the line that says what was wrong with the file comes earlier.
+  const line =
+    lines.find((l) => /Invalid data found|moov atom not found|does not contain any stream|Unsupported codec|No such file/i.test(l)) ??
+    lines.find((l) => /error/i.test(l) && !/Task finished|Terminating thread|Conversion failed/i.test(l)) ??
+    lines.find((l) => /error/i.test(l)) ??
+    lines[lines.length - 1] ??
+    "unknown error";
+  const plain = (/(?:error|return) code:? -?\d+ \((.+)\)\s*$/.exec(line)?.[1] ?? line).replace(/^(\[[^\]]*\]\s*)+/, "");
   // yt-dlp appends a bug-report plea and proxy internals; keep the part a person can act on.
-  const short = line.replace(/^ERROR:\s*/, "").split(/; please report|\(caused by/)[0].trim();
+  const short = plain.replace(/^ERROR:\s*/, "").split(/; please report|\(caused by/)[0].trim();
   return short.length > 220 ? short.slice(0, 217) + "…" : short;
 }
 

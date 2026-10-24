@@ -1,8 +1,8 @@
 // Download node: a link from YouTube, Vimeo, SoundCloud and the many other
 // sites yt-dlp supports, fetched by the desktop app.
-import type { AudioValue, NodeDef, RunContext, Value } from "../runtime/types";
+import type { NodeDef, RunContext, Value } from "../runtime/types";
 import { lastError, nativeTools } from "./native";
-import { videoFromBlob } from "./video";
+import { soundOf, videoFromBlob } from "./video";
 
 const MIME: Record<string, string> = {
   mp4: "video/mp4",
@@ -84,17 +84,9 @@ export const download: NodeDef = {
     if (!/^https?:\/\//i.test(url)) throw new Error("Links start with http:// or https://");
     const quality = String(params.quality || "1080");
     const file = await fetchOnce(url, quality, ctx);
-    const sound = async (duration?: number): Promise<AudioValue> => ({
-      kind: "audio",
-      name: file.name,
-      mime: file.type,
-      bytes: new Uint8Array(await file.arrayBuffer()),
-      duration,
-    });
-    if (quality === "audio") return { audio: await sound() };
+    if (quality === "audio") return { audio: await soundOf(file) };
     const video = await videoFromBlob(file, params, ctx);
     if (!video.audioSource) return { video };
-    const audio = await sound(video.duration);
-    return { video, audio };
+    return { video, audio: await soundOf(file, video.duration) };
   },
 };

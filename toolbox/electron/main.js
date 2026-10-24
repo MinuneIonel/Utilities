@@ -18,9 +18,13 @@ protocol.registerSchemesAsPrivileged([
 /** @type {BrowserWindow | null} */
 let win = null;
 
-/** Webcam nodes need the camera; macOS asks the user once. Other permissions keep Electron's default. */
+/** Permissions the UI uses. Anything else a page asks for is refused. */
+const ALLOWED = new Set(["media", "fullscreen", "clipboard-sanitized-write"]);
+
+/** Webcam nodes need the camera; macOS asks the user once. */
 function allowCamera() {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (!ALLOWED.has(permission)) return callback(false);
     if (permission !== "media" || process.platform !== "darwin") return callback(true);
     systemPreferences.askForMediaAccess("camera").then(callback, () => callback(false));
   });
@@ -38,6 +42,13 @@ function createWindow() {
     webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
   });
   win.loadURL(devUrl ?? "app://toolbox/index.html");
+  // A file dropped outside the canvas would otherwise replace the app with that file,
+  // losing the graph; links open in the browser instead of a bare window.
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
   win.on("closed", () => (win = null));
 }
 
