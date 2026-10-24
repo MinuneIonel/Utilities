@@ -16,6 +16,8 @@ npm test -w toolbox    # graph runtime tests
 - **Live preview**: nodes marked `live` re-run on a downscaled frame (max 1280 px) whenever a setting changes. The selected node shows full size in the Preview panel.
 - **Render** (⌘R): runs everything at full size, including `render` nodes such as Save image, and writes the files. Pick a folder on a Save node to skip the save dialog.
 - A **cache** keyed on node type, settings and inputs means only the nodes downstream of a change re-run.
+- **Video**: a Video file, Webcam or Pages to images node outputs a video. Image nodes wired after it (Resize, Dither, ASCII…) run on every frame: live preview shows the frame at the playhead, Render streams every frame through them into Encode video, Images to PDF or a GIF. With a Webcam, Render records until you press Stop.
+- **Progress and cancel**: long nodes show a progress bar during Render; Cancel stops them without writing half files.
 - Graphs save as `.toolbox` JSON files (⌘S / ⌘O). Dropped files are not stored in the graph, so drop them again after opening.
 
 ## Layout
@@ -24,7 +26,9 @@ npm test -w toolbox    # graph runtime tests
 | --- | --- |
 | `electron/` | Main process: window, menus, file dialogs, the `app://` protocol that serves `dist/` |
 | `src/runtime/` | Graph types, evaluator + cache (DOM-free, tested in Node), the worker and its client |
-| `src/nodes/` | Node definitions: File input, Dither, Save image |
+| `src/nodes/` | Node definitions, one file per engine: image, dither, ascii, media, video, audio, text, pdf, save |
 | `src/ui/` | React components: graph node card, inspector, Dither Lab's stack editor |
 
-Nodes so far: File input (images), Dither, Save image. ASCII, resize/crop, encoders, text and diacritics come next, then video, audio and PDF.
+Nodes: Image, Video, Audio and PDF files, Webcam, Text; Resize / crop, Dither, ASCII, Draw ASCII, Encode image; Encode video (MP4, WebM, MOV, MKV, GIF); Extract audio, Convert audio; ASCII to text, Diacritics; Merge PDFs, Pick pages, Watermark / numbers, Protect, Compact, Images to PDF, Pages to images; Save image, Save file, Save text.
+
+Video is decoded and encoded with Mediabunny (WebCodecs), so it uses the Mac's hardware encoders. Formats WebCodecs can't read (AVI, WMV…) need converting in Media Lab first; native ffmpeg comes in the next phase.

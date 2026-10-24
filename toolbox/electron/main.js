@@ -1,6 +1,6 @@
 // Electron main process: one window, native menus, and the file access a
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
-import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, shell } from "electron";
+import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +16,14 @@ protocol.registerSchemesAsPrivileged([
 
 /** @type {BrowserWindow | null} */
 let win = null;
+
+/** Webcam nodes need the camera; macOS asks the user once. Other permissions keep Electron's default. */
+function allowCamera() {
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (permission !== "media" || process.platform !== "darwin") return callback(true);
+    systemPreferences.askForMediaAccess("camera").then(callback, () => callback(false));
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -111,6 +119,7 @@ ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
 ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
 
 app.whenReady().then(() => {
+  allowCamera();
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
     const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));

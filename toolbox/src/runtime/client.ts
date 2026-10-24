@@ -1,5 +1,5 @@
 import type { Graph } from "./types";
-import type { FromWorker, NodeUpdate, ToWorker } from "./worker";
+import type { FromWorker, NodeUpdate, ProgressUpdate, ToWorker } from "./worker";
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
@@ -18,8 +18,25 @@ export class RuntimeClient {
   private nextPreview: Graph | null = null;
   private renders = new Map<number, { files: RenderOutcome["files"]; resolve: (r: RenderOutcome) => void }>();
 
-  constructor(private onUpdate: (u: NodeUpdate) => void) {
+  constructor(
+    private onUpdate: (u: NodeUpdate) => void,
+    private onProgress: (p: ProgressUpdate) => void = () => {},
+  ) {
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.handle(e.data);
+  }
+
+  /** True while no preview is running, so a webcam can send its next frame. */
+  get previewIdle() {
+    return !this.previewBusy;
+  }
+
+  camFrame(id: string, bitmap: ImageBitmap, t: number) {
+    this.worker.postMessage({ type: "cam-frame", id, bitmap, t } satisfies ToWorker, [bitmap]);
+  }
+
+  /** Ends webcam recordings; the render then finishes writing its files. */
+  stopRecording() {
+    this.send({ type: "cam-stop" });
   }
 
   addAsset(id: string, blob: Blob) {
@@ -52,6 +69,10 @@ export class RuntimeClient {
   }
 
   private handle(msg: FromWorker) {
+    if (msg.type === "progress") {
+      this.onProgress(msg);
+      return;
+    }
     if (msg.type === "node") {
       const r = this.renders.get(msg.reqId);
       if (r && msg.file) r.files.push({ nodeId: msg.id, ...msg.file });

@@ -6,9 +6,9 @@ export const PREVIEW_MAX = 1280;
 
 export const fileInput: NodeDef = {
   type: "input.file",
-  title: "File input",
+  title: "Image file",
   category: "input",
-  description: "An image dropped into Toolbox. Drop a file on the window or on this node.",
+  description: "An image dropped into Toolbox. Drop a file on the window or choose one on the node.",
   inputs: [],
   outputs: [{ key: "image", label: "Image", type: "image" }],
   params: [],

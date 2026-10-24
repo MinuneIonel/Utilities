@@ -10,16 +10,17 @@ import {
   type Connection,
   type Edge,
 } from "@xyflow/react";
-import { CONVERTERS, NODE_DEFS, REGISTRY } from "./nodes";
-import { findConverter } from "./runtime/evaluate";
+import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
+import { canConnect, outputShapes } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, serializeGraph, starterGraph } from "./graphs";
 import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, Params } from "./runtime/types";
-import type { NodeUpdate } from "./runtime/worker";
-import { ActionsContext, RuntimeContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
+import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
+import { ActionsContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
+import { Webcams, type CamSpec } from "./ui/webcam";
 
 const STORE = "toolbox.graph";
 const VIEW_STORE = "toolbox.view";
@@ -72,8 +73,7 @@ function loadInitial(): Graph {
   return starterGraph();
 }
 
-const portType = (nodeType: string, side: "inputs" | "outputs", key: string | null) =>
-  REGISTRY.get(nodeType)?.[side].find((p) => p.key === key)?.type;
+const inputPort = (nodeType: string, key: string | null) => REGISTRY.get(nodeType)?.inputs.find((p) => p.key === key);
 
 export function App() {
   const initial = useMemo(() => toFlow(loadInitial()), []);
@@ -81,6 +81,7 @@ export function App() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
   const [runtime, setRuntime] = useState<Record<string, NodeRuntime>>({});
   const [rendering, setRendering] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [outputs, setOutputs] = useState<OutputEntry[]>([]);
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
@@ -117,12 +118,16 @@ export function App() {
           size: u.size ?? (hasOutput ? old?.size : undefined),
           text: u.text,
           fileInfo: u.fileInfo,
+          info: u.info ?? (u.status === "running" ? old?.info : undefined),
           savedTo: u.mode === "preview" && u.status === "cached" ? old?.savedTo : undefined,
         },
       };
     });
   }, []);
-  const client = useMemo(() => new RuntimeClient(onUpdate), [onUpdate]);
+  const onProgress = useCallback((p: ProgressUpdate) => {
+    setRuntime((prev) => (prev[p.id] ? { ...prev, [p.id]: { ...prev[p.id], status: "running", progress: p.fraction, progressLabel: p.label } } : prev));
+  }, []);
+  const client = useMemo(() => new RuntimeClient(onUpdate, onProgress), [onUpdate, onProgress]);
 
   // Only params and wiring matter to the runtime; dragging nodes around shouldn't re-run anything.
   const graph = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
@@ -132,6 +137,28 @@ export function App() {
   );
   const graphRef = useRef(graph);
   graphRef.current = graph;
+  const shapes = useMemo(() => outputShapes(graph, REGISTRY), [runKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cameras for Webcam nodes.
+  const webcams = useMemo(
+    () =>
+      new Webcams(
+        client,
+        () => graphRef.current,
+        (id, error) => setRuntime((prev) => ({ ...prev, [id]: { status: "error", error } })),
+      ),
+    [client],
+  );
+  const camKey = JSON.stringify(
+    graph.nodes
+      .filter((n) => n.type === "input.webcam")
+      .map((n): CamSpec => {
+        const [w, h] = String(n.params.resolution || "1280x720").split("x").map(Number);
+        return { id: n.id, width: w || 1280, height: h || 720, mirror: n.params.mirror !== false };
+      }),
+  );
+  useEffect(() => webcams.sync(JSON.parse(camKey)), [camKey, webcams]);
+  useEffect(() => () => webcams.closeAll(), [webcams]);
 
   useEffect(() => {
     client.preview(graphRef.current);
@@ -189,9 +216,14 @@ export function App() {
     if (rendering) return;
     setRendering(true);
     const g = graphRef.current;
-    const ids = new Set(g.nodes.map((n) => n.id));
-    setRuntime((prev) => Object.fromEntries(Object.entries(prev).map(([id, r]) => [id, ids.has(id) ? { ...r, status: "running" } : r])));
+    // A webcam records from now until Stop.
+    const live = g.nodes.some((n) => n.type === "input.webcam") && g.edges.some((e) => g.nodes.find((n) => n.id === e.source)?.type === "input.webcam");
+    webcams.recording = live;
+    setRecording(live);
+    if (live) flash("Recording. Press Stop to finish.");
     const result = await client.render(g);
+    webcams.recording = false;
+    setRecording(false);
     setRendering(false);
     if (result.error) flash(result.error);
     for (const f of result.files) {
@@ -202,7 +234,7 @@ export function App() {
       setRuntime((prev) => ({ ...prev, [f.nodeId]: { ...prev[f.nodeId], savedTo: where } }));
     }
     if (!result.error && !result.files.length) flash("Rendered. Add a Save node to write files.");
-  }, [client, flash, rendering]);
+  }, [client, flash, rendering, webcams]);
 
   const loadGraph = useCallback(
     (g: Graph) => {
@@ -258,9 +290,10 @@ export function App() {
       const s = flow.getNode(c.source);
       const t = flow.getNode(c.target);
       if (!s || !t || s.id === t.id) return false;
-      const a = portType(s.data.type, "outputs", c.sourceHandle ?? null);
-      const b = portType(t.data.type, "inputs", c.targetHandle ?? null);
-      if (!a || !b || (a !== b && !findConverter(CONVERTERS, a, b))) return false;
+      const from = shapes.get(`${s.id}:${c.sourceHandle}`);
+      const def = REGISTRY.get(t.data.type);
+      const port = inputPort(t.data.type, c.targetHandle ?? null);
+      if (!from || !def || !port || !canConnect(from, def, port, CONVERTERS).ok) return false;
       // Refuse wires that would make a loop: the target must not already feed the source.
       const seen = new Set<string>();
       const stack = [t.id];
@@ -274,7 +307,7 @@ export function App() {
       }
       return true;
     },
-    [flow],
+    [flow, shapes],
   );
 
   const onConnect = useCallback(
@@ -300,22 +333,24 @@ export function App() {
         return;
       }
       const all = [...e.dataTransfer.files];
-      const isText = (f: File) => f.type.startsWith("text/") || /\.(txt|md|csv|srt)$/i.test(f.name);
-      all.filter(isText).forEach(async (f, i) => {
-        const id = addNode("input.text", { x: pos.x, y: pos.y + i * 40 });
-        setParams(id, { text: await f.text() });
-      });
-      const files = all.filter((f) => f.type.startsWith("image/"));
-      if (!files.length) {
-        if (all.length && !all.some(isText)) flash("Images and text files work so far. Video, audio and PDF are coming.");
-        return;
-      }
-      // Fill empty file inputs first, then add new ones.
-      const empty = flow.getNodes().filter((n) => n.data.type === "input.file" && !n.data.params.assetId);
-      files.forEach((f, i) => {
-        const target = empty[i]?.id ?? addNode("input.file", { x: pos.x, y: pos.y + i * 40 });
+      const unknown = all.filter((f) => !inputNodeFor(f));
+      if (unknown.length) flash(`Toolbox can't open ${unknown.map((f) => f.name).join(", ")}`);
+      // Fill empty inputs of the right kind first, then add new ones.
+      const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !n.data.params.assetId);
+      let row = 0;
+      for (const f of all) {
+        const type = inputNodeFor(f);
+        if (!type) continue;
+        const at = { x: pos.x, y: pos.y + row++ * 40 };
+        if (type === "input.text") {
+          const id = addNode(type, at);
+          void f.text().then((text) => setParams(id, { text }));
+          continue;
+        }
+        const i = empty.findIndex((n) => n.data.type === type);
+        const target = i >= 0 ? empty.splice(i, 1)[0].id : addNode(type, at);
         setNodeFile(target, f);
-      });
+      }
     },
     [addNode, flash, flow, setNodeFile, setParams],
   );
@@ -329,22 +364,24 @@ export function App() {
   const shown = shownId ? runtime[shownId] : undefined;
   const shownTitle = shownId ? REGISTRY.get(nodes.find((n) => n.id === shownId)!.data.type)?.title : undefined;
 
-  // Wires that pass through a converter are dashed and labelled with it.
+  // Wires that pass through a converter are dashed and labelled with it; wires carrying video are thicker.
   const displayEdges = useMemo(
     () =>
       edges.map((e) => {
-        const s = nodes.find((n) => n.id === e.source);
         const t = nodes.find((n) => n.id === e.target);
-        const a = s && portType(s.data.type, "outputs", e.sourceHandle ?? null);
-        const b = t && portType(t.data.type, "inputs", e.targetHandle ?? null);
-        const conv = a && b && a !== b ? findConverter(CONVERTERS, a, b) : undefined;
-        return conv ? { ...e, label: conv.label, className: "converted" } : e;
+        const from = shapes.get(`${e.source}:${e.sourceHandle}`);
+        const def = t && REGISTRY.get(t.data.type);
+        const port = t && inputPort(t.data.type, e.targetHandle ?? null);
+        const conv = from && def && port ? canConnect(from, def, port, CONVERTERS).converter : undefined;
+        const cls = [conv ? "converted" : "", from?.seq ? "seq" : ""].filter(Boolean).join(" ");
+        return conv || cls ? { ...e, label: conv?.label, className: cls } : e;
       }),
-    [edges, nodes],
+    [edges, nodes, shapes],
   );
   const categories = [...new Set(NODE_DEFS.map((d) => d.category))];
 
   return (
+    <ShapesContext.Provider value={shapes}>
     <RuntimeContext.Provider value={runtime}>
       <ActionsContext.Provider value={{ setNodeFile }}>
         <div className="app">
@@ -370,9 +407,15 @@ export function App() {
                 Panel
               </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
-              <button className="primary" onClick={render} disabled={rendering} title="Render (⌘R)">
-                {rendering ? "Rendering…" : "Render"}
-              </button>
+              {recording ? (
+                <button className="primary rec" onClick={() => client.stopRecording()} title="Stop recording and write the files">
+                  Stop
+                </button>
+              ) : (
+                <button className="primary" onClick={render} disabled={rendering} title="Render (⌘R)">
+                  {rendering ? "Rendering…" : "Render"}
+                </button>
+              )}
             </div>
           </header>
 
@@ -396,7 +439,7 @@ export function App() {
                   ))}
                 </div>
               ))}
-              <p className="hint">Click or drag a node onto the canvas. Drop images anywhere.</p>
+              <p className="hint">Click or drag a node onto the canvas. Drop images, videos, sound, PDFs or text anywhere.</p>
             </aside>
 
             <section className={`center${view.panel ? "" : " no-panel"}`}>
@@ -433,7 +476,7 @@ export function App() {
                   <Background gap={20} size={1} />
                   <Controls showInteractive={false} />
                 </ReactFlow>
-                {dropping && <div className="drop">Drop images to add them</div>}
+                {dropping && <div className="drop">Drop files to add them</div>}
               </div>
               {view.panel && (
               <div className="preview">
@@ -474,5 +517,6 @@ export function App() {
         </div>
       </ActionsContext.Provider>
     </RuntimeContext.Provider>
+    </ShapesContext.Provider>
   );
 }

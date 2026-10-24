@@ -1,5 +1,6 @@
 import { createContext } from "react";
 import type { Node } from "@xyflow/react";
+import type { Shape } from "../runtime/evaluate";
 import type { NodeStatus, Params } from "../runtime/types";
 
 export type ToolNodeData = { type: string; params: Params };
@@ -17,9 +18,17 @@ export interface NodeRuntime {
   fileInfo?: { name: string; bytes: number };
   /** Where a Save node last wrote its file. */
   savedTo?: string;
+  /** Video, audio or document summary. */
+  info?: string;
+  /** While running: 0–1, or -1 when unknown. */
+  progress?: number;
+  progressLabel?: string;
 }
 
 export const RuntimeContext = createContext<Record<string, NodeRuntime>>({});
+
+/** What each output carries, by "nodeId:port", so mapped nodes can show video handles. */
+export const ShapesContext = createContext<ReadonlyMap<string, Shape>>(new Map());
 
 export interface Actions {
   setNodeFile(nodeId: string, file: File): void;

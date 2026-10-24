@@ -220,3 +220,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .color-pick input[type="color"] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; }
 .color-pick input[type="color"]:disabled { opacity: 0.3; }
 .color-pick label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+
+/* Phase 4: video wires, per-frame nodes, progress */
+.react-flow__edge.seq path { stroke-width: 3; }
+.badge.frames { color: var(--t-video); border-color: color-mix(in srgb, var(--t-video) 50%, transparent); }
+.tnode-progress { height: 3px; margin: 4px 8px 0; background: var(--line); border-radius: 2px; overflow: hidden; }
+.tnode-progress > div { height: 100%; background: var(--accent); transition: width 0.1s linear; }
+.tnode-progress.busy > div { width: 30% !important; animation: tnode-busy 1.2s ease-in-out infinite; }
+@keyframes tnode-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+button.primary.rec { background: #ff5a5a; border-color: #ff5a5a; color: #fff; }
