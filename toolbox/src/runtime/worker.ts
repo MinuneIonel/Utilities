@@ -2,9 +2,9 @@
 // Runs graphs off the main thread. Holds the dropped files and the result cache.
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
-import { waveform } from "../nodes/audio";
+import { audioCodec } from "../nodes/audio";
 import { setNativeTools, type NativeTool, type ToolResult } from "../nodes/native";
-import { pdfThumbnail } from "../nodes/pdf";
+import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
 
@@ -38,6 +38,8 @@ export interface NodeUpdate {
   fileInfo?: { name: string; bytes: number };
   /** A short description of a video, audio or document output. */
   info?: string;
+  /** A waveform or page thumbnail sent after the node's update: only bitmap and size are set. */
+  thumb?: boolean;
 }
 
 export interface ProgressUpdate {
@@ -231,6 +233,19 @@ async function report(
       transfer.push(msg.bitmap);
     }
   };
+  /**
+   * Waveforms and PDF thumbnails can take seconds (a long file decodes in full), so
+   * they follow in a second update instead of holding up the preview. Skipped if
+   * the node has a newer output by then.
+   */
+  const later = (draw: () => Promise<ImageValue | undefined>) =>
+    void draw()
+      .then(async (img) => {
+        if (!img || sentKey.get(id) !== key) return;
+        const bitmap = await createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+        post({ type: "node", reqId, mode, id, status, thumb: true, bitmap, size: { width: img.width, height: img.height } }, [bitmap]);
+      })
+      .catch(() => undefined);
   if (first?.kind === "video") {
     const v = first;
     const parts = [`${v.width}×${v.height}`];
@@ -244,20 +259,16 @@ async function report(
   else if (first?.kind === "text") msg.text = first.text.length > 20000 ? first.text.slice(0, 20000) + "\n…" : first.text;
   else if (first?.kind === "audio") {
     msg.info = [first.name, first.duration ? `${first.duration.toFixed(1)} s` : "", kb(first.bytes.byteLength)].filter(Boolean).join(" · ");
-    if (changed) {
-      const w = await waveform(first);
-      if (w) await sendImage(w);
-    }
+    const a = first;
+    if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
       msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice() };
       transfer.push(msg.file.bytes.buffer);
     }
   } else if (first?.kind === "document") {
     msg.info = `${first.pageCount} page${first.pageCount === 1 ? "" : "s"} · ${kb(first.bytes.byteLength)}`;
-    if (changed) {
-      const t = await pdfThumbnail(first);
-      if (t) await sendImage(t);
-    }
+    const d = first;
+    if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {
     msg.fileInfo = { name: first.name, bytes: first.bytes.byteLength };
     // Show encoded images as they decode, so compression artefacts are visible.

@@ -22,6 +22,8 @@ export class RuntimeClient {
   constructor(
     private onUpdate: (u: NodeUpdate) => void,
     private onProgress: (p: ProgressUpdate) => void = () => {},
+    /** A preview that failed as a whole (e.g. a graph file with a loop), not one node. */
+    private onPreviewError: (error: string) => void = () => {},
   ) {
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.handle(e.data);
     // Native ffmpeg and yt-dlp, when running in the desktop app.
@@ -104,6 +106,7 @@ export class RuntimeClient {
       return;
     }
     this.previewBusy = false;
+    if (msg.error) this.onPreviewError(msg.error);
     if (this.nextPreview) {
       const g = this.nextPreview;
       this.nextPreview = null;

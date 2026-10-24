@@ -1,20 +1,22 @@
 // PDF nodes over PDF Lab's engine (pdf-lib), plus pdf.js for turning pages into images.
+// Both load on first use (pdf-render.ts holds the pdf.js side), so the window never parses them.
 import fontUrl from "dejavu-fonts-ttf/ttf/DejaVuSans.ttf?url";
-// The legacy build carries polyfills (e.g. Map.getOrInsertComputed) for Chromium versions a year or two old.
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-import { build, compact, fromRaster, inspect, PasswordError, protect, type NumberPosition, type Plan, type RasterPage, type Source } from "../../../pdf/src/engine";
+import type { NumberPosition, Plan, RasterPage, Source } from "../../../pdf/src/engine";
 import { parseRanges } from "../../../pdf/src/engine/ranges";
 import type { Converter, DocumentValue, FileValue, FrameItem, ImageValue, NodeDef, Value, VideoValue } from "../runtime/types";
 import { encodeImage } from "./image";
 import { frameImage } from "./video";
 
-pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+/** PDF Lab's engine (pdf-lib), loaded on first use. */
+const engine = () => import("../../../pdf/src/engine");
+/** pdf.js, loaded on first use. */
+export const pdfRender = () => import("./pdf-render");
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const baseName = (n: string) => n.replace(/\.pdf$/i, "") || "document";
 
 async function documentOf(name: string, bytes: Uint8Array): Promise<DocumentValue> {
+  const { inspect, PasswordError } = await engine();
   try {
     const info = await inspect({ kind: "pdf", bytes });
     return { kind: "document", name, bytes, pageCount: info.pageCount };
@@ -75,7 +77,7 @@ export const pdfMerge: NodeDef = {
   async run(inputs, params) {
     const docs = ["a", "b", "c", "d"].map((k) => inputs[k] as DocumentValue | undefined).filter((d): d is DocumentValue => !!d);
     const sources: Source[] = docs.map((d) => ({ kind: "pdf", bytes: d.bytes }));
-    const bytes = await build(sources, { pages: allPages(docs) });
+    const bytes = await (await engine()).build(sources, { pages: allPages(docs) });
     return { document: { kind: "document", name: `${params.name || "merged"}.pdf`, bytes, pageCount: allPages(docs).length } };
   },
 };
@@ -109,7 +111,7 @@ export const pdfPages: NodeDef = {
     const picked = spec ? parseRanges(spec, d.pageCount) : allPages([d]).map((p) => p.page);
     if (!picked.length) throw new Error("No pages picked");
     const rotate = num(params.rotate, 0) as 0 | 90 | 180 | 270;
-    const bytes = await build([{ kind: "pdf", bytes: d.bytes }], { pages: picked.map((page) => ({ source: 0, page, rotate })) });
+    const bytes = await (await engine()).build([{ kind: "pdf", bytes: d.bytes }], { pages: picked.map((page) => ({ source: 0, page, rotate })) });
     return { document: { ...d, bytes, pageCount: picked.length } };
   },
 };
@@ -147,7 +149,7 @@ export const pdfStamp: NodeDef = {
         color: [0.2, 0.2, 0.2],
         start: 1,
       };
-    return { document: { ...d, bytes: await build([{ kind: "pdf", bytes: d.bytes }], plan) } };
+    return { document: { ...d, bytes: await (await engine()).build([{ kind: "pdf", bytes: d.bytes }], plan) } };
   },
 };
 
@@ -169,7 +171,7 @@ export const pdfProtect: NodeDef = {
   kind: "job",
   async run(inputs, params) {
     const d = inputs.document as DocumentValue;
-    const bytes = await protect(d.bytes, {
+    const bytes = await (await engine()).protect(d.bytes, {
       userPassword: String(params.password ?? "") || undefined,
       ownerPassword: String(params.owner ?? "") || undefined,
       allowPrinting: params.print === true,
@@ -192,7 +194,7 @@ export const pdfCompact: NodeDef = {
   kind: "job",
   async run(inputs) {
     const d = inputs.document as DocumentValue;
-    return { document: { ...d, bytes: await compact(d.bytes) } };
+    return { document: { ...d, bytes: await (await engine()).compact(d.bytes) } };
   },
 };
 
@@ -232,76 +234,10 @@ export const imagesToPdf: NodeDef = {
       if (ctx.signal?.aborted) throw new Error("Cancelled");
     } else await add(frameImage(v));
     if (!pages.length) throw new Error("No pages");
-    const bytes = await fromRaster(pages);
+    const bytes = await (await engine()).fromRaster(pages);
     return { document: { kind: "document", name: `${params.name || "images"}.pdf`, bytes, pageCount: pages.length } };
   },
 };
-
-/** pdf.js draws into OffscreenCanvas here, since the worker has no document. */
-class OffscreenCanvasFactory {
-  create(width: number, height: number) {
-    const canvas = new OffscreenCanvas(Math.max(1, width), Math.max(1, height));
-    return { canvas, context: canvas.getContext("2d") };
-  }
-  reset(cc: { canvas: OffscreenCanvas }, width: number, height: number) {
-    cc.canvas.width = width;
-    cc.canvas.height = height;
-  }
-  destroy(cc: { canvas: OffscreenCanvas | null; context: unknown }) {
-    if (cc.canvas) cc.canvas.width = cc.canvas.height = 0;
-    cc.canvas = null;
-    cc.context = null;
-  }
-}
-
-const ASSETS = () => new URL("/pdfjs/", self.location.href).href;
-
-async function openForRender(bytes: Uint8Array) {
-  const task = pdfjs.getDocument({
-    data: bytes.slice(),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    CanvasFactory: OffscreenCanvasFactory as any,
-    // Fonts are added to the worker's FontFaceSet.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ownerDocument: self as any,
-    isOffscreenCanvasSupported: true,
-    standardFontDataUrl: ASSETS() + "standard_fonts/",
-    cMapUrl: ASSETS() + "cmaps/",
-    cMapPacked: true,
-  });
-  const doc = await task.promise;
-  return Object.assign(doc, { close: () => void task.destroy() });
-}
-
-async function renderPage(doc: pdfjs.PDFDocumentProxy, index: number, scale: (wPt: number, hPt: number) => number): Promise<ImageValue> {
-  const page = await doc.getPage(index + 1);
-  const base = page.getViewport({ scale: 1 });
-  const viewport = page.getViewport({ scale: scale(base.width, base.height) });
-  const w = Math.max(1, Math.round(viewport.width));
-  const h = Math.max(1, Math.round(viewport.height));
-  const canvas = new OffscreenCanvas(w, h);
-  const g = canvas.getContext("2d", { willReadFrequently: true })!;
-  g.fillStyle = "#fff";
-  g.fillRect(0, 0, w, h);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await page.render({ canvas: canvas as any, canvasContext: g as any, viewport }).promise;
-  page.cleanup();
-  return { kind: "image", width: w, height: h, data: g.getImageData(0, 0, w, h).data };
-}
-
-/** First page of a document at thumbnail size, for node cards. */
-export async function pdfThumbnail(d: DocumentValue, width = 480): Promise<ImageValue | undefined> {
-  try {
-    const doc = await openForRender(d.bytes);
-    try {
-      return await renderPage(doc, 0, (w) => width / w);
-    } finally {
-      doc.close();
-    }
-  } catch {
-    return undefined;
-  }
-}
 
 export const pdfToImages: NodeDef = {
   type: "pdf.to-images",
@@ -321,6 +257,7 @@ export const pdfToImages: NodeDef = {
     const d = inputs.document as DocumentValue;
     const dpi = num(params.dpi, 150);
     const at = Math.min(d.pageCount, Math.max(1, Math.floor(num(params.page, 1)))) - 1;
+    const { openForRender, renderPage } = await pdfRender();
     const doc = await openForRender(d.bytes);
     // Preview pages fit in the preview size; render pages use the DPI.
     const full = (w: number) => Math.min(dpi / 72, 8000 / w);

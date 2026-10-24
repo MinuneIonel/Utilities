@@ -3,6 +3,7 @@
 // Each job runs in its own temp folder; the files it creates are sent back.
 import { app, ipcMain, net } from "electron";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -39,10 +40,17 @@ function getYtdlp(onProgress) {
     if (system) return system;
     if (!YTDLP_ASSET) throw new Error("yt-dlp isn't available for this system");
     onProgress?.(-1, "Downloading yt-dlp…");
-    const res = await net.fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_ASSET}`);
+    const base = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
+    const [res, sums] = await Promise.all([net.fetch(base + YTDLP_ASSET), net.fetch(base + "SHA2-256SUMS")]);
     if (!res.ok) throw new Error(`Couldn't download yt-dlp (${res.status})`);
+    if (!sums.ok) throw new Error(`Couldn't download yt-dlp's checksums (${sums.status})`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    // The release lists "<sha256>  <file name>" per line; a download that doesn't match is thrown away.
+    const want = (await sums.text()).split("\n").map((l) => l.trim().split(/\s+/)).find((p) => p[1] === YTDLP_ASSET)?.[0];
+    const got = createHash("sha256").update(bytes).digest("hex");
+    if (!want || want.toLowerCase() !== got) throw new Error("The downloaded yt-dlp didn't match its published checksum, so Toolbox didn't install it");
     await mkdir(path.dirname(own), { recursive: true });
-    await writeFile(own + ".part", Buffer.from(await res.arrayBuffer()));
+    await writeFile(own + ".part", bytes);
     await chmod(own + ".part", 0o755);
     await rename(own + ".part", own);
     return own;

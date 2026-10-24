@@ -2,7 +2,7 @@
 // sites yt-dlp supports, fetched by the desktop app.
 import type { NodeDef, RunContext, Value } from "../runtime/types";
 import { lastError, nativeTools } from "./native";
-import { soundOf, videoFromBlob } from "./video";
+import { soundOf, videoCodec } from "./video";
 
 const MIME: Record<string, string> = {
   mp4: "video/mp4",
@@ -85,7 +85,7 @@ export const download: NodeDef = {
     const quality = String(params.quality || "1080");
     const file = await fetchOnce(url, quality, ctx);
     if (quality === "audio") return { audio: await soundOf(file) };
-    const video = await videoFromBlob(file, params, ctx);
+    const video = await (await videoCodec()).videoFromBlob(file, params, ctx);
     if (!video.audioSource) return { video };
     return { video, audio: await soundOf(file, video.duration) };
   },

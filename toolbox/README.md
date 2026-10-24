@@ -16,6 +16,7 @@ The `.dmg` is unsigned: the first time, right-click Toolbox in Applications and 
 ## How it works
 
 - **Nodes** wrap the existing engines (`../dither/src/engine`, …) without changing them. Each node declares typed inputs and outputs, so only matching ports can be wired.
+- **Add node menu**, like TouchDesigner's: press **Tab** (or right-click the canvas) to open it at the pointer, type to search, use the arrows or Tab to move between categories, and press Enter to place the node under the pointer. Drop a wire on empty canvas to get only the nodes that can take it, already wired.
 - **Live preview**: nodes marked `live` re-run on a downscaled frame (max 1280 px) whenever a setting changes. The selected node shows full size in the Preview panel.
 - **Render** (⌘R): runs everything at full size, including `render` nodes such as Save image, and writes the files. Pick a folder on a Save node to skip the save dialog.
 - A **cache** keyed on node type, settings and inputs means only the nodes downstream of a change re-run.
@@ -31,7 +32,7 @@ The `.dmg` is unsigned: the first time, right-click Toolbox in Applications and 
 | --- | --- |
 | `electron/` | Main process: window, menus, file dialogs, the `app://` protocol that serves `dist/`, native ffmpeg and yt-dlp (`tools.js`) |
 | `src/runtime/` | Graph types, evaluator + cache (DOM-free, tested in Node), the worker and its client |
-| `src/nodes/` | Node definitions, one file per engine: image, dither, ascii, media, video, audio, text, pdf, save |
+| `src/nodes/` | Node definitions, one file per engine: image, dither, ascii, media, video, audio, text, pdf, save. The heavy libraries (Mediabunny, gifenc, ffmpeg.wasm, pdf-lib, pdf.js, jsquash) sit behind `import()` in `*-codec.ts`/`pdf-render.ts` or the engine itself, so the window only parses node metadata and the worker loads each library the first time a node needs it |
 | `src/ui/` | React components: graph node card, inspector, Dither Lab's stack editor |
 | `build/` | App icon: `icon.svg` is the source, `icon.png` (1024 px) and `icon.icns` are rendered from it |
 

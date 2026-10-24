@@ -230,3 +230,12 @@ export function swapExt(name: string, ext: string): string {
   const dot = name.lastIndexOf(".");
   return (dot > 0 ? name.slice(0, dot) : name) + "." + ext;
 }
+
+/** Output containers for video, with their MIME type and extension. */
+export const VIDEO_CONTAINERS: Record<VideoContainer, { label: string; mime: string; ext: string }> = {
+  mp4: { label: "MP4", mime: "video/mp4", ext: "mp4" },
+  webm: { label: "WebM", mime: "video/webm", ext: "webm" },
+  mov: { label: "MOV", mime: "video/quicktime", ext: "mov" },
+  mkv: { label: "MKV", mime: "video/x-matroska", ext: "mkv" },
+  gif: { label: "GIF (animated)", mime: "image/gif", ext: "gif" },
+};

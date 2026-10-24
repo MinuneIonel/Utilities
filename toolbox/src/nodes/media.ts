@@ -1,6 +1,8 @@
-import { processImage, transformImage } from "../../../media/src/engine/image";
 import type { ImageFormat, ImageJob, Resize, Rotation } from "../../../media/src/engine/types";
 import type { ImageValue, NodeDef } from "../runtime/types";
+
+/** Media Lab's image engine (the jsquash codecs), loaded on first use. */
+const engine = () => import("../../../media/src/engine/image");
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
@@ -109,7 +111,7 @@ export const imageTransform: NodeDef = {
         if (j.resize.height) j.resize.height *= k;
       }
     }
-    const out = await transformImage(src, j);
+    const out = await (await engine()).transformImage(src, j);
     return { image: { kind: "image", width: out.width, height: out.height, data: out.data, scale: k } };
   },
 };
@@ -149,7 +151,7 @@ export const imageEncode: NodeDef = {
   kind: "job",
   async run(inputs, params) {
     const src = inputs.image as ImageValue;
-    const r = await processImage(src, { ...job(params, src.width, src.height), crop: undefined, rotate: 0, flipH: false, flipV: false, resize: { mode: "none" } });
+    const r = await (await engine()).processImage(src, { ...job(params, src.width, src.height), crop: undefined, rotate: 0, flipH: false, flipV: false, resize: { mode: "none" } });
     const base = String(params.name || "image").replace(/[\\/:*?"<>|]+/g, "-");
     return { file: { kind: "file", name: `${base}.${r.ext}`, mime: r.mime, bytes: r.bytes } };
   },

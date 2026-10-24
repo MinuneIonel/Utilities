@@ -9,31 +9,36 @@ import {
   useReactFlow,
   type Connection,
   type Edge,
+  type FinalConnectionState,
 } from "@xyflow/react";
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, serializeGraph, starterGraph, TEMPLATES } from "./graphs";
 import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
-import type { Graph, Params } from "./runtime/types";
+import type { Graph, NodeDef, Params } from "./runtime/types";
 import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
 import { ActionsContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
+import { NodeMenu } from "./ui/NodeMenu";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 import { Webcams, type CamSpec } from "./ui/webcam";
 
 const STORE = "toolbox.graph";
 const VIEW_STORE = "toolbox.view";
 const nodeTypes = { tool: ToolNode };
-const CATEGORY_LABEL: Record<string, string> = {
-  input: "Input",
-  image: "Image",
-  video: "Video",
-  audio: "Audio",
-  text: "Text",
-  pdf: "PDF",
-  output: "Output",
-};
+/** Roughly half a node card, so a new node lands centred under the pointer. */
+const NODE_HALF_WIDTH = 110;
+
+/** The Add node menu: where it is, and the wire it was opened from, if any. */
+interface MenuState {
+  /** Pointer position in the canvas, in pixels. */
+  x: number;
+  y: number;
+  /** Where the new node goes, in graph coordinates. */
+  at: { x: number; y: number };
+  from?: { node: string; handle: string };
+}
 
 interface OutputEntry {
   id: string;
@@ -85,6 +90,7 @@ export function App() {
   const [outputs, setOutputs] = useState<OutputEntry[]>([]);
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
+  const [menu, setMenu] = useState<MenuState | null>(null);
   const [view, setView] = useState<{ backdrop: boolean; panel: boolean }>(() => {
     try {
       return { backdrop: true, panel: false, ...JSON.parse(localStorage.getItem(VIEW_STORE) ?? "{}") };
@@ -101,10 +107,16 @@ export function App() {
   }, [view]);
   const flow = useReactFlow<ToolFlowNode, Edge>();
   const canvasRef = useRef<HTMLDivElement>(null);
+  const pointer = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const onUpdate = useCallback((u: NodeUpdate) => {
     setRuntime((prev) => {
       const old = prev[u.id];
+      if (u.thumb) {
+        if (!old || !u.bitmap) return prev;
+        old.bitmap?.close();
+        return { ...prev, [u.id]: { ...old, bitmap: u.bitmap, size: u.size } };
+      }
       const hasOutput = u.status === "ok" || u.status === "cached";
       const bitmap = u.bitmap ?? (hasOutput ? old?.bitmap : undefined);
       if (old?.bitmap && old.bitmap !== bitmap) old.bitmap.close();
@@ -128,7 +140,8 @@ export function App() {
     // Also for nodes with no status yet, e.g. a Download fetching its link during a preview.
     setRuntime((prev) => ({ ...prev, [p.id]: { ...prev[p.id], status: "running", progress: p.fraction, progressLabel: p.label } }));
   }, []);
-  const client = useMemo(() => new RuntimeClient(onUpdate, onProgress), [onUpdate, onProgress]);
+  const flashRef = useRef<(text: string) => void>(() => {});
+  const client = useMemo(() => new RuntimeClient(onUpdate, onProgress, (error) => flashRef.current(error)), [onUpdate, onProgress]);
 
   // Only params and wiring matter to the runtime; dragging nodes around shouldn't re-run anything.
   const graph = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
@@ -165,21 +178,26 @@ export function App() {
     client.preview(graphRef.current);
   }, [runKey, client]);
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        localStorage.setItem(STORE, serializeGraph(graph));
-      } catch {
-        /* storage may be unavailable */
-      }
-    }, 400);
-    return () => clearTimeout(t);
-  }, [graph]);
-
   const flash = useCallback((text: string) => {
     setMessage(text);
     setTimeout(() => setMessage((m) => (m === text ? "" : m)), 4000);
   }, []);
+  flashRef.current = flash;
+
+  // Autosave. Storage holds a few MB, so a very large pasted or dropped text can fill it: say so once.
+  const autosaveFailed = useRef(false);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(STORE, serializeGraph(graph));
+        autosaveFailed.current = false;
+      } catch {
+        if (!autosaveFailed.current) flash("This graph is too large to autosave. Use Save to keep it.");
+        autosaveFailed.current = true;
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [flash, graph]);
 
   const setParams = useCallback(
     (id: string, patch: Params) =>
@@ -223,6 +241,18 @@ export function App() {
       return n.id;
     },
     [flow, setNodes],
+  );
+
+  /** Opens the Add node menu at a point on screen, or the canvas centre. */
+  const openMenu = useCallback(
+    (client?: { x: number; y: number }, from?: MenuState["from"]) => {
+      const r = canvasRef.current!.getBoundingClientRect();
+      const inside = client && client.x >= r.left && client.x <= r.right && client.y >= r.top && client.y <= r.bottom;
+      const c = inside ? client : { x: r.left + r.width / 2, y: r.top + r.height / 3 };
+      const at = flow.screenToFlowPosition(c);
+      setMenu({ x: c.x - r.left, y: c.y - r.top, at: { x: at.x - NODE_HALF_WIDTH, y: at.y - 20 }, from });
+    },
+    [flow],
   );
 
   const render = useCallback(async () => {
@@ -283,10 +313,19 @@ export function App() {
     open: () => void openGraph(),
     save: () => void saveGraph(),
     new: () => loadGraph(starterGraph()),
+    addNode: () => openMenu(pointer.current),
   };
   useEffect(() => {
     bridge?.onMenu((c) => commands.current[c]?.());
     const onKey = (e: KeyboardEvent) => {
+      // Tab opens the Add node menu at the pointer, unless you're typing or moving between inspector fields.
+      if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const t = e.target as HTMLElement;
+        if (t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu")) return;
+        e.preventDefault();
+        commands.current.addNode();
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey) || isDesktop) return; // the desktop menu owns these
       const c = { r: "render", o: "open", s: "save" }[e.key.toLowerCase()];
       if (c) {
@@ -335,16 +374,43 @@ export function App() {
     [setEdges],
   );
 
+  // A wire dropped on empty canvas opens the menu with the nodes that can take it.
+  const onConnectEnd = useCallback(
+    (e: MouseEvent | TouchEvent, c: FinalConnectionState) => {
+      if (c.isValid || c.toNode || !c.fromNode || c.fromHandle?.type !== "source" || !c.fromHandle.id) return;
+      const p = "changedTouches" in e ? e.changedTouches[0] : e;
+      openMenu({ x: p.clientX, y: p.clientY }, { node: c.fromNode.id, handle: c.fromHandle.id });
+    },
+    [openMenu],
+  );
+
+  /** The first input of `def` that the menu's wire can feed. */
+  const portFor = useCallback(
+    (def: NodeDef, from: MenuState["from"]) => {
+      const shape = from && shapes.get(`${from.node}:${from.handle}`);
+      return shape ? def.inputs.find((p) => canConnect(shape, def, p, CONVERTERS).ok) : undefined;
+    },
+    [shapes],
+  );
+  const menuDefs = useMemo(() => (menu?.from ? NODE_DEFS.filter((d) => portFor(d, menu.from)) : NODE_DEFS), [menu, portFor]);
+
+  const pickFromMenu = useCallback(
+    (type: string) => {
+      if (!menu) return;
+      setMenu(null);
+      const id = addNode(type, menu.at);
+      const port = menu.from && portFor(REGISTRY.get(type)!, menu.from);
+      if (menu.from && port) onConnect({ source: menu.from.node, sourceHandle: menu.from.handle, target: id, targetHandle: port.key });
+    },
+    [addNode, menu, onConnect, portFor],
+  );
+  const closeMenu = useCallback(() => setMenu(null), []);
+
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
       setDropping(false);
       const pos = flow.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      const type = e.dataTransfer.getData("application/x-toolbox-node");
-      if (type) {
-        addNode(type, pos);
-        return;
-      }
       const all = [...e.dataTransfer.files];
       const unknown = all.filter((f) => !inputNodeFor(f));
       if (unknown.length) flash(`Toolbox can't open ${unknown.map((f) => f.name).join(", ")}`);
@@ -395,7 +461,6 @@ export function App() {
       }),
     [edges, nodes, shapes],
   );
-  const categories = [...new Set(NODE_DEFS.map((d) => d.category))];
 
   return (
     <ShapesContext.Provider value={shapes}>
@@ -427,6 +492,9 @@ export function App() {
                   </option>
                 ))}
               </select>
+              <button onClick={() => commands.current.addNode()} title="Add a node (Tab, or right-click the canvas)">
+                Add node <kbd>Tab</kbd>
+              </button>
               <button onClick={openGraph}>Open</button>
               <button onClick={saveGraph}>Save</button>
             </div>
@@ -456,28 +524,6 @@ export function App() {
           </header>
 
           <div className="main">
-            <aside className="library">
-              <h2>Nodes</h2>
-              {categories.map((cat) => (
-                <div key={cat} className="lib-group">
-                  <h3>{CATEGORY_LABEL[cat]}</h3>
-                  {NODE_DEFS.filter((d) => d.category === cat).map((d) => (
-                    <button
-                      key={d.type}
-                      className="lib-item"
-                      draggable
-                      title={d.description}
-                      onDragStart={(e) => e.dataTransfer.setData("application/x-toolbox-node", d.type)}
-                      onClick={() => addNode(d.type)}
-                    >
-                      {d.title}
-                    </button>
-                  ))}
-                </div>
-              ))}
-              <p className="hint">Click or drag a node onto the canvas. Drop images, videos, sound, PDFs or text anywhere.</p>
-            </aside>
-
             <section className={`center${view.panel ? "" : " no-panel"}`}>
               <div
                 className="canvas"
@@ -488,6 +534,7 @@ export function App() {
                 }}
                 onDragLeave={() => setDropping(false)}
                 onDrop={onDrop}
+                onPointerMove={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}
               >
                 {view.backdrop && shown && (shown.bitmap || shown.text !== undefined) && (
                   <div className="backdrop">
@@ -502,6 +549,11 @@ export function App() {
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
+                  onConnectEnd={onConnectEnd}
+                  onPaneContextMenu={(e) => {
+                    e.preventDefault();
+                    openMenu({ x: e.clientX, y: e.clientY });
+                  }}
                   isValidConnection={isValidConnection}
                   colorMode="dark"
                   fitView
@@ -513,6 +565,19 @@ export function App() {
                   <Controls showInteractive={false} />
                 </ReactFlow>
                 {dropping && <div className="drop">Drop files to add them</div>}
+                {menu && (
+                  <NodeMenu
+                    defs={menuDefs}
+                    x={menu.x}
+                    y={menu.y}
+                    title={menu.from ? "Add a node to this wire" : undefined}
+                    onPick={pickFromMenu}
+                    onClose={closeMenu}
+                  />
+                )}
+                {nodes.length === 0 && !menu && (
+                  <p className="canvas-hint">Press Tab or right-click to add a node. Drop images, videos, sound, PDFs or text anywhere.</p>
+                )}
               </div>
               {view.panel && (
               <div className="preview">

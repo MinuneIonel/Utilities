@@ -19,15 +19,9 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { ffmpegProbe, ffmpegVideo } from "./ffmpeg";
-import { cropInTransformedSpace, planGeometry, type EncodedFile, type Geometry, type Progress, type Rect, type Rotation, type VideoContainer, type VideoJob } from "./types";
+import { cropInTransformedSpace, planGeometry, VIDEO_CONTAINERS, type EncodedFile, type Geometry, type Progress, type Rect, type Rotation, type VideoContainer, type VideoJob } from "./types";
 
-export const VIDEO_CONTAINERS: Record<VideoContainer, { label: string; mime: string; ext: string }> = {
-  mp4: { label: "MP4", mime: "video/mp4", ext: "mp4" },
-  webm: { label: "WebM", mime: "video/webm", ext: "webm" },
-  mov: { label: "MOV", mime: "video/quicktime", ext: "mov" },
-  mkv: { label: "MKV", mime: "video/x-matroska", ext: "mkv" },
-  gif: { label: "GIF (animated)", mime: "image/gif", ext: "gif" },
-};
+export { VIDEO_CONTAINERS };
 
 const PREFERRED: Record<Exclude<VideoContainer, "gif">, VideoCodec[]> = {
   mp4: ["avc", "hevc", "av1", "vp9"],
