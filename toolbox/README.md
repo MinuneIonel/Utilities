@@ -21,6 +21,8 @@ Each installer bundles the ffmpeg for its own system, so build each one on that 
 git tag toolbox-v0.2.0 && git push origin toolbox-v0.2.0
 ```
 
+Or run the workflow from the Actions tab with a version (`0.2.0`) filled in, which creates the tag itself.
+
 The installers aren't signed with a paid certificate (the Mac app is ad-hoc signed), so the first launch takes an extra click. [INSTALL.md](INSTALL.md) has the steps for friends; it's also the Release's description.
 
 ## How it works
