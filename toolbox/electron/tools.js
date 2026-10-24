@@ -95,9 +95,7 @@ function ffmpegCaps() {
       });
     const [enc, hw] = await Promise.all([list(["-encoders"]), list(["-hwaccels"])]);
     // Encoder lines look like " V....D libx264  libx264 H.264 / AVC ..."; hwaccels are one per line after a header.
-    // TOOLBOX_HIDE_ENCODERS (comma-separated) lets the encode check compare paths, e.g. WebCodecs HEVC against VideoToolbox.
-    const hidden = new Set((process.env.TOOLBOX_HIDE_ENCODERS ?? "").split(","));
-    const encoders = [...enc.matchAll(/^\s*[VAS][A-Z.]{5}\s+(\S+)/gm)].map((m) => m[1]).filter((e) => !hidden.has(e));
+    const encoders = [...enc.matchAll(/^\s*[VAS][A-Z.]{5}\s+(\S+)/gm)].map((m) => m[1]);
     const hwaccels = hw.split("\n").slice(1).map((l) => l.trim()).filter(Boolean);
     return { encoders, hwaccels };
   })();

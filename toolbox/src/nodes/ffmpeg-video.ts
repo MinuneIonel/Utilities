@@ -23,6 +23,7 @@ export interface Encoder {
  * Encoders to try, best first. Measured on an M5 at 1080p: hardware ProRes is
  * about 8× faster than prores_ks and hardware HEVC about 3.7× faster than
  * libx265, but libx264 beats h264_videotoolbox, so H.264 stays in software.
+ * (Encode video only sends HEVC here when WebCodecs can't encode it.)
  */
 const ORDER: Record<NativeCodec, Encoder[]> = {
   prores: [

@@ -1,15 +1,13 @@
-// Compares the WebGPU renderers with the CPU ones and times both. Opened by
+// Compares the WebGPU renderers (Dither, resize, Lanczos) with the CPU ones and times both. Opened by
 // run.mjs in Chromium (or Electron), which reads window.gpuCheck when done.
 import { newStep, render, type Recipe } from "../../../dither/src/engine/recipe";
 import { ALGORITHMS } from "../../../dither/src/engine/dither";
 import { builtInRecipes } from "../../../dither/src/recipes";
-import { asciiConvert } from "../../src/nodes/ascii";
 import { ditherRecipe } from "../../src/nodes/dither";
 import { gpu, setGpuEnabled, type Gpu } from "../../src/nodes/gpu";
 import { scaleImage } from "../../src/nodes/image";
 import { imageTransform } from "../../src/nodes/media";
 import type { ImageValue, RunContext } from "../../src/runtime/types";
-import { builtInPresets } from "../../../ascii/src/presets";
 
 const log = document.getElementById("log")!;
 const lines: string[] = [];
@@ -131,7 +129,6 @@ async function bench() {
   for (const r of recipes) await both(`Dither "${r.name}" 1080p`, () => ditherRecipe.run({ image: frame }, { recipe: r, size: "source" }, ctx));
   const ordered = recipe("Bayer 8, 1 px", [newStep("adjust", { contrast: 10 }), newStep("dither", { algorithm: "bayer8", palette: "pico8" })], 1);
   await both(`Dither "Bayer 8, 1 px" 1080p`, () => ditherRecipe.run({ image: frame }, { recipe: ordered, size: "source" }, ctx));
-  for (const p of builtInPresets().slice(0, 2)) await both(`ASCII "${p.name}" 1080p`, () => asciiConvert.run({ image: frame }, { settings: p }, ctx));
   await both("Resize 1080p → 50% (Lanczos)", () => imageTransform.run({ image: frame }, { resize: "percent", percent: 50 }, ctx));
   return rows;
 }

@@ -39,9 +39,7 @@ const save = (folder) => ["output.save-file", { folder }, "file", null];
 const CASES = [
   { name: "ProRes HQ, dithered frames", chain: [input, dither, encode({ container: "mov", codec: "prores", prores: "hq" })], expect: /prores \(HQ\)/ },
   { name: "ProRes 4444, straight from the file", chain: [input, encode({ container: "mov", codec: "prores", prores: "4444" })], expect: /prores \(4444\)/ },
-  { name: "HEVC, dithered frames (VideoToolbox, else WebCodecs, else libx265)", chain: [input, dither, encode({ container: "mp4", codec: "hevc" })], expect: /hevc/ },
-  // Only differs from the case above on a Mac; elsewhere there's no hevc_videotoolbox to hide.
-  { name: "HEVC, dithered frames, without VideoToolbox", chain: [input, dither, encode({ container: "mp4", codec: "hevc" })], expect: /hevc/, hide: "hevc_videotoolbox" },
+  { name: "HEVC, dithered frames (WebCodecs, else ffmpeg)", chain: [input, dither, encode({ container: "mp4", codec: "hevc" })], expect: /hevc/ },
   { name: "H.264, dithered frames, WebCodecs", chain: [input, dither, encode({ container: "mp4", codec: "avc" })], expect: /h264/ },
 ];
 
@@ -53,7 +51,6 @@ async function runCase(c) {
   const app = await _electron.launch({
     executablePath: require("electron"),
     args: [appDir, ...(process.platform === "linux" ? ["--no-sandbox"] : [])],
-    env: { ...process.env, TOOLBOX_HIDE_ENCODERS: c.hide ?? "" },
   });
   const errors = [];
   try {
@@ -94,7 +91,7 @@ console.log(`Clip: ${S} s at ${W}×${H}, 30 fps, with sound\n`);
 let ok = true;
 for (const c of CASES) {
   const r = await runCase(c);
-  ok &&= r.ok || !!c.optional;
+  ok &&= r.ok;
   console.log(`${r.ok ? "ok  " : "FAIL"} ${c.name}`);
   if (r.ms !== undefined) console.log(`     ${(r.ms / 1000).toFixed(2)} s, ${r.mb.toFixed(1)} MB`);
   for (const s of r.streams ?? []) console.log(`     ${s}`);

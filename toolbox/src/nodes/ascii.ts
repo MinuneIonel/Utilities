@@ -4,7 +4,6 @@ import { FONTS, parseSettings, type Settings } from "../../../ascii/src/engine/s
 import { builtInPresets } from "../../../ascii/src/presets";
 import { Renderer, inkIsDark } from "../../../ascii/src/render";
 import type { Converter, GridValue, ImageValue, NodeDef, TextValue } from "../runtime/types";
-import { preferGpu } from "./gpu";
 import { scaleImage } from "./image";
 
 /** Same cap as ASCII Lab. */
@@ -55,13 +54,7 @@ export const asciiConvert: NodeDef = {
     const rows = Math.max(1, Math.min(MAX_ROWS, Math.round((cols * src.height * L.cellW) / (src.width * L.cellH))));
     const sx = s.mode === "braille" ? 2 : 1;
     const sy = s.mode === "braille" ? 4 : 1;
-    const sw = cols * sx;
-    const sh = rows * sy;
-    // Shrinking a full frame to one sample per character is the expensive part; the rest is a few thousand cells.
-    const sample = await preferGpu(
-      async (g) => (g.dither.fits(sw, sh, src.width, src.height) ? g.dither.resize(src.data, src.width, src.height, sw, sh) : undefined),
-      () => scaleImage(src, sw, sh, true).data,
-    );
+    const sample = scaleImage(src, cols * sx, rows * sy, true).data;
     const grid = convert(sample, cols, rows, s, L.levels, inkIsDark(s));
     return { grid: { kind: "grid", grid, settings: s, glyphs: L.glyphs } };
   },

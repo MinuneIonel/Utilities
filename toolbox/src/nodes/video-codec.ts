@@ -465,13 +465,14 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
   const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, bytes } });
   if (container === "gif") return file(await encodeGif(v, fps, ctx.progress, ctx.signal));
 
-  // Native ffmpeg takes ProRes (browsers can't write it), and HEVC where VideoToolbox has it or WebCodecs can't.
+  // Native ffmpeg takes ProRes (browsers can't write it), and HEVC only where WebCodecs can't encode it.
+  // On a Mac, Chromium's WebCodecs HEVC already runs on VideoToolbox and measured as fast as ffmpeg's.
   const tools = nativeTools();
   const nativeHevc =
     picked === "hevc" &&
     !!tools?.ffmpeg &&
-    (tools.encoders.has("hevc_videotoolbox") ||
-      (tools.encoders.has("libx265") && !(await getFirstEncodableVideoCodec(["hevc"], { width: v.width - (v.width % 2), height: v.height - (v.height % 2) }))));
+    encodersFor("hevc", tools.encoders).length > 0 &&
+    !(await getFirstEncodableVideoCodec(["hevc"], { width: v.width - (v.width % 2), height: v.height - (v.height % 2) }));
   if (picked === "prores" || nativeHevc) {
     if (picked === "prores") {
       if (container !== "mov" && container !== "mkv") throw new Error("ProRes goes in a MOV (or MKV) file. Pick MOV as the format.");
