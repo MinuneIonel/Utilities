@@ -1,10 +1,12 @@
 import { cpSync } from "node:fs";
-import { resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
 // pdf.js loads its standard fonts and CMaps by URL at render time. Serve them
-// from node_modules in dev and copy them next to the build.
-const PDFJS = resolve(__dirname, "node_modules/pdfjs-dist");
+// from node_modules in dev and copy them next to the build. Resolved through
+// Node so it works whether npm installed pdfjs-dist here or at the repo root.
+const PDFJS = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
 const ASSETS = ["standard_fonts", "cmaps"];
 
 function pdfjsAssets(): Plugin {

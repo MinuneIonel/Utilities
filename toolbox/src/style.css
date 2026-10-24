@@ -1,0 +1,232 @@
+/* Same palette and controls as the standalone apps (see dither/src/style.css). */
+:root {
+  --bg: #111214;
+  --panel: #18191c;
+  --card: #1f2024;
+  --line: #2c2e33;
+  --text: #e6e6e3;
+  --muted: #8b8d93;
+  --accent: #e8ff59;
+  --accent-ink: #111214;
+  --danger: #ff5c5c;
+  --radius: 8px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* One colour per port type, used on handles and wires. */
+  --t-image: #59c2ff;
+  --t-video: #b38cff;
+  --t-audio: #ffb259;
+  --t-text: #7be0a0;
+  --t-grid: #ff8cc6;
+  --t-document: #ff7a59;
+  --t-file: #c8c8c8;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+button, select, input[type="text"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  height: 30px;
+}
+button { cursor: pointer; }
+button:hover, select:hover { border-color: #44474e; }
+button:disabled { opacity: 0.6; cursor: default; }
+button.active { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.icon { height: 24px; padding: 0 7px; font-size: 12px; background: transparent; border-color: transparent; color: var(--muted); }
+button.icon:hover { color: var(--text); border-color: var(--line); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+input[type="checkbox"] { accent-color: var(--accent); }
+.muted, .hint { color: var(--muted); }
+.hint { font-size: 12px; }
+
+/* ------------------------------------------------------------ layout */
+
+.app { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+.main { display: grid; grid-template-columns: 180px minmax(0, 1fr) 320px; min-height: 0; }
+.center { display: grid; grid-template-rows: minmax(0, 1fr) 240px; min-width: 0; min-height: 0; }
+.center.no-panel { grid-template-rows: minmax(0, 1fr); }
+
+.topbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  -webkit-app-region: drag;
+}
+.topbar button { -webkit-app-region: no-drag; }
+.mac-desktop .topbar { padding-left: 84px; }
+.brand { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-weight: 700; letter-spacing: 0.04em; }
+.logo {
+  width: 16px; height: 16px;
+  background: conic-gradient(var(--accent) 25%, transparent 0 50%, var(--accent) 0 75%, transparent 0) 0 0 / 4px 4px;
+}
+.group { display: flex; gap: 6px; align-items: center; }
+.group.right { margin-left: auto; }
+.message { color: var(--accent); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+.library, .inspector { background: var(--panel); overflow-y: auto; padding: 12px; }
+.library { border-right: 1px solid var(--line); }
+.inspector { border-left: 1px solid var(--line); }
+.inspector.empty { color: var(--muted); }
+.library h2, .inspector h2 { font-size: 14px; margin: 0 0 8px; }
+.library h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 14px 0 6px; }
+.lib-item { display: block; width: 100%; text-align: left; margin-bottom: 4px; cursor: grab; }
+
+.canvas { position: relative; min-height: 0; overflow: hidden; }
+
+/* The selected node's output behind the graph, like TouchDesigner's background view. */
+.backdrop {
+  position: absolute; inset: 0;
+  display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center;
+  padding: 24px; pointer-events: none;
+}
+.backdrop-img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; opacity: 0.9; }
+.backdrop-text {
+  max-width: 100%; max-height: 100%; overflow: hidden; margin: 0;
+  font: 14px/1.35 var(--mono); color: var(--text); opacity: 0.55; white-space: pre-wrap;
+}
+.backdrop-label { position: absolute; right: 16px; bottom: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.react-flow.dark, .react-flow { --xy-background-color: transparent; background: transparent; }
+.react-flow__edge.converted path { stroke-dasharray: 6 4; }
+.react-flow__edge-text { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+.react-flow__edge-textbg { fill: var(--bg); }
+.drop {
+  position: absolute; inset: 12px;
+  display: grid; place-items: center;
+  border: 2px dashed var(--accent); border-radius: 12px;
+  background: rgba(17, 18, 20, 0.85);
+  font-family: var(--mono); font-size: 16px; color: var(--accent);
+  pointer-events: none;
+}
+
+.preview { display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid var(--line); min-height: 0; }
+.preview-bar { display: flex; gap: 10px; align-items: baseline; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.preview-body {
+  min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; padding: 10px; overflow: hidden;
+  background: repeating-conic-gradient(#16171a 0 25%, #131416 0 50%) 0 0 / 16px 16px;
+}
+.preview-text { margin: 0; max-width: 100%; max-height: 100%; overflow: auto; font: 12px/1.35 var(--mono); white-space: pre-wrap; justify-self: stretch; align-self: stretch; }
+.preview-canvas { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
+
+.tray {
+  display: flex; gap: 12px; align-items: center; overflow-x: auto; white-space: nowrap;
+  padding: 6px 16px; border-top: 1px solid var(--line); background: var(--panel); min-height: 38px;
+}
+.out-item { display: inline-flex; gap: 6px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px 2px 8px; }
+
+/* ------------------------------------------------------------ nodes */
+
+.react-flow { --xy-edge-stroke: #6a6d75; --xy-edge-stroke-selected: var(--accent); }
+.canvas { background: var(--bg); }
+.react-flow__controls button { height: auto; border-radius: 0; }
+
+.tnode {
+  width: 220px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.tnode.selected { border-color: var(--accent); }
+.tnode-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.tnode-title { font-weight: 600; flex: 1; }
+.badge { font-family: var(--mono); font-size: 10px; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.badge.frame { color: var(--accent); border-color: rgba(232, 255, 89, 0.4); }
+.tnode-ports { display: flex; justify-content: space-between; padding: 6px 0; font-size: 12px; color: var(--muted); }
+.port { position: relative; padding: 2px 12px; }
+.port.out { text-align: right; }
+.tnode .h { width: 10px; height: 10px; border: 2px solid var(--card); }
+.h-image { background: var(--t-image); }
+.h-video { background: var(--t-video); }
+.h-audio { background: var(--t-audio); }
+.h-text { background: var(--t-text); }
+.h-grid { background: var(--t-grid); }
+.h-document { background: var(--t-document); }
+.h-file { background: var(--t-file); }
+.tnode-file { display: flex; gap: 6px; align-items: center; padding: 0 10px 6px; }
+.tnode-file .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tnode-file button { height: 24px; padding: 0 8px; font-size: 12px; }
+.tnode-thumb { display: block; width: 100%; max-height: 160px; object-fit: contain; background: #0c0d0e; image-rendering: pixelated; }
+.tnode-text {
+  margin: 0; padding: 6px 10px; max-height: 140px; overflow: hidden;
+  font: 10px/1.3 var(--mono); white-space: pre-wrap; word-break: break-word; background: #0c0d0e; color: var(--text);
+}
+.tnode-status { padding: 4px 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); min-height: 22px; border-top: 1px solid var(--line); }
+.tnode-status.s-error { color: var(--danger); }
+.tnode-status.s-running { color: var(--accent); }
+
+/* ------------------------------------------------------------ inspector */
+
+.field { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
+.field label { color: var(--muted); }
+.field select, .field input[type="text"] { grid-column: 2 / 4; width: 100%; }
+.field output { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 32px; text-align: right; }
+.field input.num { width: 64px; height: 26px; font: 11px var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.field.stacked { grid-template-columns: 1fr; }
+.field textarea { width: 100%; resize: vertical; font: 12px/1.4 var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.field .path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dither-panel { margin-top: 12px; }
+
+/* Dither Lab's effect-stack editor (dither/src/ui/stack.ts) expects these. */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.stack-head { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
+.stack-head h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 0; }
+.stack { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.step { padding: 0; }
+.step.off .step-body, .step.off .step-title { opacity: 0.4; }
+.step.dragging { opacity: 0.5; }
+.step.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+.step.drop-after { box-shadow: 0 2px 0 var(--accent); }
+.step-head { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 4px; border-bottom: 1px solid var(--line); }
+.handle { cursor: grab; color: var(--muted); padding: 0 4px; user-select: none; letter-spacing: -2px; }
+.step-title { font-weight: 600; flex: 1; }
+.step-actions { display: flex; }
+.step-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.row { display: grid; grid-template-columns: 92px 1fr 40px; align-items: center; gap: 8px; }
+.row label { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row select { grid-column: 2 / 4; width: 100%; height: 28px; padding: 3px 6px; }
+.row output { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--muted); }
+.row.toggle-row input { justify-self: start; }
+.row.colors-row { align-items: start; }
+.colors { grid-column: 2 / 4; display: flex; flex-direction: column; gap: 6px; }
+.colors input[type="text"] { height: 26px; font-size: 12px; width: 100%; }
+.swatches, .result-palette { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.result-palette:empty { display: none; }
+.swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.15); display: inline-block; }
+.swatch.editable { cursor: pointer; position: relative; }
+.swatch.editable input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }
+
+/* ASCII Lab's settings panel (ascii/src/ui/controls.ts) expects these. */
+.ascii-panel .controls { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.section { display: flex; flex-direction: column; gap: 6px; }
+.section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 0 0 4px; }
+.row input[type="text"] { grid-column: 2 / 4; width: 100%; height: 28px; font-family: var(--mono); }
+.row[hidden] { display: none; }
+.color-pick { grid-column: 2 / 4; display: flex; align-items: center; gap: 10px; }
+.color-pick input[type="color"] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; }
+.color-pick input[type="color"]:disabled { opacity: 0.3; }
+.color-pick label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+
+/* Phase 4: video wires, per-frame nodes, progress */
+.react-flow__edge.seq path { stroke-width: 3; }
+.badge.frames { color: var(--t-video); border-color: color-mix(in srgb, var(--t-video) 50%, transparent); }
+.tnode-progress { height: 3px; margin: 4px 8px 0; background: var(--line); border-radius: 2px; overflow: hidden; }
+.tnode-progress > div { height: 100%; background: var(--accent); transition: width 0.1s linear; }
+.tnode-progress.busy > div { width: 30% !important; animation: tnode-busy 1.2s ease-in-out infinite; }
+@keyframes tnode-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+button.primary.rec { background: #ff5a5a; border-color: #ff5a5a; color: #fff; }
+select.templates { width: 150px; }

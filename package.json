@@ -1,0 +1,20 @@
+{
+  "name": "utilities",
+  "private": true,
+  "workspaces": [
+    "dither",
+    "ascii",
+    "diacritics",
+    "audio",
+    "media",
+    "pdf",
+    "toolbox"
+  ],
+  "scripts": {
+    "toolbox": "npm run start --workspace toolbox",
+    "toolbox:web": "npm run dev --workspace toolbox",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "toolbox:dmg": "npm run dist --workspace toolbox"
+  }
+}

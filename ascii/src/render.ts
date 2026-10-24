@@ -16,10 +16,23 @@ export interface Layout {
 
 const ATLAS_COLS = 16;
 
+type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
+
+/** A DOM canvas on the page, an OffscreenCanvas in a worker (Toolbox renders grids off the main thread). */
+const makeCanvas = (w = 300, h = 150): AnyCanvas => {
+  if (typeof document === "undefined") return new OffscreenCanvas(w, h);
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  return c;
+};
+const ctx2d = (c: AnyCanvas, opts?: CanvasRenderingContext2DSettings) =>
+  c.getContext("2d", opts) as CanvasRenderingContext2D;
+
 /** Draws character grids onto a canvas from a pre-rendered glyph atlas. */
 export class Renderer {
-  private atlas = document.createElement("canvas");
-  private colorCanvas = document.createElement("canvas");
+  private atlas = makeCanvas();
+  private colorCanvas = makeCanvas();
   private key = "";
   private cached: Layout | null = null;
   private inkCache = new Map<string, number>();
@@ -44,7 +57,7 @@ export class Renderer {
     const key = `${font}|${s.lineHeight}|${glyphs.join("")}`;
     if (key === this.key && this.cached) return this.cached;
 
-    const g = this.atlas.getContext("2d")!;
+    const g = ctx2d(this.atlas);
     g.font = font;
     const cellW = Math.max(1, Math.round(g.measureText("M").width));
     const cellH = Math.max(1, Math.round(size * s.lineHeight));
@@ -77,10 +90,8 @@ export class Renderer {
     const k = `${font}|${ch}`;
     const hit = this.inkCache.get(k);
     if (hit !== undefined) return hit;
-    const c = document.createElement("canvas");
-    c.width = 32;
-    c.height = 40;
-    const g = c.getContext("2d", { willReadFrequently: true })!;
+    const c = makeCanvas(32, 40);
+    const g = ctx2d(c, { willReadFrequently: true });
     g.font = font;
     g.textAlign = "center";
     g.textBaseline = "middle";
@@ -93,14 +104,14 @@ export class Renderer {
     return v;
   }
 
-  draw(target: HTMLCanvasElement, grid: Grid, s: Settings, L: Layout) {
+  draw(target: AnyCanvas, grid: Grid, s: Settings, L: Layout) {
     const W = grid.cols * L.cellW;
     const H = grid.rows * L.cellH;
     if (target.width !== W || target.height !== H) {
       target.width = W;
       target.height = H;
     }
-    const g = target.getContext("2d")!;
+    const g = ctx2d(target);
     g.globalCompositeOperation = "source-over";
     g.clearRect(0, 0, W, H);
     const { cellW, cellH, blank } = L;
@@ -128,7 +139,7 @@ export class Renderer {
         img.data[i * 4 + 2] = grid.colors[i * 3 + 2];
         img.data[i * 4 + 3] = 255;
       }
-      cc.getContext("2d")!.putImageData(img, 0, 0);
+      ctx2d(cc).putImageData(img, 0, 0);
       g.imageSmoothingEnabled = false;
       g.drawImage(cc, 0, 0, W, H);
     } else {
