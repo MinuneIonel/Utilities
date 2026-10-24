@@ -16,6 +16,16 @@ test("without VideoToolbox only the software encoders are left", () => {
   assert.deepEqual(encodersFor("hevc", new Set()), []);
 });
 
+test("on a PC, HEVC tries NVIDIA, Intel and AMD before libx265", () => {
+  const win = new Set(["libx264", "libx265", "prores_ks", "hevc_amf", "hevc_nvenc", "hevc_qsv", "h264_nvenc"]);
+  assert.deepEqual(encodersFor("hevc", win).map((e) => e.name), ["hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"]);
+  assert.deepEqual(encodersFor("prores", win).map((e) => e.name), ["prores_ks"]);
+  const [nv, qsv, amf] = encodersFor("hevc", win);
+  assert.ok(rawEncodeArgs({ width: 64, height: 64, fps: 30 }, nv, "hevc", "mp4", "high", "hq", undefined, "out.mp4").join(" ").includes("-c:v hevc_nvenc -preset p4 -rc vbr -cq 24 -b:v 0 -tag:v hvc1"));
+  assert.ok(fileEncodeArgs("in.mp4", new Set(), qsv, "hevc", "mp4", "medium", "hq", 0, true, "out.mp4").join(" ").includes("-global_quality 27 -tag:v hvc1 -pix_fmt nv12"));
+  assert.ok(fileEncodeArgs("in.mp4", new Set(), amf, "hevc", "mp4", "low", "hq", 0, true, "out.mp4").join(" ").includes("-rc cqp -qp_i 30 -qp_p 30"));
+});
+
 test("raw frames: rgba on stdin, sound mapped from the second input, PCM next to ProRes", () => {
   const [e] = encodersFor("prores", mac);
   const args = rawEncodeArgs({ width: 1920, height: 1080, fps: 25 }, e, "prores", "mov", "high", "hq", "sound.mp4", "out.mov");
