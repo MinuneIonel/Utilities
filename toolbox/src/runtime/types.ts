@@ -163,6 +163,12 @@ export interface NodeDef {
   /** Output nodes whose File result the window writes to disk after Render. */
   saves?: boolean;
   /**
+   * Output changes on its own (a webcam's newest frame). Its results, and those of
+   * every node after it, are never cached: they would only fill the cache with
+   * stale frames.
+   */
+  live?: boolean;
+  /**
    * Extra cache-key material for nodes whose output depends on more than
    * params and inputs (a file input's asset id, or the run mode).
    */

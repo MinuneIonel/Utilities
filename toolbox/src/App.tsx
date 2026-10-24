@@ -125,7 +125,8 @@ export function App() {
     });
   }, []);
   const onProgress = useCallback((p: ProgressUpdate) => {
-    setRuntime((prev) => (prev[p.id] ? { ...prev, [p.id]: { ...prev[p.id], status: "running", progress: p.fraction, progressLabel: p.label } } : prev));
+    // Also for nodes with no status yet, e.g. a Download fetching its link during a preview.
+    setRuntime((prev) => ({ ...prev, [p.id]: { ...prev[p.id], status: "running", progress: p.fraction, progressLabel: p.label } }));
   }, []);
   const client = useMemo(() => new RuntimeClient(onUpdate, onProgress), [onUpdate, onProgress]);
 
