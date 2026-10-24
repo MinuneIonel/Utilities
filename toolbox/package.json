@@ -13,8 +13,10 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "check:gpu": "node test/gpu/run.mjs",
     "check:encode": "npm run build && node test/e2e/encode.mjs",
-    "dist": "tsc --noEmit && vite build && electron-builder --mac dmg",
-    "pack": "vite build && electron-builder --dir"
+    "dist": "tsc --noEmit && vite build && electron-builder --mac dmg --arm64 --publish never",
+    "pack": "vite build && electron-builder --dir",
+    "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",
+    "dist:linux": "tsc --noEmit && vite build && electron-builder --linux AppImage --x64 --publish never"
   },
   "devDependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
@@ -52,34 +54,73 @@
       "electron/**",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "../node_modules/ffmpeg-static/ffmpeg",
-        "to": "ffmpeg"
-      }
-    ],
     "npmRebuild": false,
     "mac": {
       "target": [
         {
-          "target": "dmg"
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.graphics-design",
       "icon": "build/icon.icns",
-      "identity": null,
+      "identity": "-",
       "extendInfo": {
         "NSCameraUsageDescription": "Webcam nodes use the camera to preview and record."
-      }
+      },
+      "extraResources": [
+        {
+          "from": "../node_modules/ffmpeg-static/ffmpeg",
+          "to": "ffmpeg"
+        }
+      ],
+      "hardenedRuntime": false
     },
     "dmg": {
       "title": "Toolbox"
     },
     "linux": {
       "target": [
-        "dir"
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "extraResources": [
+        {
+          "from": "../node_modules/ffmpeg-static/ffmpeg",
+          "to": "ffmpeg"
+        }
+      ]
+    },
+    "artifactName": "Toolbox-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "../node_modules/ffmpeg-static/ffmpeg.exe",
+          "to": "ffmpeg.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Toolbox"
     },
     "publish": null
   }

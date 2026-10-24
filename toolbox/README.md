@@ -10,10 +10,18 @@ npm run toolbox:web    # the same UI in a browser tab (saving uses downloads)
 npm test -w toolbox    # graph runtime tests
 npm run check:gpu -w toolbox      # WebGPU against CPU output (add -- --bench for timings)
 npm run check:encode -w toolbox   # Encode video through the app: ProRes, HEVC, H.264 (add -- --bench for 1080p)
-npm run toolbox:dmg    # on a Mac: builds release/Toolbox-<version>-arm64.dmg
+npm run toolbox:dmg       # on a Mac: release/Toolbox-<version>-mac-arm64.dmg
+npm run toolbox:exe       # on Windows: release/Toolbox-<version>-win-x64.exe
+npm run toolbox:appimage  # on Linux: release/Toolbox-<version>-linux-x86_64.AppImage
 ```
 
-The `.dmg` is unsigned: the first time, right-click Toolbox in Applications and choose Open.
+Each installer bundles the ffmpeg for its own system, so build each one on that system. GitHub Actions does all three (`.github/workflows/toolbox-release.yml`): pull requests and manual runs attach the installers to the run, and pushing a tag publishes them on a Release:
+
+```sh
+git tag toolbox-v0.2.0 && git push origin toolbox-v0.2.0
+```
+
+The installers aren't signed with a paid certificate (the Mac app is ad-hoc signed), so the first launch takes an extra click. [INSTALL.md](INSTALL.md) has the steps for friends; it's also the Release's description.
 
 ## How it works
 
@@ -26,7 +34,7 @@ The `.dmg` is unsigned: the first time, right-click Toolbox in Applications and 
 - **Progress and cancel**: long nodes show a progress bar during Render; Cancel stops them without writing half files.
 - **Native tools** (desktop app only): ffmpeg ships inside the app and runs in its own process. Convert audio uses it instead of ffmpeg.wasm, and videos WebCodecs can't read (AVI, WMV, old codecs) are converted to MP4 once when dropped. The **Download** node fetches links with yt-dlp, which Toolbox downloads into its own folder the first time (or uses one from Homebrew).
 - **GPU**: Dither and Resize / crop run on the GPU through WebGPU when there is one. Dither runs its resize, adjustments, filters and ordered, halftone and noise dithers as compute shaders; error diffusion (Floyd–Steinberg and friends) is sequential, so a recipe hands over to the CPU at that step. Resize / crop runs Media Lab's Lanczos3 filter (linear light, premultiplied alpha) there. On an M5 at 1080p: Lanczos resize 55 → 6 ms, halftone recipes 139 → 8 ms, Bayer 36 → 5 ms; recipes ending in error diffusion gain little. (ASCII already takes 1–2 ms a frame, and the GPU didn't beat that, so it stays on the CPU.) Without WebGPU, or after a GPU error, the same CPU code as the web apps runs. `npm run check:gpu` compares the two.
-- **Hardware video encoding** (desktop app): Encode video can write ProRes (Proxy, LT, 422, HQ, 4444) to MOV with ffmpeg, using Apple Silicon's ProRes engine (`prores_videotoolbox`) and falling back to `prores_ks`. H.264 and HEVC stay with WebCodecs, which already encodes on VideoToolbox and measured as fast as ffmpeg's encoders; HEVC goes to ffmpeg (`hevc_videotoolbox`, else `libx265`) only where WebCodecs can't write it. The converter for unreadable files uses `libx264`: on an M5, software H.264 is faster than VideoToolbox. 10 s of 1080p renders to ProRes HQ through a Dither node in 4.5 s, or straight from the file in 2.3 s. Frames after image nodes reach ffmpeg as raw RGBA on its stdin; untouched files go to ffmpeg directly, decoded with VideoToolbox.
+- **Hardware video encoding** (desktop app): Encode video can write ProRes (Proxy, LT, 422, HQ, 4444) to MOV with ffmpeg, using Apple Silicon's ProRes engine (`prores_videotoolbox`) and falling back to `prores_ks` (the only ProRes encoder on Windows and Linux). H.264 and HEVC stay with WebCodecs, which already encodes on VideoToolbox and measured as fast as ffmpeg's encoders; HEVC goes to ffmpeg only where WebCodecs can't write it: `hevc_videotoolbox` on a Mac, NVIDIA, Intel or AMD (`hevc_nvenc`, `hevc_qsv`, `hevc_amf`) on a PC, each falling through to the next when the GPU isn't there, then `libx265`. The converter for unreadable files uses `libx264`: on an M5, software H.264 is faster than VideoToolbox. 10 s of 1080p renders to ProRes HQ through a Dither node in 4.5 s, or straight from the file in 2.3 s. Frames after image nodes reach ffmpeg as raw RGBA on its stdin; untouched files go to ffmpeg directly, decoded with VideoToolbox.
 - **Templates** in the toolbar start common jobs: video to ASCII MP4, link to GIF, sound as MP3, photos to PDF, watermark a PDF, Romanian text, webcam recording.
 - Graphs save as `.toolbox` JSON files (⌘S / ⌘O). Dropped files are not stored in the graph, so drop them again after opening.
 

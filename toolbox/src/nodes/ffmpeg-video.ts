@@ -1,6 +1,7 @@
 // Native ffmpeg video encoding: which encoder to use and its arguments. On a
-// Mac the VideoToolbox encoders use the media engines in Apple Silicon. Plain
-// data, no I/O, so it is tested in Node.
+// Mac the VideoToolbox encoders use the media engines in Apple Silicon; on
+// Windows and Linux HEVC tries NVIDIA (NVENC), Intel (Quick Sync) and AMD (AMF).
+// Plain data, no I/O, so it is tested in Node.
 import type { QualityLevel } from "../../../media/src/engine/types";
 
 export type NativeCodec = "avc" | "hevc" | "prores";
@@ -23,7 +24,10 @@ export interface Encoder {
  * Encoders to try, best first. Measured on an M5 at 1080p: hardware ProRes is
  * about 8× faster than prores_ks and hardware HEVC about 3.7× faster than
  * libx265, but libx264 beats h264_videotoolbox, so H.264 stays in software.
- * (Encode video only sends HEVC here when WebCodecs can't encode it.)
+ * (Encode video only sends HEVC here when WebCodecs can't encode it.) ffmpeg
+ * lists NVENC, Quick Sync and AMF whether or not the GPU is there, so on a PC
+ * without one they fail at once and the next encoder in line takes over.
+ * There is no ProRes hardware outside Apple's chips: prores_ks everywhere else.
  */
 const ORDER: Record<NativeCodec, Encoder[]> = {
   prores: [
@@ -32,6 +36,9 @@ const ORDER: Record<NativeCodec, Encoder[]> = {
   ],
   hevc: [
     { name: "hevc_videotoolbox", hardware: true },
+    { name: "hevc_nvenc", hardware: true },
+    { name: "hevc_qsv", hardware: true },
+    { name: "hevc_amf", hardware: true },
     { name: "libx265", hardware: false },
   ],
   avc: [
@@ -49,6 +56,8 @@ export function encodersFor(codec: NativeCodec, available: ReadonlySet<string>):
 const VT_QUALITY: Record<QualityLevel, number> = { "very-low": 35, low: 45, medium: 55, high: 65, "very-high": 80 };
 const X264_CRF: Record<QualityLevel, number> = { "very-low": 30, low: 26, medium: 23, high: 19, "very-high": 16 };
 const X265_CRF: Record<QualityLevel, number> = { "very-low": 32, low: 28, medium: 25, high: 22, "very-high": 18 };
+/** NVENC's -cq, Quick Sync's -global_quality and AMF's QP sit on roughly the same scale as x265's CRF. */
+const GPU_QP: Record<QualityLevel, number> = { "very-low": 34, low: 30, medium: 27, high: 24, "very-high": 20 };
 const KS_PROFILE: Record<ProresProfile, string> = { proxy: "0", lt: "1", standard: "2", hq: "3", "4444": "4" };
 
 /** Output arguments for one encoder (everything after the inputs except the file name). */
@@ -62,6 +71,15 @@ export function encoderArgs(e: Encoder, quality: QualityLevel, prores: ProresPro
       return ["-c:v", e.name, "-profile:v", KS_PROFILE[prores], "-vendor", "apl0", "-pix_fmt", proresPix];
     case "hevc_videotoolbox":
       return ["-c:v", e.name, "-q:v", String(VT_QUALITY[quality]), "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
+    case "hevc_nvenc":
+      return ["-c:v", e.name, "-preset", "p4", "-rc", "vbr", "-cq", String(GPU_QP[quality]), "-b:v", "0", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
+    case "hevc_qsv":
+      // Quick Sync takes NV12 rather than planar yuv420p.
+      return ["-c:v", e.name, "-preset", "medium", "-global_quality", String(GPU_QP[quality]), "-tag:v", "hvc1", "-pix_fmt", "nv12"];
+    case "hevc_amf": {
+      const qp = String(GPU_QP[quality]);
+      return ["-c:v", e.name, "-quality", "balanced", "-rc", "cqp", "-qp_i", qp, "-qp_p", qp, "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
+    }
     case "libx265":
       return ["-c:v", e.name, "-preset", "fast", "-crf", String(X265_CRF[quality]), "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
     case "h264_videotoolbox":
