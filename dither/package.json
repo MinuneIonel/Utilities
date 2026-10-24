@@ -12,6 +12,7 @@
     "plugins": "node --experimental-strip-types plugins/generate.ts && npm run build:photoshop"
   },
   "devDependencies": {
+    "@webgpu/types": "^0.1.74",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
   }

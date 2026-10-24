@@ -153,7 +153,7 @@ function bayer(n: number): Float32Array {
 }
 
 const bayerCache = new Map<number, Float32Array>();
-function bayerMap(n: number): Float32Array {
+export function bayerMap(n: number): Float32Array {
   let m = bayerCache.get(n);
   if (!m) { m = bayer(n); bayerCache.set(n, m); }
   return m;
@@ -237,8 +237,13 @@ function spotCdf(kind: string, spot: (a: number, b: number) => number): Float32A
   return cdf;
 }
 
+/** The rank table for a halftone screen (the GPU renderer reads it as a buffer). */
+export function halftoneCdf(kind: string): Float32Array {
+  return spotCdf(kind, SPOTS[kind] ?? SPOTS["halftone-dot"]);
+}
+
 /** Spread to apply around each pixel; roughly the gap between neighbouring palette levels. */
-function autoSpread(matcher: PaletteMatcher): number {
+export function autoSpread(matcher: PaletteMatcher): number {
   const ls = matcher.colors.map(([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b);
   const range = Math.max(32, Math.max(...ls) - Math.min(...ls));
   return range / Math.max(1, Math.min(matcher.colors.length - 1, 4));

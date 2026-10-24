@@ -1,5 +1,6 @@
 import type { ImageFormat, ImageJob, Resize, Rotation } from "../../../media/src/engine/types";
 import type { ImageValue, NodeDef } from "../runtime/types";
+import { gpu } from "./gpu";
 
 /** Media Lab's image engine (the jsquash codecs), loaded on first use. */
 const engine = () => import("../../../media/src/engine/image");
@@ -111,7 +112,17 @@ export const imageTransform: NodeDef = {
         if (j.resize.height) j.resize.height *= k;
       }
     }
-    const out = await (await engine()).transformImage(src, j);
+    // Media Lab's Lanczos filter on the GPU when there is one; the wasm resizer otherwise.
+    const g = await gpu();
+    const out = await (await engine()).transformImage(src, j, async (img, w, h) => {
+      if (!g?.lanczos.fits(img.width, img.height, w, h)) return undefined;
+      try {
+        return { width: w, height: h, data: await g.lanczos.resize(img.data, img.width, img.height, w, h) };
+      } catch (e) {
+        console.warn("GPU resize failed, using the CPU:", e);
+        return undefined;
+      }
+    });
     return { image: { kind: "image", width: out.width, height: out.height, data: out.data, scale: k } };
   },
 };

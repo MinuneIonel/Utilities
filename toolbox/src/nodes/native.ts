@@ -16,10 +16,24 @@ export interface ToolOptions {
   signal?: AbortSignal;
 }
 
+/** A job reading its input from stdin (raw video frames). */
+export interface ToolStream {
+  /** Resolves once the process has taken the bytes; rejects if it stopped reading. */
+  write(bytes: Uint8Array): Promise<void>;
+  /** Closes stdin, so the process finishes. */
+  end(): void;
+  /** The process's result, once it exits. */
+  done: Promise<ToolResult>;
+}
+
 export interface NativeTools {
   ffmpeg: boolean;
   ytdlp: boolean;
+  /** ffmpeg's encoders and hardware decoders (h264_videotoolbox, videotoolbox, …). */
+  encoders: ReadonlySet<string>;
+  hwaccels: ReadonlySet<string>;
   run(tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts?: ToolOptions): Promise<ToolResult>;
+  open(tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts?: ToolOptions): ToolStream;
 }
 
 let tools: NativeTools | undefined;

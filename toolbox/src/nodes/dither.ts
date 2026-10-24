@@ -1,6 +1,7 @@
 import { parseRecipe, render, type Recipe } from "../../../dither/src/engine/recipe";
 import { builtInRecipes } from "../../../dither/src/recipes";
 import type { ImageValue, NodeDef } from "../runtime/types";
+import { preferGpu } from "./gpu";
 import { scaleImage } from "./image";
 
 /** Same cap as Dither Lab uses for still images. */
@@ -37,10 +38,20 @@ export const ditherRecipe: NodeDef = {
     const s = Math.min(1, MAX_WORK / Math.max(w, h));
     w = Math.max(1, Math.round(w * s));
     h = Math.max(1, Math.round(h * s));
-    const work = scaleImage(src, w, h, true);
-    const out = render(work.data, w, h, recipe);
-    const image: ImageValue = { kind: "image", width: w, height: h, data: out.rgba, scale: src.scale };
-    if (params.size === "pixels") return { image };
-    return { image: scaleImage(image, src.width, src.height, false) };
+    const big = params.size !== "pixels";
+    const image = await preferGpu<ImageValue>(
+      async (g) => {
+        if (!g.dither.fits(w, h, src.width, src.height)) return undefined;
+        const out = await g.dither.render(src.data, src.width, src.height, w, h, recipe, big ? { outWidth: src.width, outHeight: src.height } : {});
+        return { kind: "image", width: out.width, height: out.height, data: out.rgba, scale: src.scale };
+      },
+      () => {
+        const work = scaleImage(src, w, h, true);
+        const out = render(work.data, w, h, recipe);
+        return { kind: "image", width: w, height: h, data: out.rgba, scale: src.scale };
+      },
+    );
+    // The GPU draws the big pixels itself unless the recipe ended on the CPU.
+    return { image: big ? scaleImage(image, src.width, src.height, false) : image };
   },
 };

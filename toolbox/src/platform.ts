@@ -8,13 +8,25 @@ interface ToolboxBridge {
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
   reveal(path: string): Promise<void>;
   onMenu(handler: (command: string) => void): void;
-  toolsInfo(): Promise<{ ffmpeg: boolean; ytdlp: boolean }>;
+  toolsInfo(): Promise<ToolsInfo>;
   runTool(id: string, tool: NativeTool, args: string[], files: Record<string, Uint8Array>): Promise<ToolResult>;
+  /** Like runTool, but the process reads stdin from writeTool until endTool. */
+  openTool(id: string, tool: NativeTool, args: string[], files: Record<string, Uint8Array>): Promise<ToolResult>;
+  writeTool(id: string, bytes: Uint8Array): Promise<void>;
+  endTool(id: string): Promise<void>;
   cancelTool(id: string): Promise<void>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
 }
 
 export type NativeTool = "ffmpeg" | "yt-dlp";
+
+export interface ToolsInfo {
+  ffmpeg: boolean;
+  ytdlp: boolean;
+  /** ffmpeg's encoders and hardware decoders, e.g. prores_videotoolbox and videotoolbox. */
+  encoders?: string[];
+  hwaccels?: string[];
+}
 
 export interface ToolResult {
   code: number;

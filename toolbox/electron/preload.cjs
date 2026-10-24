@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("toolbox", {
   onMenu: (handler) => ipcRenderer.on("menu", (_e, command) => handler(command)),
   toolsInfo: () => ipcRenderer.invoke("tools-info"),
   runTool: (id, tool, args, files) => ipcRenderer.invoke("tool-run", id, tool, args, files),
+  openTool: (id, tool, args, files) => ipcRenderer.invoke("tool-open", id, tool, args, files),
+  writeTool: (id, bytes) => ipcRenderer.invoke("tool-write", id, bytes),
+  endTool: (id) => ipcRenderer.invoke("tool-end", id),
   cancelTool: (id) => ipcRenderer.invoke("tool-cancel", id),
   onToolProgress: (handler) => ipcRenderer.on("tool-progress", (_e, id, fraction, label) => handler(id, fraction, label)),
 });

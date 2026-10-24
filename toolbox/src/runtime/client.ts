@@ -89,6 +89,26 @@ export class RuntimeClient {
         .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
       return;
     }
+    if (msg.type === "tool-open") {
+      const { callId } = msg;
+      bridge
+        ?.openTool(callId, msg.tool, msg.args, msg.files)
+        .then((result) => this.send({ type: "tool-result", callId, result }))
+        .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
+      return;
+    }
+    if (msg.type === "tool-write") {
+      const { callId, writeId } = msg;
+      bridge
+        ?.writeTool(callId, msg.bytes)
+        .then(() => this.send({ type: "tool-written", writeId }))
+        .catch((e: Error) => this.send({ type: "tool-written", writeId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
+      return;
+    }
+    if (msg.type === "tool-end") {
+      void bridge?.endTool(msg.callId);
+      return;
+    }
     if (msg.type === "tool-cancel") {
       void bridge?.cancelTool(msg.callId);
       return;

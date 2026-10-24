@@ -17,12 +17,17 @@ export const IMAGE_FORMATS: Record<ImageFormat, { label: string; mime: string; e
   png: { label: "PNG (oxipng)", mime: "image/png", ext: "png", lossy: false, alpha: true },
 };
 
+/** Resizes to exactly w × h; a host can pass its own (the GPU one in gpu-resize.ts) for the Lanczos step. */
+export type Resizer = (img: RGBAImage, width: number, height: number) => Promise<RGBAImage | undefined>;
+
 /** Crops, orients and resizes. Exposed separately so a pipeline can reuse it without encoding. */
-export async function transformImage(src: RGBAImage, job: ImageJob): Promise<RGBAImage> {
+export async function transformImage(src: RGBAImage, job: ImageJob, resizer?: Resizer): Promise<RGBAImage> {
   const g = planGeometry(src.width, src.height, job);
   let img = cropRGBA(src, g.crop);
   img = orientRGBA(img, g.rotate, g.flipH, g.flipV);
   if (img.width !== g.width || img.height !== g.height) {
+    const fast = await resizer?.(img, g.width, g.height);
+    if (fast) return fast;
     const out = await resizeImage(img as ImageData, {
       width: g.width,
       height: g.height,

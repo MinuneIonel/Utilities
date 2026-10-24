@@ -15,7 +15,8 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "types": [
-      "vite/client"
+      "vite/client",
+      "@webgpu/types"
     ]
   },
   "include": [

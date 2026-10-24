@@ -28,7 +28,8 @@ import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoC
 import type { FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
-import { lastError, nativeTools } from "./native";
+import { encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile } from "./ffmpeg-video";
+import { lastError, nativeTools, type NativeTools, type ToolStream } from "./native";
 import { CODEC_LABEL, frameImage } from "./video";
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -128,7 +129,8 @@ function readableCopy(blob: Blob, ctx: RunContext): Promise<Blob> {
       ctx.progress?.(-1, "Converting with ffmpeg");
       const r = await tools.run(
         "ffmpeg",
-        ["-hide_banner", "-y", "-i", inName, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "out.mp4"],
+        // VideoToolbox decodes ProRes and the like in hardware; H.264 encodes faster in software (libx264) on Apple Silicon.
+        ["-hide_banner", "-y", ...(tools.hwaccels.has("videotoolbox") ? ["-hwaccel", "videotoolbox"] : []), "-i", inName, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "out.mp4"],
         { [inName]: new Uint8Array(await blob.arrayBuffer()) },
         { onProgress: (f) => ctx.progress?.(f, "Converting with ffmpeg") },
       );
@@ -358,6 +360,100 @@ async function encodeGif(v: VideoValue, fps: number, progress: ((f: number, l?: 
   return gif.bytes();
 }
 
+/** An encoder that couldn't start or stopped with an error: the next one in line gets a go. */
+class EncoderFailed extends Error {}
+
+interface NativeJob {
+  codec: NativeCodec;
+  container: Exclude<VideoContainer, "gif">;
+  level: QualityLevel;
+  prores: ProresProfile;
+  fps: number;
+  audio: boolean;
+}
+
+const extOf = (b: Blob, d: string) => ((b as File).name?.split(".").pop() ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase() || d;
+
+/** Native ffmpeg reads the file itself: no decoding in the window, and VideoToolbox decodes when it can. */
+async function nativeFromFile(tools: NativeTools, origin: Blob, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+  const inName = `in.${extOf(origin, "mp4")}`;
+  const out = `out.${VIDEO_CONTAINERS[job.container].ext}`;
+  const label = `Encoding with ${e.name}`;
+  ctx.progress?.(-1, label);
+  const r = await tools.run(
+    "ffmpeg",
+    fileEncodeArgs(inName, tools.hwaccels, e, job.codec, job.container, job.level, job.prores, job.fps, job.audio, out),
+    { [inName]: new Uint8Array(await origin.arrayBuffer()) },
+    { onProgress: (f) => ctx.progress?.(f, label), signal: ctx.signal },
+  );
+  if (ctx.signal?.aborted) throw new Error("Cancelled");
+  const bytes = r.files[out];
+  if (r.code !== 0 || !bytes) throw new EncoderFailed(lastError(r.log));
+  return bytes;
+}
+
+/** Frames after image nodes go to native ffmpeg as raw RGBA on its stdin. */
+async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+  const out = `out.${VIDEO_CONTAINERS[job.container].ext}`;
+  const rate = job.fps > 0 ? job.fps : v.fps > 0 ? v.fps : 30;
+  const files: Record<string, Uint8Array> = {};
+  let audioName: string | undefined;
+  if (job.audio && v.audioSource) {
+    audioName = `sound.${extOf(v.audioSource, "mp4")}`;
+    files[audioName] = new Uint8Array(await v.audioSource.arrayBuffer());
+  }
+  let stream: ToolStream | undefined;
+  let size: { w: number; h: number } | undefined;
+  // One frame in flight while the next is made, so producing and encoding overlap.
+  let pending: Promise<void> = Promise.resolve();
+  let stopped = false;
+  let n = 0;
+  for await (const f of paced(v.frames(ctx.signal), rate)) {
+    if (ctx.signal?.aborted) throw new Error("Cancelled");
+    const img = frameImage(f.value);
+    if (!stream || !size) {
+      size = { w: Math.max(2, img.width - (img.width % 2)), h: Math.max(2, img.height - (img.height % 2)) };
+      stream = tools.open("ffmpeg", rawEncodeArgs({ width: size.w, height: size.h, fps: rate }, e, job.codec, job.container, job.level, job.prores, audioName, out), files, { signal: ctx.signal });
+      stream.done.catch(() => undefined);
+    }
+    const data = evenFrame(img, size.w, size.h);
+    try {
+      await pending;
+    } catch {
+      stopped = true; // ffmpeg quit; its log says why
+      break;
+    }
+    pending = stream.write(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    n++;
+    if (v.duration > 0) ctx.progress?.(Math.min(0.99, f.timestamp / v.duration), `${e.name}, frame ${n}`);
+    else ctx.progress?.(-1, `Recording ${f.timestamp.toFixed(1)} s`);
+  }
+  if (!stream) throw new Error("The video has no frames");
+  if (!stopped) await pending.catch(() => undefined);
+  stream.end();
+  const r = await stream.done;
+  if (ctx.signal?.aborted) throw new Error("Cancelled");
+  const bytes = r.files[out];
+  if (r.code !== 0 || !bytes) throw new EncoderFailed(lastError(r.log));
+  return bytes;
+}
+
+/** Tries each encoder for the codec in turn: hardware first where it's faster, software if that fails. */
+async function encodeNative(tools: NativeTools, v: VideoValue, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+  const chain = encodersFor(job.codec, tools.encoders);
+  if (!chain.length) throw new Error(`This ffmpeg has no ${job.codec === "prores" ? "ProRes" : CODEC_LABEL[job.codec]} encoder`);
+  let error = "";
+  for (const e of chain) {
+    try {
+      return v.origin && v.of === "image" ? await nativeFromFile(tools, v.origin, e, job, ctx) : await nativeFromFrames(tools, v, e, job, ctx);
+    } catch (err) {
+      if (!(err instanceof EncoderFailed)) throw err;
+      error = err.message;
+    }
+  }
+  throw new Error(`ffmpeg couldn't encode this video: ${error}`);
+}
+
 /** Encode video's Render: Media Lab's converter for untouched files, frame streaming otherwise. */
 export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext): Promise<Record<string, Value>> {
   const container = (String(params.container) in VIDEO_CONTAINERS ? params.container : "mp4") as VideoContainer;
@@ -365,9 +461,27 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
   const base = clean(params.name, "video");
   const fps = num(params.fps, 0);
   const level = String(params.quality || "high") as QualityLevel;
-  const choice = (String(params.codec || "auto") in CODEC_LABEL ? params.codec || "auto" : "auto") as VideoCodecChoice;
+  const picked = String(params.codec || "auto");
   const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, bytes } });
   if (container === "gif") return file(await encodeGif(v, fps, ctx.progress, ctx.signal));
+
+  // Native ffmpeg takes ProRes (browsers can't write it), and HEVC where VideoToolbox has it or WebCodecs can't.
+  const tools = nativeTools();
+  const nativeHevc =
+    picked === "hevc" &&
+    !!tools?.ffmpeg &&
+    (tools.encoders.has("hevc_videotoolbox") ||
+      (tools.encoders.has("libx265") && !(await getFirstEncodableVideoCodec(["hevc"], { width: v.width - (v.width % 2), height: v.height - (v.height % 2) }))));
+  if (picked === "prores" || nativeHevc) {
+    if (picked === "prores") {
+      if (container !== "mov" && container !== "mkv") throw new Error("ProRes goes in a MOV (or MKV) file. Pick MOV as the format.");
+      if (!tools?.ffmpeg) throw new Error("ProRes needs the desktop app, which encodes it with ffmpeg");
+    }
+    const prores = String(params.prores || "hq") as ProresProfile;
+    const job: NativeJob = { codec: picked as NativeCodec, container, level, prores, fps, audio: params.audio !== false };
+    return file(await encodeNative(tools!, v, job, ctx));
+  }
+  const choice = (picked in CODEC_LABEL ? picked : "auto") as VideoCodecChoice;
 
   codecsFor(formatFor(container), container, choice); // fails early on e.g. VP8 in MP4
   // Untouched video: Media Lab's converter copies or transcodes without a round trip through pixels.

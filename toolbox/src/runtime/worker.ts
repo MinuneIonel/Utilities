@@ -3,7 +3,7 @@
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { audioCodec } from "../nodes/audio";
-import { setNativeTools, type NativeTool, type ToolResult } from "../nodes/native";
+import { setNativeTools, type NativeTool, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
@@ -17,8 +17,9 @@ export type ToWorker =
   /** Ends every webcam recording, so Render can finish the files. */
   | { type: "cam-stop" }
   /** Which native tools the desktop app has (none in a browser). */
-  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean }
+  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; encoders?: string[]; hwaccels?: string[] }
   | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
+  | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string };
 
 export interface NodeUpdate {
@@ -54,6 +55,9 @@ export interface ProgressUpdate {
 /** Asks the window to run a native tool through the desktop app. */
 export type ToolRequest =
   | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
+  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
+  | { type: "tool-write"; callId: string; writeId: number; bytes: Uint8Array }
+  | { type: "tool-end"; callId: string }
   | { type: "tool-cancel"; callId: string };
 
 export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
@@ -107,6 +111,17 @@ const cameras = new Map<string, Feed>();
 
 const toolCalls = new Map<string, { resolve(r: ToolResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
 let toolCallN = 0;
+const toolWrites = new Map<number, { resolve(): void; reject(e: Error): void }>();
+let toolWriteN = 0;
+
+/** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
+function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
+  const callId = `t${++toolCallN}`;
+  toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
+  opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
+  post({ type: kind, callId, tool, args, files });
+  return callId;
+}
 
 function bitmapToImage(bmp: ImageBitmap): ImageValue {
   const c = new OffscreenCanvas(bmp.width, bmp.height);
@@ -145,13 +160,24 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         ? {
             ffmpeg,
             ytdlp,
-            run: (tool, args, files, opts = {}) =>
-              new Promise((resolve, reject) => {
-                const callId = `t${++toolCallN}`;
-                toolCalls.set(callId, { resolve, reject, onProgress: opts.onProgress });
-                opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
-                post({ type: "tool-run", callId, tool, args, files });
-              }),
+            encoders: new Set(msg.encoders ?? []),
+            hwaccels: new Set(msg.hwaccels ?? []),
+            run: (tool, args, files, opts = {}) => new Promise((resolve, reject) => void callTool("tool-run", tool, args, files, opts, { resolve, reject })),
+            open(tool, args, files, opts = {}): ToolStream {
+              let callId = "";
+              const done = new Promise<ToolResult>((resolve, reject) => (callId = callTool("tool-open", tool, args, files, opts, { resolve, reject })));
+              return {
+                done,
+                // Each frame is copied on its way to the main process, so the caller's buffer stays usable.
+                write: (bytes) =>
+                  new Promise<void>((resolve, reject) => {
+                    const writeId = ++toolWriteN;
+                    toolWrites.set(writeId, { resolve, reject });
+                    post({ type: "tool-write", callId, writeId, bytes });
+                  }),
+                end: () => post({ type: "tool-end", callId }),
+              };
+            },
           }
         : undefined,
     );
@@ -160,6 +186,11 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     toolCalls.delete(msg.callId);
     if (msg.result) call?.resolve(msg.result);
     else call?.reject(new Error(msg.error ?? "The tool failed"));
+  } else if (msg.type === "tool-written") {
+    const w = toolWrites.get(msg.writeId);
+    toolWrites.delete(msg.writeId);
+    if (msg.error) w?.reject(new Error(msg.error));
+    else w?.resolve();
   } else if (msg.type === "tool-progress") {
     toolCalls.get(msg.callId)?.onProgress?.(msg.fraction, msg.label);
   } else {

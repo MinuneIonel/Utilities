@@ -4,6 +4,7 @@
 import { VIDEO_CONTAINERS, type VideoCodecChoice, type VideoContainer } from "../../../media/src/engine/types";
 import type { AudioValue, ImageValue, NodeDef, Value, VideoValue } from "../runtime/types";
 import { gridToImage } from "./ascii";
+import { PRORES_LABEL, type ProresProfile } from "./ffmpeg-video";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
 
@@ -94,7 +95,7 @@ export const videoEncode: NodeDef = {
   type: "video.encode",
   title: "Encode video",
   category: "video",
-  description: "Writes a video (MP4, WebM, MOV, MKV) or an animated GIF on Render, streaming frame by frame. Feed it to Save file.",
+  description: "Writes a video (MP4, WebM, MOV, MKV) or an animated GIF on Render, streaming frame by frame. ProRes and HEVC use the Mac's hardware encoders in the desktop app. Feed it to Save file.",
   inputs: [{ key: "video", label: "Video", type: "video" }],
   outputs: [{ key: "file", label: "File", type: "file" }],
   params: [
@@ -108,7 +109,16 @@ export const videoEncode: NodeDef = {
       key: "codec",
       label: "Codec",
       kind: "select",
-      options: (Object.keys(CODEC_LABEL) as VideoCodecChoice[]).map((c) => ({ value: c, label: CODEC_LABEL[c] })),
+      options: [
+        ...(Object.keys(CODEC_LABEL) as VideoCodecChoice[]).map((c) => ({ value: c, label: CODEC_LABEL[c] })),
+        { value: "prores", label: "ProRes (MOV, desktop app)" },
+      ],
+    },
+    {
+      key: "prores",
+      label: "ProRes flavour",
+      kind: "select",
+      options: (Object.keys(PRORES_LABEL) as ProresProfile[]).map((p) => ({ value: p, label: PRORES_LABEL[p] })),
     },
     {
       key: "quality",
@@ -126,8 +136,13 @@ export const videoEncode: NodeDef = {
     { key: "audio", label: "Keep sound", kind: "toggle" },
     { key: "name", label: "File name", kind: "text" },
   ],
-  defaults: () => ({ container: "mp4", codec: "auto", quality: "high", fps: 0, audio: true, name: "video" }),
-  visible: (key, p) => !(key === "quality" || key === "audio" || key === "codec") || p.container !== "gif",
+  defaults: () => ({ container: "mp4", codec: "auto", prores: "hq", quality: "high", fps: 0, audio: true, name: "video" }),
+  visible: (key, p) => {
+    if (key === "prores") return p.codec === "prores" && p.container !== "gif";
+    // ProRes flavours are fixed bitrates, so Quality doesn't apply.
+    if (key === "quality") return p.container !== "gif" && p.codec !== "prores";
+    return !(key === "audio" || key === "codec") || p.container !== "gif";
+  },
   kind: "job",
   async run(inputs, params, ctx) {
     return (await videoCodec()).encodeVideo(inputs.video as VideoValue, params, ctx);

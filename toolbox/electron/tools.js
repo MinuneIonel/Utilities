@@ -80,7 +80,33 @@ function progressParser(tool, report) {
   };
 }
 
+/** What this ffmpeg can do: its encoders and hardware decoders (VideoToolbox on a Mac). */
+let caps = null;
+function ffmpegCaps() {
+  caps ??= (async () => {
+    if (!ffmpegPath) return { encoders: [], hwaccels: [] };
+    const list = (args) =>
+      new Promise((resolve) => {
+        let out = "";
+        const p = spawn(ffmpegPath, ["-hide_banner", ...args]);
+        p.stdout.on("data", (d) => (out += d));
+        p.on("error", () => resolve(""));
+        p.on("close", () => resolve(out));
+      });
+    const [enc, hw] = await Promise.all([list(["-encoders"]), list(["-hwaccels"])]);
+    // Encoder lines look like " V....D libx264  libx264 H.264 / AVC ..."; hwaccels are one per line after a header.
+    // TOOLBOX_HIDE_ENCODERS (comma-separated) lets the encode check compare paths, e.g. WebCodecs HEVC against VideoToolbox.
+    const hidden = new Set((process.env.TOOLBOX_HIDE_ENCODERS ?? "").split(","));
+    const encoders = [...enc.matchAll(/^\s*[VAS][A-Z.]{5}\s+(\S+)/gm)].map((m) => m[1]).filter((e) => !hidden.has(e));
+    const hwaccels = hw.split("\n").slice(1).map((l) => l.trim()).filter(Boolean);
+    return { encoders, hwaccels };
+  })();
+  return caps;
+}
+
 const jobs = new Map();
+/** stdin of jobs that take their input as a stream (raw video frames), once their process has started. */
+const streams = new Map();
 /** Jobs cancelled before their process started (while yt-dlp downloads, or files are written). */
 const cancelled = new Set();
 
@@ -88,7 +114,15 @@ const cancelled = new Set();
  * Runs `tool` with `args` in a fresh temp folder holding `files`, and returns
  * the exit code, every new file it wrote, and the end of its log.
  */
-async function run(sender, id, tool, args, files) {
+async function run(sender, id, tool, args, files, stdin = false) {
+  let stream;
+  if (stdin) {
+    // Registered before the first await, so writes sent right after the open find it.
+    stream = {};
+    stream.ready = new Promise((resolve, reject) => Object.assign(stream, { resolve, reject }));
+    stream.ready.catch(() => undefined);
+    streams.set(id, stream);
+  }
   const report = (fraction, label) => {
     if (!sender.isDestroyed()) sender.send("tool-progress", id, fraction, label);
   };
@@ -98,7 +132,10 @@ async function run(sender, id, tool, args, files) {
     bin = await getYtdlp(report);
     if (ffmpegPath) args = ["--ffmpeg-location", ffmpegPath, ...args];
   }
-  if (!bin) throw new Error(`${tool} isn't available`);
+  if (!bin) {
+    stream?.reject(new Error(`${tool} isn't available`));
+    throw new Error(`${tool} isn't available`);
+  }
   const dir = await mkdtemp(path.join(os.tmpdir(), "toolbox-"));
   try {
     for (const [name, bytes] of Object.entries(files ?? {})) await writeFile(path.join(dir, path.basename(name)), bytes);
@@ -107,8 +144,13 @@ async function run(sender, id, tool, args, files) {
     const parse = progressParser(tool, report);
     if (cancelled.has(id)) throw new Error("Cancelled");
     const code = await new Promise((resolve, reject) => {
-      const p = spawn(bin, args, { cwd: dir });
+      const p = spawn(bin, args, { cwd: dir, stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
       jobs.set(id, p);
+      if (stream) {
+        // ffmpeg closing its input early (a failed encoder) shows up as EPIPE on the next write.
+        p.stdin.on("error", () => undefined);
+        stream.resolve(p.stdin);
+      }
       const onData = (d) => {
         const s = d.toString();
         log = (log + s).slice(-8000);
@@ -116,7 +158,10 @@ async function run(sender, id, tool, args, files) {
       };
       p.stdout.on("data", onData);
       p.stderr.on("data", onData);
-      p.on("error", reject);
+      p.on("error", (e) => {
+        stream?.reject(e);
+        reject(e);
+      });
       p.on("close", (c) => resolve(c ?? -1));
     });
     const out = {};
@@ -125,16 +170,34 @@ async function run(sender, id, tool, args, files) {
       if (!before.has(name) && !/\.(part|ytdl|temp)$/.test(name)) out[name] = await readFile(path.join(dir, name));
     }
     return { code, files: out, log };
+  } catch (e) {
+    stream?.reject(e);
+    throw e;
   } finally {
     jobs.delete(id);
+    streams.delete(id);
     cancelled.delete(id);
     await rm(dir, { recursive: true, force: true });
   }
 }
 
+/** Writes one chunk to a streaming job's stdin, resolving once the process has taken it. */
+async function write(id, bytes) {
+  const stdin = await streams.get(id)?.ready;
+  if (!stdin || stdin.destroyed || !stdin.writable) throw new Error("ffmpeg stopped reading");
+  await new Promise((resolve, reject) => stdin.write(bytes, (e) => (e ? reject(e) : resolve())));
+}
+
 export function registerTools() {
-  ipcMain.handle("tools-info", () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET }));
+  ipcMain.handle("tools-info", async () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET, ...(await ffmpegCaps()) }));
   ipcMain.handle("tool-run", (e, id, tool, args, files) => run(e.sender, id, tool, args, files));
+  // A job fed through stdin: tool-open starts it and resolves when it exits; tool-write and tool-end feed it.
+  ipcMain.handle("tool-open", (e, id, tool, args, files) => run(e.sender, id, tool, args, files, true));
+  ipcMain.handle("tool-write", (_e, id, bytes) => write(id, bytes));
+  ipcMain.handle("tool-end", async (_e, id) => {
+    const stdin = await streams.get(id)?.ready.catch(() => undefined);
+    stdin?.end();
+  });
   ipcMain.handle("tool-cancel", (_e, id) => {
     const p = jobs.get(id);
     if (p) p.kill("SIGKILL");

@@ -54,8 +54,20 @@ export function render(src: Uint8ClampedArray, w: number, h: number, recipe: Rec
     rgb[i * 3 + 1] = src[i * 4 + 1];
     rgb[i * 3 + 2] = src[i * 4 + 2];
   }
+  const out = renderFrom(rgb, src, w, h, recipe.steps, frame);
+  return { ...out, ms: now() - t0 };
+}
+
+/**
+ * Runs `steps` over float RGB that earlier steps already worked on (the GPU
+ * renderer hands over here when it reaches a step it can't run), then packs
+ * the result with the source's alpha.
+ */
+export function renderFrom(rgb: Float32Array, src: Uint8ClampedArray, w: number, h: number, steps: Step[], frame = 0): RenderResult {
+  const t0 = now();
+  const n = w * h;
   const ctx: StepContext = { w, h, frame, source: src };
-  for (const step of recipe.steps) {
+  for (const step of steps) {
     if (!step.enabled) continue;
     const def = stepDef(step.type);
     if (!def) continue;

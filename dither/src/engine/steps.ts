@@ -199,7 +199,7 @@ export const STEP_DEFS: StepDef[] = [
 
 // Matchers hold a lookup cache, so reuse them between frames.
 const matcherCache = new Map<string, PaletteMatcher>();
-function matcherFor(palette: string[], mode: DistanceMode): PaletteMatcher {
+export function matcherFor(palette: string[], mode: DistanceMode): PaletteMatcher {
   const key = mode + ":" + palette.join(",");
   let m = matcherCache.get(key);
   if (!m) {

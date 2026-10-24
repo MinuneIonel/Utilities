@@ -88,15 +88,20 @@ export function posterize(rgb: Float32Array, levels: number): void {
   }
 }
 
-/** Film-style grain. Seeded so that still images stay stable between renders. */
-export function grain(rgb: Float32Array, amount: number, mono: boolean, seed: number): void {
+/** The grain's xorshift sequence, in -0.5..0.5. Shared with the GPU renderer so both add the same noise. */
+export function grainRandom(seed: number): () => number {
   let s = (seed * 2654435761) >>> 0 || 1;
-  const rand = () => {
+  return () => {
     s ^= s << 13; s >>>= 0;
     s ^= s >>> 17;
     s ^= s << 5; s >>>= 0;
     return s / 4294967296 - 0.5;
   };
+}
+
+/** Film-style grain. Seeded so that still images stay stable between renders. */
+export function grain(rgb: Float32Array, amount: number, mono: boolean, seed: number): void {
+  const rand = grainRandom(seed);
   const a = amount * 255;
   for (let i = 0; i < rgb.length; i += 3) {
     if (mono) {
