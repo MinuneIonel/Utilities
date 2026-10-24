@@ -170,8 +170,19 @@ export const AUDIO_CONVERTERS: Converter[] = [
   },
 ];
 
-/** A waveform picture of the sound, for node cards and the backdrop. */
-export async function waveform(a: AudioValue, width = 640, height = 160): Promise<ImageValue | undefined> {
+const waveforms = new WeakMap<Uint8Array, Promise<ImageValue | undefined>>();
+
+/** A waveform picture of the sound, for node cards and the backdrop. Drawn once per audio. */
+export function waveform(a: AudioValue): Promise<ImageValue | undefined> {
+  let p = waveforms.get(a.bytes);
+  if (!p) {
+    p = drawWaveform(a);
+    waveforms.set(a.bytes, p);
+  }
+  return p;
+}
+
+async function drawWaveform(a: AudioValue, width = 640, height = 160): Promise<ImageValue | undefined> {
   const input = new Input({ source: new BufferSource(a.bytes), formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryAudioTrack();

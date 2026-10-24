@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ResultCache, evaluate, topoSort } from "../src/runtime/evaluate.ts";
+import { ResultCache, evaluate, hash, topoSort } from "../src/runtime/evaluate.ts";
 import type { Graph, NodeDef, RunContext, Value } from "../src/runtime/types.ts";
 
 // Text nodes keep the tests free of canvases: "src" emits params.text, "upper" upper-cases, "save" is a job.
@@ -164,4 +164,35 @@ test("a wire between different port types goes through a converter", async () =>
   assert.equal(textOf(r, "b"), "got 3");
   await evaluate(g, { registry: reg, ctx: renderCtx, cache, converters });
   assert.equal(conversions, 1, "a cache hit skips the conversion");
+});
+
+test("live nodes and everything after them stay out of the cache", async () => {
+  let frame = 0;
+  const liveDefs: NodeDef[] = [
+    ...defs,
+    {
+      type: "cam", title: "Camera", category: "input", description: "", inputs: [], params: [],
+      outputs: [{ key: "text", label: "Text", type: "text" }],
+      defaults: () => ({}), kind: "frame", live: true,
+      cacheKey: () => String(++frame),
+      async run() {
+        return { text: { kind: "text", text: `frame ${frame}` } };
+      },
+    },
+  ];
+  const g = chain("unused");
+  g.nodes = g.nodes.map((n) => (n.id === "a" ? { ...n, type: "cam" } : n));
+  g.nodes.push({ id: "s", type: "src", params: { text: "still" }, position: { x: 0, y: 0 } });
+  const cache = new ResultCache();
+  const reg = new Map(liveDefs.map((d) => [d.type, d]));
+  for (let i = 0; i < 5; i++) {
+    const r = await evaluate(g, { registry: reg, ctx: preview, cache });
+    assert.equal(textOf(r, "b"), `FRAME ${frame}`);
+  }
+  assert.equal(cache.size, 1, "only the node that isn't fed by the camera is cached");
+});
+
+test("cache keys are 64-bit", () => {
+  assert.match(hash("a"), /^[0-9a-f]{16}$/);
+  assert.notEqual(hash("ab"), hash("ba"));
 });
