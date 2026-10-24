@@ -33,6 +33,7 @@ The `.dmg` is unsigned: the first time, right-click Toolbox in Applications and 
 | `src/runtime/` | Graph types, evaluator + cache (DOM-free, tested in Node), the worker and its client |
 | `src/nodes/` | Node definitions, one file per engine: image, dither, ascii, media, video, audio, text, pdf, save |
 | `src/ui/` | React components: graph node card, inspector, Dither Lab's stack editor |
+| `build/` | App icon: `icon.svg` is the source, `icon.png` (1024 px) and `icon.icns` are rendered from it |
 
 Nodes: Image, Images, Video, Audio and PDF files, Webcam, Download (yt-dlp), Text; Resize / crop, Dither, ASCII, Draw ASCII, Encode image; Encode video (MP4, WebM, MOV, MKV, GIF); Extract audio, Convert audio; ASCII to text, Diacritics; Merge PDFs, Pick pages, Watermark / numbers, Protect, Compact, Images to PDF, Pages to images; Save image, Save file, Save text.
 

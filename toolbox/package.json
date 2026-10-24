@@ -40,7 +40,8 @@
     "appId": "dev.cojo.toolbox",
     "productName": "Toolbox",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**",
@@ -61,6 +62,7 @@
         }
       ],
       "category": "public.app-category.graphics-design",
+      "icon": "build/icon.icns",
       "identity": null,
       "extendInfo": {
         "NSCameraUsageDescription": "Webcam nodes use the camera to preview and record."
@@ -72,7 +74,8 @@
     "linux": {
       "target": [
         "dir"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "publish": null
   }
