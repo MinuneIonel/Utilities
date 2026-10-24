@@ -1,3 +1,4 @@
+import { bridge } from "../platform";
 import type { Graph } from "./types";
 import type { FromWorker, NodeUpdate, ProgressUpdate, ToWorker } from "./worker";
 import RuntimeWorker from "./worker?worker";
@@ -23,6 +24,11 @@ export class RuntimeClient {
     private onProgress: (p: ProgressUpdate) => void = () => {},
   ) {
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.handle(e.data);
+    // Native ffmpeg and yt-dlp, when running in the desktop app.
+    if (bridge) {
+      bridge.onToolProgress((callId, fraction, label) => this.send({ type: "tool-progress", callId, fraction, label }));
+      void bridge.toolsInfo().then((t) => this.send({ type: "tools", ...t }));
+    }
   }
 
   /** True while no preview is running, so a webcam can send its next frame. */
@@ -71,6 +77,18 @@ export class RuntimeClient {
   private handle(msg: FromWorker) {
     if (msg.type === "progress") {
       this.onProgress(msg);
+      return;
+    }
+    if (msg.type === "tool-run") {
+      const { callId } = msg;
+      bridge
+        ?.runTool(callId, msg.tool, msg.args, msg.files)
+        .then((result) => this.send({ type: "tool-result", callId, result }))
+        .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
+      return;
+    }
+    if (msg.type === "tool-cancel") {
+      void bridge?.cancelTool(msg.callId);
       return;
     }
     if (msg.type === "node") {

@@ -3,6 +3,7 @@
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { waveform } from "../nodes/audio";
+import { setNativeTools, type NativeTool, type ToolResult } from "../nodes/native";
 import { pdfThumbnail } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
@@ -14,7 +15,11 @@ export type ToWorker =
   /** A webcam frame. `t` is in seconds. */
   | { type: "cam-frame"; id: string; bitmap: ImageBitmap; t: number }
   /** Ends every webcam recording, so Render can finish the files. */
-  | { type: "cam-stop" };
+  | { type: "cam-stop" }
+  /** Which native tools the desktop app has (none in a browser). */
+  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean }
+  | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
+  | { type: "tool-progress"; callId: string; fraction: number; label?: string };
 
 export interface NodeUpdate {
   type: "node";
@@ -44,7 +49,12 @@ export interface ProgressUpdate {
   label?: string;
 }
 
-export type FromWorker = NodeUpdate | ProgressUpdate | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
+/** Asks the window to run a native tool through the desktop app. */
+export type ToolRequest =
+  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
+  | { type: "tool-cancel"; callId: string };
+
+export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
 
 /** The worker's end of a webcam: the newest frame, and recordings that stream frames as they arrive. */
 class Feed implements CameraFeed {
@@ -93,6 +103,9 @@ class Feed implements CameraFeed {
 
 const cameras = new Map<string, Feed>();
 
+const toolCalls = new Map<string, { resolve(r: ToolResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
+let toolCallN = 0;
+
 function bitmapToImage(bmp: ImageBitmap): ImageValue {
   const c = new OffscreenCanvas(bmp.width, bmp.height);
   const g = c.getContext("2d", { willReadFrequently: true })!;
@@ -123,6 +136,30 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     feed.push(bitmapToImage(msg.bitmap), msg.t);
   } else if (msg.type === "cam-stop") {
     for (const f of cameras.values()) f.stop();
+  } else if (msg.type === "tools") {
+    const { ffmpeg, ytdlp } = msg;
+    setNativeTools(
+      ffmpeg || ytdlp
+        ? {
+            ffmpeg,
+            ytdlp,
+            run: (tool, args, files, opts = {}) =>
+              new Promise((resolve, reject) => {
+                const callId = `t${++toolCallN}`;
+                toolCalls.set(callId, { resolve, reject, onProgress: opts.onProgress });
+                opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
+                post({ type: "tool-run", callId, tool, args, files });
+              }),
+          }
+        : undefined,
+    );
+  } else if (msg.type === "tool-result") {
+    const call = toolCalls.get(msg.callId);
+    toolCalls.delete(msg.callId);
+    if (msg.result) call?.resolve(msg.result);
+    else call?.reject(new Error(msg.error ?? "The tool failed"));
+  } else if (msg.type === "tool-progress") {
+    toolCalls.get(msg.callId)?.onProgress?.(msg.fraction, msg.label);
   } else {
     if (msg.mode === "preview") latestPreview = msg.reqId;
     else {

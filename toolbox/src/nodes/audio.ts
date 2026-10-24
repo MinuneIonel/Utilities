@@ -6,6 +6,7 @@ import wasmURL from "@ffmpeg/core/wasm?url";
 import { ALL_FORMATS, AudioSampleSink, BufferSource, Input } from "mediabunny";
 import { convertAudio, defaultSettings, FORMAT_LIST, FORMATS, isAudioFormat, type AudioSettings } from "../../../audio/src/engine";
 import type { AudioValue, Converter, FileValue, ImageValue, NodeDef } from "../runtime/types";
+import { NativeFfmpeg, nativeTools } from "./native";
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
@@ -119,6 +120,25 @@ export const audioConvert: NodeDef = {
       normalize: params.normalize === true,
       gainDb: num(params.gainDb, 0),
     };
+    const finish = async (out: { name: string; bytes: Uint8Array; mime: string }) => {
+      const name = params.name ? `${String(params.name).replace(/[\\/:*?"<>|]+/g, "-")}.${FORMATS[format].ext}` : out.name;
+      const audio: AudioValue = { kind: "audio", name, mime: out.mime, bytes: out.bytes, duration: await duration(out.bytes) };
+      return { audio };
+    };
+    const input = { name: a.name, bytes: a.bytes, duration: a.duration };
+
+    // The desktop app's native ffmpeg is several times faster and needs no 31 MB download.
+    const tools = nativeTools();
+    if (tools?.ffmpeg) {
+      const ff = new NativeFfmpeg(tools, { onProgress: (f) => ctx.progress?.(f, "Converting (ffmpeg)"), signal: ctx.signal });
+      try {
+        return await finish(await convertAudio(ff, input, settings));
+      } catch (e) {
+        if (ctx.signal?.aborted) throw new Error("Cancelled");
+        throw e;
+      }
+    }
+
     ctx.progress?.(-1, "Loading ffmpeg…");
     const ff = await getFfmpeg();
     const onProgress = ({ progress }: { progress: number }) => ctx.progress?.(Math.min(0.99, Math.max(0, progress)), "Converting");
@@ -126,10 +146,7 @@ export const audioConvert: NodeDef = {
     ff.on("progress", onProgress);
     ctx.signal?.addEventListener("abort", onAbort);
     try {
-      const out = await convertAudio(ff, { name: a.name, bytes: a.bytes, duration: a.duration }, settings);
-      const name = params.name ? `${String(params.name).replace(/[\\/:*?"<>|]+/g, "-")}.${FORMATS[format].ext}` : out.name;
-      const audio: AudioValue = { kind: "audio", name, mime: out.mime, bytes: out.bytes, duration: await duration(out.bytes) };
-      return { audio };
+      return await finish(await convertAudio(ff, input, settings));
     } catch (e) {
       if (ctx.signal?.aborted) throw new Error("Cancelled");
       throw e;

@@ -23,11 +23,12 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { probeVideo, processVideo, VIDEO_CONTAINERS, type VideoInfo } from "../../../media/src/engine/video";
-import type { QualityLevel, VideoContainer, VideoJob } from "../../../media/src/engine/types";
-import type { AudioValue, FrameItem, ImageValue, NodeDef, Value, VideoValue } from "../runtime/types";
+import type { QualityLevel, VideoCodecChoice, VideoContainer, VideoJob } from "../../../media/src/engine/types";
+import type { AudioValue, FrameItem, ImageValue, NodeDef, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { gridToImage } from "./ascii";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
+import { lastError, nativeTools } from "./native";
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const clean = (s: unknown, d: string) => String(s || d).replace(/[\\/:*?"<>|]+/g, "-");
@@ -110,26 +111,75 @@ export const videoInput: NodeDef = {
   async run(_inputs, params, ctx) {
     const blob = ctx.assets.get(String(params.assetId));
     if (!blob) throw new Error("Drop a video here");
-    const i = await info(blob);
-    if (i.reader !== "mediabunny") throw new Error(`Toolbox can't decode ${i.codec ?? "this video"} yet. Convert it in Media Lab first.`);
-    const t = (i.duration * Math.min(100, Math.max(0, num(params.at, 0)))) / 100;
-    const poster = await frameAt(blob, Math.min(t, Math.max(0, i.duration - 0.05)), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
-    const fps = await estimateFps(blob);
-    const video: VideoValue = {
-      kind: "video",
-      of: "image",
-      width: i.width,
-      height: i.height,
-      duration: i.duration,
-      fps,
-      poster,
-      origin: blob,
-      audioSource: i.hasAudio ? blob : undefined,
-      frames: (signal) => fileFrames(blob, signal),
-    };
-    return { video };
+    return { video: await videoFromBlob(blob, params, ctx) };
   },
 };
+
+/** Whether WebCodecs can decode this file's video here. */
+async function decodable(blob: Blob): Promise<boolean> {
+  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    return !!track && (await track.canDecode());
+  } catch {
+    return false;
+  } finally {
+    input.dispose?.();
+  }
+}
+
+const readable = new WeakMap<Blob, Promise<Blob>>();
+/**
+ * Files WebCodecs can't read (AVI, WMV, old codecs) are converted once to an
+ * H.264 MP4 with the desktop app's native ffmpeg.
+ */
+function readableCopy(blob: Blob, ctx: RunContext): Promise<Blob> {
+  let p = readable.get(blob);
+  if (!p) {
+    p = (async () => {
+      const tools = nativeTools();
+      if (!tools?.ffmpeg || (await decodable(blob))) return blob;
+      const name = (blob as File).name || "input.bin";
+      const ext = name.includes(".") ? name.split(".").pop()!.replace(/[^a-z0-9]/gi, "") : "bin";
+      const inName = `in.${ext || "bin"}`;
+      ctx.progress?.(-1, "Converting with ffmpeg");
+      const r = await tools.run(
+        "ffmpeg",
+        ["-hide_banner", "-y", "-i", inName, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "out.mp4"],
+        { [inName]: new Uint8Array(await blob.arrayBuffer()) },
+        { onProgress: (f) => ctx.progress?.(f, "Converting with ffmpeg") },
+      );
+      const out = r.files["out.mp4"];
+      if (r.code !== 0 || !out) throw new Error(`ffmpeg couldn't read this video: ${lastError(r.log)}`);
+      return new File([out as Uint8Array<ArrayBuffer>], name.replace(/\.[^.]+$/, "") + ".mp4", { type: "video/mp4" });
+    })();
+    readable.set(blob, p);
+    p.catch(() => readable.delete(blob));
+  }
+  return p;
+}
+
+/** A video value for a file: the frame at the playhead now, every frame on demand. */
+export async function videoFromBlob(source: Blob, params: Params, ctx: RunContext): Promise<VideoValue> {
+  const blob = await readableCopy(source, ctx);
+  const i = await info(blob);
+  if (i.reader !== "mediabunny") throw new Error(`Toolbox can't decode ${i.codec ?? "this video"} in a browser. Open it in the desktop app, which converts it with ffmpeg.`);
+  const t = (i.duration * Math.min(100, Math.max(0, num(params.at, 0)))) / 100;
+  const poster = await frameAt(blob, Math.min(t, Math.max(0, i.duration - 0.05)), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
+  const fps = await estimateFps(blob);
+  return {
+    kind: "video",
+    of: "image",
+    width: i.width,
+    height: i.height,
+    duration: i.duration,
+    fps,
+    poster,
+    origin: blob,
+    audioSource: i.hasAudio ? blob : undefined,
+    frames: (signal) => fileFrames(blob, signal),
+  };
+}
 
 const fpsCache = new WeakMap<Blob, Promise<number>>();
 function estimateFps(blob: Blob): Promise<number> {
@@ -242,9 +292,27 @@ async function* paced(frames: AsyncIterable<FrameItem>, fps: number): AsyncGener
   }
 }
 
+const CODEC_LABEL: Record<VideoCodecChoice, string> = {
+  auto: "Auto (best for the format)",
+  avc: "H.264",
+  hevc: "H.265 / HEVC",
+  vp9: "VP9",
+  av1: "AV1",
+  vp8: "VP8",
+};
+
+/** The codecs to try, in order: the chosen one, or the format's preferred list. */
+function codecsFor(format: OutputFormat, container: Exclude<VideoContainer, "gif">, choice: VideoCodecChoice): VideoCodec[] {
+  const supported = format.getSupportedVideoCodecs();
+  if (choice === "auto") return PREFERRED[container].filter((c) => supported.includes(c));
+  if (!supported.includes(choice)) throw new Error(`${VIDEO_CONTAINERS[container].label} can't hold ${CODEC_LABEL[choice]}. Pick another codec or format.`);
+  return [choice];
+}
+
 async function encodeStream(
   v: VideoValue,
   container: Exclude<VideoContainer, "gif">,
+  choice: VideoCodecChoice,
   level: QualityLevel,
   fps: number,
   keepAudio: boolean,
@@ -265,7 +333,7 @@ async function encodeStream(
       if (!video || !size) {
         // The first frame decides the size and codec.
         size = { w: Math.max(2, img.width - (img.width % 2)), h: Math.max(2, img.height - (img.height % 2)) };
-        const wanted = PREFERRED[container].filter((c) => format.getSupportedVideoCodecs().includes(c));
+        const wanted = codecsFor(format, container, choice);
         const c = await getFirstEncodableVideoCodec(wanted, { width: size.w, height: size.h });
         if (!c) throw new Error(`This system can't encode ${wanted.join("/")} at ${size.w}×${size.h}`);
         codec = c;
@@ -365,6 +433,12 @@ export const videoEncode: NodeDef = {
       options: (Object.keys(VIDEO_CONTAINERS) as VideoContainer[]).map((c) => ({ value: c, label: VIDEO_CONTAINERS[c].label })),
     },
     {
+      key: "codec",
+      label: "Codec",
+      kind: "select",
+      options: (Object.keys(CODEC_LABEL) as VideoCodecChoice[]).map((c) => ({ value: c, label: CODEC_LABEL[c] })),
+    },
+    {
       key: "quality",
       label: "Quality",
       kind: "select",
@@ -380,8 +454,8 @@ export const videoEncode: NodeDef = {
     { key: "audio", label: "Keep sound", kind: "toggle" },
     { key: "name", label: "File name", kind: "text" },
   ],
-  defaults: () => ({ container: "mp4", quality: "high", fps: 0, audio: true, name: "video" }),
-  visible: (key, p) => !(key === "quality" || key === "audio") || p.container !== "gif",
+  defaults: () => ({ container: "mp4", codec: "auto", quality: "high", fps: 0, audio: true, name: "video" }),
+  visible: (key, p) => !(key === "quality" || key === "audio" || key === "codec") || p.container !== "gif",
   kind: "job",
   async run(inputs, params, ctx) {
     const v = inputs.video as VideoValue;
@@ -390,20 +464,22 @@ export const videoEncode: NodeDef = {
     const base = clean(params.name, "video");
     const fps = num(params.fps, 0);
     const level = String(params.quality || "high") as QualityLevel;
+    const choice = (String(params.codec || "auto") in CODEC_LABEL ? params.codec || "auto" : "auto") as VideoCodecChoice;
     const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, bytes } });
     if (container === "gif") return file(await encodeGif(v, fps, ctx.progress, ctx.signal));
 
+    codecsFor(formatFor(container), container, choice); // fails early on e.g. VP8 in MP4
     // Untouched video: Media Lab's converter copies or transcodes without a round trip through pixels.
     if (v.origin && v.of === "image") {
       const i = await info(v.origin);
       const job: VideoJob = {
         rotate: 0, flipH: false, flipV: false, resize: { mode: "none" },
-        container, codec: "auto", rate: { mode: "quality", level }, fps, audio: params.audio === false ? "remove" : "keep", audioKbps: 160,
+        container, codec: choice, rate: { mode: "quality", level }, fps, audio: params.audio === false ? "remove" : "keep", audioKbps: 160,
       };
       const r = await processVideo(v.origin, i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label) });
       return file(r.bytes);
     }
-    const r = await encodeStream(v, container, level, fps, params.audio !== false, ctx.progress, ctx.signal);
+    const r = await encodeStream(v, container, choice, level, fps, params.audio !== false, ctx.progress, ctx.signal);
     return file(r.bytes);
   },
 };

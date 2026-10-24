@@ -2,7 +2,8 @@ import type { Converter, NodeDef } from "../runtime/types";
 import { ASCII_CONVERTERS, asciiConvert, asciiRender, asciiText } from "./ascii";
 import { AUDIO_CONVERTERS, audioConvert, audioInput } from "./audio";
 import { ditherRecipe } from "./dither";
-import { fileInput } from "./file";
+import { download } from "./download";
+import { fileInput, imagesInput } from "./file";
 import { imageEncode, imageTransform } from "./media";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
 import { saveFile, saveImage } from "./save";
@@ -11,8 +12,10 @@ import { extractAudio, videoEncode, videoInput, webcam } from "./video";
 
 export const NODE_DEFS: NodeDef[] = [
   fileInput,
+  imagesInput,
   videoInput,
   webcam,
+  download,
   audioInput,
   pdfInput,
   textInput,
@@ -57,6 +60,7 @@ export function inputNodeFor(file: { type: string; name: string }): string | und
 /** File chooser filter for each input node. */
 export const INPUT_ACCEPT: Record<string, string> = {
   "input.file": "image/*",
+  "input.images": "image/*",
   "input.video": "video/*,.mkv",
   "input.audio": "audio/*",
   "input.pdf": "application/pdf,.pdf",

@@ -4,6 +4,7 @@ import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shel
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { registerTools } from "./tools.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(here, "../dist");
@@ -120,6 +121,7 @@ ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
 
 app.whenReady().then(() => {
   allowCamera();
+  registerTools();
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
     const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));

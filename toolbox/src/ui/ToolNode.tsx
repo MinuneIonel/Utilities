@@ -48,7 +48,8 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const fileRef = useRef<HTMLInputElement>(null);
   if (!def) return <div className="tnode error">Unknown node {data.type}</div>;
   const accept = INPUT_ACCEPT[def.type];
-  const empty = !!accept && !data.params.assetId;
+  const multiple = def.type === "input.images";
+  const empty = !!accept && !(multiple ? (data.params.assetIds as unknown[] | undefined)?.length : data.params.assetId);
   // A frame node fed a video runs on every frame; its outputs are videos too.
   const mapped = def.outputs.some((p) => p.type !== "video" && shapes.get(`${id}:${p.key}`)?.seq);
 
@@ -93,10 +94,12 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
             ref={fileRef}
             type="file"
             accept={accept}
+            multiple={multiple}
             hidden
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) actions.setNodeFile(id, f);
+              const files = [...(e.target.files ?? [])];
+              if (multiple && files.length) actions.setNodeFiles(id, files);
+              else if (files[0]) actions.setNodeFile(id, files[0]);
               e.target.value = "";
             }}
           />

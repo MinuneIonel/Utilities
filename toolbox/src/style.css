@@ -229,3 +229,4 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tnode-progress.busy > div { width: 30% !important; animation: tnode-busy 1.2s ease-in-out infinite; }
 @keyframes tnode-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 button.primary.rec { background: #ff5a5a; border-color: #ff5a5a; color: #fff; }
+select.templates { width: 150px; }

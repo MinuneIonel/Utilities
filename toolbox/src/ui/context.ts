@@ -32,6 +32,7 @@ export const ShapesContext = createContext<ReadonlyMap<string, Shape>>(new Map()
 
 export interface Actions {
   setNodeFile(nodeId: string, file: File): void;
+  setNodeFiles(nodeId: string, files: File[]): void;
 }
 
-export const ActionsContext = createContext<Actions>({ setNodeFile: () => {} });
+export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {} });

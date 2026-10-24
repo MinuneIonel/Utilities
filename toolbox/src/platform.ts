@@ -8,6 +8,18 @@ interface ToolboxBridge {
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
   reveal(path: string): Promise<void>;
   onMenu(handler: (command: string) => void): void;
+  toolsInfo(): Promise<{ ffmpeg: boolean; ytdlp: boolean }>;
+  runTool(id: string, tool: NativeTool, args: string[], files: Record<string, Uint8Array>): Promise<ToolResult>;
+  cancelTool(id: string): Promise<void>;
+  onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
+}
+
+export type NativeTool = "ffmpeg" | "yt-dlp";
+
+export interface ToolResult {
+  code: number;
+  files: Record<string, Uint8Array>;
+  log: string;
 }
 
 export const bridge: ToolboxBridge | undefined = (window as unknown as { toolbox?: ToolboxBridge }).toolbox;

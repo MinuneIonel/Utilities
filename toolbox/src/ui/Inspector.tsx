@@ -1,9 +1,26 @@
+import { useEffect, useState } from "react";
 import { REGISTRY } from "../nodes";
 import { bridge } from "../platform";
 import type { ParamDef, Params } from "../runtime/types";
 import type { ToolFlowNode } from "./context";
 import { AsciiPanel } from "./AsciiPanel";
 import { DitherPanel } from "./DitherPanel";
+
+/** A text box that only applies its value on Enter or when it loses focus (for links that start downloads). */
+function CommitInput({ value, set, placeholder }: { value: string; set: (v: string) => void; placeholder?: string }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <input
+      type="text"
+      value={draft}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => draft !== value && set(draft)}
+      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+    />
+  );
+}
 
 function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
   switch (def.kind) {
@@ -42,9 +59,13 @@ function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: un
           <textarea rows={10} value={String(value ?? "")} onChange={(e) => set(e.target.value)} spellCheck={false} />
         </div>
       ) : (
-        <div className="field">
+        <div className={def.commit ? "field stacked" : "field"}>
           <label>{def.label}</label>
-          <input type="text" value={String(value ?? "")} onChange={(e) => set(e.target.value)} />
+          {def.commit ? (
+            <CommitInput value={String(value ?? "")} set={set} placeholder={def.placeholder} />
+          ) : (
+            <input type="text" value={String(value ?? "")} placeholder={def.placeholder} onChange={(e) => set(e.target.value)} />
+          )}
         </div>
       );
     case "toggle":

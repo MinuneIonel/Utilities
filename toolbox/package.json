@@ -10,26 +10,70 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "start": "vite build && electron .",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "dist": "tsc --noEmit && vite build && electron-builder --mac dmg",
+    "pack": "vite build && electron-builder --dir"
   },
-  "dependencies": {
+  "devDependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "@xyflow/react": "^12.12.0",
+    "electron": "45.0.0",
+    "electron-builder": "^26.18.0",
+    "ffmpeg-static": "^5.3.0",
     "gifenc": "^1.0.3",
     "mediabunny": "^1.62.1",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "electron": "^45.0.0",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
+  },
+  "productName": "Toolbox",
+  "author": "Cojo",
+  "build": {
+    "appId": "dev.cojo.toolbox",
+    "productName": "Toolbox",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../node_modules/ffmpeg-static/ffmpeg",
+        "to": "ffmpeg"
+      }
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg"
+        }
+      ],
+      "category": "public.app-category.graphics-design",
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Webcam nodes use the camera to preview and record."
+      }
+    },
+    "dmg": {
+      "title": "Toolbox"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ]
+    },
+    "publish": null
   }
 }

@@ -117,7 +117,8 @@ export interface PortDef {
 export type ParamDef =
   | { key: string; label: string; kind: "number"; min: number; max: number; step: number }
   | { key: string; label: string; kind: "select"; options: { value: string; label: string }[] }
-  | { key: string; label: string; kind: "text"; multiline?: boolean }
+  /** `commit` applies the value on Enter or blur instead of every keystroke. */
+  | { key: string; label: string; kind: "text"; multiline?: boolean; commit?: boolean; placeholder?: string }
   | { key: string; label: string; kind: "toggle" }
   /** Edited by a node-specific inspector panel (e.g. Dither Lab's effect stack). */
   | { key: string; label: string; kind: "custom" };

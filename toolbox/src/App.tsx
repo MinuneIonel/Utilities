@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
-import { newId, newNode, parseGraph, serializeGraph, starterGraph } from "./graphs";
+import { newId, newNode, parseGraph, serializeGraph, starterGraph, TEMPLATES } from "./graphs";
 import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, Params } from "./runtime/types";
@@ -195,6 +195,18 @@ export function App() {
     [client, setParams],
   );
 
+  const setNodeFiles = useCallback(
+    (nodeId: string, files: File[]) => {
+      const assetIds = files.map((f) => {
+        const id = newId("a");
+        client.addAsset(id, f);
+        return id;
+      });
+      setParams(nodeId, { assetIds, names: files.map((f) => f.name), name: files.length === 1 ? files[0].name : `${files.length} images` });
+    },
+    [client, setParams],
+  );
+
   const addNode = useCallback(
     (type: string, position?: { x: number; y: number }) => {
       let pos = position;
@@ -335,10 +347,14 @@ export function App() {
       const all = [...e.dataTransfer.files];
       const unknown = all.filter((f) => !inputNodeFor(f));
       if (unknown.length) flash(`Toolbox can't open ${unknown.map((f) => f.name).join(", ")}`);
+      // An empty Images node takes all the dropped images at once.
+      const images = all.filter((f) => inputNodeFor(f) === "input.file");
+      const imagesNode = flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
+      if (imagesNode && images.length) setNodeFiles(imagesNode.id, images);
       // Fill empty inputs of the right kind first, then add new ones.
       const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !n.data.params.assetId);
       let row = 0;
-      for (const f of all) {
+      for (const f of imagesNode && images.length ? all.filter((f) => !images.includes(f)) : all) {
         const type = inputNodeFor(f);
         if (!type) continue;
         const at = { x: pos.x, y: pos.y + row++ * 40 };
@@ -352,7 +368,7 @@ export function App() {
         setNodeFile(target, f);
       }
     },
-    [addNode, flash, flow, setNodeFile, setParams],
+    [addNode, flash, flow, setNodeFile, setNodeFiles, setParams],
   );
 
   const selected = nodes.find((n) => n.selected);
@@ -383,7 +399,7 @@ export function App() {
   return (
     <ShapesContext.Provider value={shapes}>
     <RuntimeContext.Provider value={runtime}>
-      <ActionsContext.Provider value={{ setNodeFile }}>
+      <ActionsContext.Provider value={{ setNodeFile, setNodeFiles }}>
         <div className="app">
           <header className="topbar">
             <div className="brand">
@@ -391,6 +407,25 @@ export function App() {
             </div>
             <div className="group">
               <button onClick={() => commands.current.new()}>New</button>
+              <select
+                className="templates"
+                value=""
+                onChange={(e) => {
+                  const t = TEMPLATES.find((x) => x.id === e.target.value);
+                  if (t) {
+                    loadGraph(t.build());
+                    flash(`${t.title}: drop in your input, then Render.`);
+                  }
+                }}
+                title="Start from a ready-made graph"
+              >
+                <option value="">Templates…</option>
+                {TEMPLATES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title}
+                  </option>
+                ))}
+              </select>
               <button onClick={openGraph}>Open</button>
               <button onClick={saveGraph}>Save</button>
             </div>
