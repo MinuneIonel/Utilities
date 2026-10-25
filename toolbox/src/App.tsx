@@ -13,7 +13,7 @@ import {
 } from "@xyflow/react";
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
-import { newId, newNode, parseGraph, serializeGraph, starterGraph, TEMPLATES } from "./graphs";
+import { newId, newNode, parseGraph, placeWorkflow, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
 import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
@@ -21,6 +21,7 @@ import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
 import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
 import { NodeMenu } from "./ui/NodeMenu";
+import { Tutorial, tutorialSeen } from "./ui/Tutorial";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 import { Webcams, type CamSpec } from "./ui/webcam";
 import logoUrl from "../build/icon.svg?url";
@@ -39,6 +40,8 @@ interface MenuState {
   /** Where the new node goes, in graph coordinates. */
   at: { x: number; y: number };
   from?: { node: string; handle: string };
+  /** Opens on the Workflows tab. */
+  workflows?: boolean;
 }
 
 interface OutputEntry {
@@ -92,6 +95,7 @@ export function App() {
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [tutorial, setTutorial] = useState(() => !tutorialSeen());
   const [view, setView] = useState<{ backdrop: boolean; panel: boolean; preview?: string }>(() => {
     try {
       return { backdrop: true, panel: false, ...JSON.parse(localStorage.getItem(VIEW_STORE) ?? "{}") };
@@ -252,12 +256,12 @@ export function App() {
 
   /** Opens the Add node menu at a point on screen, or the canvas centre. */
   const openMenu = useCallback(
-    (client?: { x: number; y: number }, from?: MenuState["from"]) => {
+    (client?: { x: number; y: number }, from?: MenuState["from"], workflows?: boolean) => {
       const r = canvasRef.current!.getBoundingClientRect();
       const inside = client && client.x >= r.left && client.x <= r.right && client.y >= r.top && client.y <= r.bottom;
       const c = inside ? client : { x: r.left + r.width / 2, y: r.top + r.height / 3 };
       const at = flow.screenToFlowPosition(c);
-      setMenu({ x: c.x - r.left, y: c.y - r.top, at: { x: at.x - NODE_HALF_WIDTH, y: at.y - 20 }, from });
+      setMenu({ x: c.x - r.left, y: c.y - r.top, at: { x: at.x - NODE_HALF_WIDTH, y: at.y - 20 }, from, workflows });
     },
     [flow],
   );
@@ -321,6 +325,8 @@ export function App() {
     save: () => void saveGraph(),
     new: () => loadGraph(starterGraph()),
     addNode: () => openMenu(pointer.current),
+    workflows: () => openMenu(undefined, undefined, true),
+    tutorial: () => setTutorial(true),
   };
   useEffect(() => {
     bridge?.onMenu((c) => commands.current[c]?.());
@@ -328,7 +334,7 @@ export function App() {
       // Tab opens the Add node menu at the pointer, unless you're typing or moving between inspector fields.
       if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const t = e.target as HTMLElement;
-        if (t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu")) return;
+        if (t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu, .tutorial")) return;
         e.preventDefault();
         commands.current.addNode();
         return;
@@ -413,6 +419,36 @@ export function App() {
   );
   const closeMenu = useCallback(() => setMenu(null), []);
 
+  // A workflow drops in next to what's already there; its first node is selected so the inspector shows what to fill in.
+  const pickWorkflow = useCallback(
+    (id: string) => {
+      const w = WORKFLOWS.find((x) => x.id === id);
+      if (!menu || !w) return;
+      setMenu(null);
+      // Where it was asked for, unless that covers nodes already there: then under them.
+      const box = (n: { position: { x: number; y: number }; measured?: { width?: number; height?: number } }) => ({
+        l: n.position.x,
+        t: n.position.y,
+        r: n.position.x + (n.measured?.width ?? 2 * NODE_HALF_WIDTH),
+        b: n.position.y + (n.measured?.height ?? 160),
+      });
+      const existing = flow.getNodes().map(box);
+      let placed = placeWorkflow(w, menu.at);
+      const covers = placed.nodes.map(box).some((a) => existing.some((e) => a.l < e.r && e.l < a.r && a.t < e.b && e.t < a.b));
+      if (covers) {
+        placed = placeWorkflow(w, { x: Math.min(...existing.map((e) => e.l)), y: Math.max(...existing.map((e) => e.b)) + 80 });
+      }
+      const f = toFlow(placed);
+      f.nodes[0].selected = true;
+      setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...f.nodes]);
+      setEdges((es) => [...es, ...f.edges]);
+      const first = REGISTRY.get(f.nodes[0].data.type)!;
+      flash(`${w.title}: ${first.type === "input.download" ? "paste a link in the inspector" : first.type === "input.text" ? "type or paste your text" : "drop in your file"}, then Render.`);
+      setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
+    },
+    [flash, flow, menu, setEdges, setNodes],
+  );
+
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
@@ -479,27 +515,11 @@ export function App() {
             </div>
             <div className="group">
               <button onClick={() => commands.current.new()}>New</button>
-              <select
-                className="templates"
-                value=""
-                onChange={(e) => {
-                  const t = TEMPLATES.find((x) => x.id === e.target.value);
-                  if (t) {
-                    loadGraph(t.build());
-                    flash(`${t.title}: drop in your input, then Render.`);
-                  }
-                }}
-                title="Start from a ready-made graph"
-              >
-                <option value="">Templates…</option>
-                {TEMPLATES.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </select>
-              <button onClick={() => commands.current.addNode()} title="Add a node (Tab, or right-click the canvas)">
+              <button className="add-node" onClick={() => commands.current.addNode()} title="Add a node (Tab, or right-click the canvas)">
                 Add node <kbd>Tab</kbd>
+              </button>
+              <button className="workflows" onClick={() => commands.current.workflows()} title="Drop in a ready-made chain, like downloading a video">
+                Workflows
               </button>
               <button onClick={openGraph}>Open</button>
               <button onClick={saveGraph}>Save</button>
@@ -515,6 +535,9 @@ export function App() {
               </button>
               <button className={view.panel ? "active" : ""} onClick={() => setView((v) => ({ ...v, panel: !v.panel }))} title="Preview panel under the graph">
                 Panel
+              </button>
+              <button className="help" onClick={() => setTutorial(true)} title="Show the tutorial again">
+                ?
               </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
               {recording ? (
@@ -576,15 +599,18 @@ export function App() {
                 {menu && (
                   <NodeMenu
                     defs={menuDefs}
+                    workflows={menu.from ? undefined : WORKFLOWS}
                     x={menu.x}
                     y={menu.y}
-                    title={menu.from ? "Add a node to this wire" : undefined}
+                    title={menu.from ? "Add a node to this wire" : menu.workflows ? "Workflows: type to search" : undefined}
+                    tab={menu.workflows ? "workflow" : undefined}
                     onPick={pickFromMenu}
+                    onPickWorkflow={pickWorkflow}
                     onClose={closeMenu}
                   />
                 )}
                 {nodes.length === 0 && !menu && (
-                  <p className="canvas-hint">Press Tab or right-click to add a node. Drop images, videos, sound, PDFs or text anywhere.</p>
+                  <p className="canvas-hint">Press Tab or right-click to add a node, or pick a ready-made one under Workflows. Drop images, videos, sound, PDFs or text anywhere.</p>
                 )}
               </div>
               {view.panel && (
@@ -623,6 +649,7 @@ export function App() {
               </span>
             ))}
           </footer>
+          {tutorial && <Tutorial onClose={() => setTutorial(false)} />}
         </div>
       </ActionsContext.Provider>
       </PreviewContext.Provider>

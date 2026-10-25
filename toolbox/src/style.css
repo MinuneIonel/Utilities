@@ -229,7 +229,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tnode-progress.busy > div { width: 30% !important; animation: tnode-busy 1.2s ease-in-out infinite; }
 @keyframes tnode-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 button.primary.rec { background: #ff5a5a; border-color: #ff5a5a; color: #fff; }
-select.templates { width: 150px; }
 
 /* ------------------------------------------------------------ add node menu */
 
@@ -258,3 +257,26 @@ kbd { font: 10px var(--mono); padding: 1px 4px; margin-left: 4px; border: 1px so
 .node-menu-list .muted { font-size: 11px; }
 .node-menu-empty { padding: 8px; font-size: 12px; }
 .node-menu-desc { margin: 0; padding: 8px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+/* ------------------------------------------------------------ tutorial */
+
+.tutorial { position: fixed; inset: 0; z-index: 100; }
+.tutorial-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); }
+/* The lit-up part: a hole in the dimmed window, drawn as a huge shadow around it. */
+.tutorial-spot {
+  position: absolute; border-radius: 10px; border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+  transition: left 0.2s, top 0.2s, width 0.2s, height 0.2s;
+  pointer-events: none;
+}
+.tutorial-card {
+  position: absolute; padding: 14px 16px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+.tutorial-card h2 { margin: 2px 0 6px; font-size: 15px; }
+.tutorial-card p { margin: 0 0 12px; color: var(--text); line-height: 1.5; }
+.tutorial-count { font: 11px var(--mono); color: var(--muted); }
+.tutorial-actions { display: flex; gap: 6px; align-items: center; }
+.tutorial-actions .spacer { flex: 1; }
+.topbar .help { width: 30px; padding: 0; font-weight: 600; }

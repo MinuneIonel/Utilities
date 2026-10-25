@@ -70,12 +70,101 @@ function chain(steps: [type: string, params: Record<string, unknown>, input?: st
   return { version: 1, nodes, edges };
 }
 
-/** Ready-made graphs for common jobs; the user drops in the input and presses Render. */
-export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
-  { id: "dither", title: "Dither an image", build: starterGraph },
+/** A ready-made chain for a common job, dropped into the graph from the Workflows tab. */
+export interface Workflow {
+  id: string;
+  title: string;
+  description: string;
+  build(): Graph;
+}
+
+/** Ready-made graphs for common jobs; the user fills in the input and presses Render. */
+export const WORKFLOWS: Workflow[] = [
+  {
+    id: "download-video",
+    title: "Download a video",
+    description: "Paste a YouTube (or Vimeo, Instagram, TikTok…) link and save the video as it is.",
+    build: () =>
+      chain([
+        ["input.download", {}, undefined, "file"],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "download-mp3",
+    title: "Download the sound as MP3",
+    description: "Paste a YouTube or SoundCloud link and save just the sound, as an MP3.",
+    build: () =>
+      chain([
+        ["input.download", { quality: "audio" }, undefined, "audio"],
+        ["audio.convert", { format: "mp3" }],
+        ["output.save-file", {}, "file"],
+      ]),
+  },
+  {
+    id: "extract-audio",
+    title: "Extract audio from a video",
+    description: "Drop in a video and save its sound track as an MP3.",
+    build: () =>
+      chain([
+        ["input.video", {}],
+        ["video.extract-audio", {}],
+        ["audio.convert", { format: "mp3" }],
+        ["output.save-file", {}, "file"],
+      ]),
+  },
+  {
+    id: "shrink-video",
+    title: "Shrink a video for sharing",
+    description: "Drop in a video; it comes out as a smaller 720p MP4 that sends easily.",
+    build: () =>
+      chain([
+        ["input.video", {}],
+        ["media.transform", { resize: "long-edge", size: 1280 }],
+        ["video.encode", { container: "mp4", quality: "medium", name: "small" }],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "video-gif",
+    title: "Video to GIF",
+    description: "Drop in a short video and save it as a 480px GIF.",
+    build: () =>
+      chain([
+        ["input.video", {}],
+        ["media.transform", { resize: "long-edge", size: 480 }],
+        ["video.encode", { container: "gif", fps: 12, name: "clip" }],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "download-gif",
+    title: "Link to GIF",
+    description: "Paste a video link and save it as a 480px GIF.",
+    build: () =>
+      chain([
+        ["input.download", { quality: "480" }],
+        ["media.transform", { resize: "long-edge", size: 480 }],
+        ["video.encode", { container: "gif", fps: 12, name: "clip" }],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "compress-image",
+    title: "Compress an image",
+    description: "Drop in a photo and save it as a JPEG under 500 KB.",
+    build: () =>
+      chain([
+        ["input.file", {}],
+        ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
+        ["output.save-file", {}],
+      ]),
+  },
+  { id: "dither", title: "Dither an image", description: "Drop in an image, pick a look, save a PNG.", build: starterGraph },
   {
     id: "video-ascii",
     title: "Video to ASCII MP4",
+    description: "Drop in a video and turn every frame into ASCII art.",
     build: () =>
       chain([
         ["input.video", {}],
@@ -86,30 +175,9 @@ export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
       ]),
   },
   {
-    id: "download-gif",
-    title: "Link to GIF",
-    build: () =>
-      chain([
-        ["input.download", { quality: "480" }],
-        ["media.transform", { resize: "long-edge", size: 480 }],
-        ["video.encode", { container: "gif", fps: 12, name: "clip" }],
-        ["output.save-file", {}],
-      ]),
-  },
-  {
-    id: "mp3",
-    title: "Sound from a video as MP3",
-    build: () =>
-      chain([
-        ["input.video", {}],
-        ["video.extract-audio", {}],
-        ["audio.convert", { format: "mp3" }],
-        ["output.save-file", {}, "file"],
-      ]),
-  },
-  {
     id: "photos-pdf",
     title: "Photos to PDF",
+    description: "Drop in several photos and save them as one PDF, a page each.",
     build: () =>
       chain([
         ["input.images", {}],
@@ -120,6 +188,7 @@ export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
   {
     id: "pdf-watermark",
     title: "Watermark and protect a PDF",
+    description: "Drop in a PDF, stamp text on every page and lock it with a password.",
     build: () =>
       chain([
         ["input.pdf", {}],
@@ -131,6 +200,7 @@ export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
   {
     id: "romanian",
     title: "Clean up Romanian text",
+    description: "Paste Romanian text without diacritics and get it back with ă, â, î, ș and ț.",
     build: () =>
       chain([
         ["input.text", { text: "Lipeste aici textul fara diacritice." }],
@@ -141,6 +211,7 @@ export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
   {
     id: "webcam",
     title: "Record the webcam, dithered",
+    description: "Record yourself through a dither effect and save an MP4. Render starts, Stop ends.",
     build: () =>
       chain([
         ["input.webcam", {}],
@@ -150,3 +221,15 @@ export const TEMPLATES: { id: string; title: string; build(): Graph }[] = [
       ]),
   },
 ];
+
+/** A workflow's graph moved so its first node sits at `at`, with fresh ids so it can go next to anything. */
+export function placeWorkflow(w: Workflow, at: { x: number; y: number }): Graph {
+  const g = w.build();
+  const origin = g.nodes[0]?.position ?? { x: 0, y: 0 };
+  const ids = new Map(g.nodes.map((n) => [n.id, newId("n")]));
+  return {
+    version: 1,
+    nodes: g.nodes.map((n) => ({ ...n, id: ids.get(n.id)!, position: { x: n.position.x - origin.x + at.x, y: n.position.y - origin.y + at.y } })),
+    edges: g.edges.map((e) => ({ ...e, id: newId("e"), source: ids.get(e.source)!, target: ids.get(e.target)! })),
+  };
+}

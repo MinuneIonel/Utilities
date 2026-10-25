@@ -88,6 +88,13 @@ function buildMenu() {
       ],
     },
     { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [
+        { label: "Tutorial", click: () => send("tutorial") },
+        { label: "Workflows…", click: () => send("workflows") },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

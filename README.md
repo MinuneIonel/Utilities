@@ -22,7 +22,7 @@ Drop in files (images, videos, sound, PDFs, text), or a webcam or a web link, an
 - **Audio**: extract the sound of a video, convert / trim / fade / normalize (Audio Lab).
 - **Text**: ASCII to text, Romanian diacritics.
 - **PDF**: merge, pick pages, watermark and page numbers, protect, compact, images to PDF, pages to images.
-- **Templates** in the toolbar start common jobs: video to ASCII MP4, link to GIF, sound as MP3, photos to PDF, and more.
+- **Workflows** drop ready-made chains into the graph: download a YouTube video, extract audio from a video, video to GIF, photos to PDF, and more. A short tutorial shows on first launch.
 
 Nodes marked `live` preview as you change settings, with the selected node's output shown behind the graph. **Render** (⌘R) runs everything at full size and saves the files; **Cancel** stops it. See [toolbox/README.md](toolbox/README.md) for how it works.
 

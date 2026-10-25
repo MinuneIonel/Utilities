@@ -1,6 +1,6 @@
 // Download node: a link from YouTube, Vimeo, SoundCloud and the many other
 // sites yt-dlp supports, fetched by the desktop app.
-import type { NodeDef, RunContext, Value } from "../runtime/types";
+import type { AudioValue, FileValue, NodeDef, RunContext, Value } from "../runtime/types";
 import { lastError, nativeTools } from "./native";
 import { soundOf, videoCodec } from "./video";
 
@@ -52,11 +52,13 @@ export const download: NodeDef = {
   type: "input.download",
   title: "Download (yt-dlp)",
   category: "input",
-  description: "Paste a link from YouTube, Vimeo, SoundCloud, Instagram and many more sites. Downloads with yt-dlp in the desktop app, once per link.",
+  description:
+    "Paste a link from YouTube, Vimeo, SoundCloud, Instagram and many more sites. Downloads with yt-dlp in the desktop app, once per link. File is the download as it came, for Save file.",
   inputs: [],
   outputs: [
     { key: "video", label: "Video", type: "video" },
     { key: "audio", label: "Audio", type: "audio" },
+    { key: "file", label: "File", type: "file" },
   ],
   params: [
     { key: "url", label: "Link", kind: "text", commit: true, placeholder: "https://…" },
@@ -84,9 +86,14 @@ export const download: NodeDef = {
     if (!/^https?:\/\//i.test(url)) throw new Error("Links start with http:// or https://");
     const quality = String(params.quality || "1080");
     const file = await fetchOnce(url, quality, ctx);
-    if (quality === "audio") return { audio: await soundOf(file) };
+    // The file as downloaded shares its bytes with the sound, which soundOf reads once per download.
+    const asFile = (a: AudioValue): FileValue => ({ kind: "file", name: file.name, mime: file.type || a.mime, bytes: a.bytes });
+    if (quality === "audio") {
+      const audio = await soundOf(file);
+      return { audio, file: asFile(audio) };
+    }
     const video = await (await videoCodec()).videoFromBlob(file, params, ctx);
-    if (!video.audioSource) return { video };
-    return { video, audio: await soundOf(file, video.duration) };
+    const audio = await soundOf(file, video.audioSource ? video.duration : undefined);
+    return video.audioSource ? { video, audio, file: asFile(audio) } : { video, file: asFile(audio) };
   },
 };
