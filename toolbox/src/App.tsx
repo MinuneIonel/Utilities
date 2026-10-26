@@ -14,7 +14,7 @@ import {
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, placeWorkflow, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
-import { bridge, isDesktop, openGraphFile, saveFile, saveGraphFile } from "./platform";
+import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
 import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
@@ -28,9 +28,15 @@ import logoUrl from "../build/icon.svg?url";
 
 const STORE = "toolbox.graph";
 const VIEW_STORE = "toolbox.view";
+const OUTPUTS_STORE = "toolbox.outputs";
+const UPDATE_STORE = "toolbox.update-check";
 const nodeTypes = { tool: ToolNode };
 /** Roughly half a node card, so a new node lands centred under the pointer. */
 const NODE_HALF_WIDTH = 110;
+/** Undo steps kept. */
+const HISTORY = 100;
+/** Changes closer together than this (a slider drag, a node drag) undo as one step. */
+const HISTORY_SETTLE = 400;
 
 /** The Add node menu: where it is, and the wire it was opened from, if any. */
 interface MenuState {
@@ -49,6 +55,13 @@ interface OutputEntry {
   name: string;
   bytes: number;
   savedTo: string;
+}
+
+interface View {
+  /** The node whose output fills the canvas background. */
+  preview?: string;
+  inspectorWidth: number;
+  inspectorHidden: boolean;
 }
 
 function toFlow(g: Graph): { nodes: ToolFlowNode[]; edges: Edge[] } {
@@ -82,6 +95,48 @@ function loadInitial(): Graph {
   return starterGraph();
 }
 
+function readStore<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? { ...fallback, ...JSON.parse(v) } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStore(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage may be unavailable */
+  }
+}
+
+/** The node and everything that feeds it, so one Save node can render on its own. */
+function upstreamOf(g: Graph, id: string): Graph {
+  const keep = new Set([id]);
+  const stack = [id];
+  while (stack.length) {
+    const t = stack.pop()!;
+    for (const e of g.edges) if (e.target === t && !keep.has(e.source)) keep.add(e.source), stack.push(e.source);
+  }
+  return { ...g, nodes: g.nodes.filter((n) => keep.has(n.id)), edges: g.edges.filter((e) => keep.has(e.source) && keep.has(e.target)) };
+}
+
+/** Whether a graph holds anything the user put in: files, links or their own text. */
+function hasContent(nodes: ToolFlowNode[]): boolean {
+  const defaultText = REGISTRY.get("input.text")?.defaults().text;
+  return nodes.some(({ data: { type, params: p } }) => {
+    if (p.assetId || (p.assetIds as unknown[] | undefined)?.length || p.path || (p.paths as unknown[] | undefined)?.length) return true;
+    if (type === "input.download") return !!String(p.url ?? "").trim();
+    if (type === "input.text") return !!String(p.text ?? "").trim() && p.text !== defaultText;
+    return false;
+  });
+}
+
+/** Whether keys typed now belong to a text field rather than the graph. */
+const typingIn = (el: Element | null) => !!el?.closest("input, textarea, select, [contenteditable]");
+
 const inputPort = (nodeType: string, key: string | null) => REGISTRY.get(nodeType)?.inputs.find((p) => p.key === key);
 
 export function App() {
@@ -91,25 +146,17 @@ export function App() {
   const [runtime, setRuntime] = useState<Record<string, NodeRuntime>>({});
   const [rendering, setRendering] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [outputs, setOutputs] = useState<OutputEntry[]>([]);
+  const [outputs, setOutputs] = useState<OutputEntry[]>(() => readStore<{ list: OutputEntry[] }>(OUTPUTS_STORE, { list: [] }).list);
   const [message, setMessage] = useState("");
   const [dropping, setDropping] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [tutorial, setTutorial] = useState(() => !tutorialSeen());
-  const [view, setView] = useState<{ backdrop: boolean; panel: boolean; preview?: string }>(() => {
-    try {
-      return { backdrop: true, panel: false, ...JSON.parse(localStorage.getItem(VIEW_STORE) ?? "{}") };
-    } catch {
-      return { backdrop: true, panel: false };
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(VIEW_STORE, JSON.stringify(view));
-    } catch {
-      /* storage may be unavailable */
-    }
-  }, [view]);
+  const [update, setUpdate] = useState<{ version: string; url: string } | null>(null);
+  const [view, setView] = useState<View>(() => readStore<View>(VIEW_STORE, { inspectorWidth: 320, inspectorHidden: false }));
+  useEffect(() => writeStore(VIEW_STORE, view), [view]);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  useEffect(() => writeStore(OUTPUTS_STORE, { list: outputs }), [outputs]);
   const flow = useReactFlow<ToolFlowNode, Edge>();
   const canvasRef = useRef<HTMLDivElement>(null);
   const pointer = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -185,7 +232,7 @@ export function App() {
 
   const flash = useCallback((text: string) => {
     setMessage(text);
-    setTimeout(() => setMessage((m) => (m === text ? "" : m)), 4000);
+    setTimeout(() => setMessage((m) => (m === text ? "" : m)), 5000);
   }, []);
   flashRef.current = flash;
 
@@ -204,6 +251,59 @@ export function App() {
     return () => clearTimeout(t);
   }, [flash, graph]);
 
+  // ---------------------------------------------------------------- undo
+  // Snapshots of the whole graph (settings, wires, positions). A change becomes a step once
+  // things settle, so a slider drag is one step, not fifty.
+  const graphKey = useMemo(() => JSON.stringify(graph), [graph]);
+  const graphKeyRef = useRef(graphKey);
+  graphKeyRef.current = graphKey;
+  const history = useRef({ past: [] as string[], future: [] as string[], at: graphKey, quiet: false });
+  const commitHistory = useCallback(() => {
+    const h = history.current;
+    const now = graphKeyRef.current;
+    if (now === h.at) return;
+    if (!h.quiet) {
+      h.past.push(h.at);
+      if (h.past.length > HISTORY) h.past.shift();
+      h.future = [];
+    }
+    h.at = now;
+  }, []);
+  useEffect(() => {
+    if (graphKey === history.current.at) return;
+    const t = setTimeout(commitHistory, HISTORY_SETTLE);
+    return () => clearTimeout(t);
+  }, [commitHistory, graphKey]);
+
+  const applySnapshot = useCallback(
+    (key: string) => {
+      const f = toFlow(JSON.parse(key) as Graph);
+      setNodes(f.nodes);
+      setEdges(f.edges);
+    },
+    [setEdges, setNodes],
+  );
+  const undo = useCallback(() => {
+    commitHistory();
+    const h = history.current;
+    const prev = h.past.pop();
+    if (prev === undefined) return flash("Nothing to undo");
+    h.future.push(h.at);
+    h.at = prev;
+    applySnapshot(prev);
+  }, [applySnapshot, commitHistory, flash]);
+  const redo = useCallback(() => {
+    commitHistory();
+    const h = history.current;
+    const next = h.future.pop();
+    if (next === undefined) return flash("Nothing to redo");
+    h.past.push(h.at);
+    h.at = next;
+    applySnapshot(next);
+  }, [applySnapshot, commitHistory, flash]);
+
+  // ---------------------------------------------------------------- files
+
   const setParams = useCallback(
     (id: string, patch: Params) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, params: { ...n.data.params, ...patch } } } : n))),
@@ -213,29 +313,87 @@ export function App() {
   const setNodeFile = useCallback(
     (nodeId: string, file: File) => {
       const assetId = newId("a");
-      client.addAsset(assetId, file);
-      setParams(nodeId, { assetId, name: file.name });
+      // The desktop app knows where the file is, so it comes back after a restart.
+      const path = bridge?.pathForFile(file) ?? "";
+      client.addAsset(assetId, file, path);
+      setParams(nodeId, { assetId, name: file.name, path });
     },
     [client, setParams],
-  );
-
-  // The background shows one chosen node (its eye button, or ⌥-click), not whatever is selected.
-  const togglePreview = useCallback(
-    (id: string) => setView((v) => (v.preview === id ? { ...v, preview: undefined } : { ...v, preview: id, backdrop: true })),
-    [],
   );
 
   const setNodeFiles = useCallback(
     (nodeId: string, files: File[]) => {
       const assetIds = files.map((f) => {
         const id = newId("a");
-        client.addAsset(id, f);
+        client.addAsset(id, f, bridge?.pathForFile(f));
         return id;
       });
-      setParams(nodeId, { assetIds, names: files.map((f) => f.name), name: files.length === 1 ? files[0].name : `${files.length} images` });
+      const paths = files.map((f) => bridge?.pathForFile(f) ?? "");
+      setParams(nodeId, { assetIds, paths, names: files.map((f) => f.name), name: files.length === 1 ? files[0].name : `${files.length} images` });
     },
     [client, setParams],
   );
+
+  /** Reads the files a saved graph used from where they were on disk (desktop app). */
+  const restoreFiles = useCallback(
+    async (g: Graph) => {
+      if (!bridge) return 0;
+      let missing = 0;
+      const patches = await Promise.all(
+        g.nodes.map(async (n): Promise<[string, Params] | undefined> => {
+          const p = n.params;
+          if (typeof p.path === "string" && p.path && !p.assetId) {
+            const f = await reopenFile(p.path, String(p.name ?? ""));
+            if (!f) return void missing++;
+            const assetId = newId("a");
+            client.addAsset(assetId, f, p.path);
+            return [n.id, { assetId }];
+          }
+          const paths = Array.isArray(p.paths) ? (p.paths as string[]) : [];
+          if (paths.length && !(p.assetIds as unknown[] | undefined)?.length) {
+            const names = Array.isArray(p.names) ? (p.names as string[]) : [];
+            const files = await Promise.all(paths.map((path, i) => reopenFile(path, names[i] ?? "")));
+            if (files.some((f) => !f)) return void missing++;
+            const assetIds = files.map((f, i) => {
+              const id = newId("a");
+              client.addAsset(id, f!, paths[i]);
+              return id;
+            });
+            return [n.id, { assetIds }];
+          }
+          return undefined;
+        }),
+      );
+      const found = new Map(patches.filter((x): x is [string, Params] => !!x));
+      if (!found.size) return missing;
+      // Files coming back isn't something to undo.
+      history.current.quiet = true;
+      setNodes((ns) => ns.map((n) => (found.has(n.id) ? { ...n, data: { ...n.data, params: { ...n.data.params, ...found.get(n.id) } } } : n)));
+      setTimeout(() => {
+        commitHistory();
+        history.current.quiet = false;
+      }, HISTORY_SETTLE + 100);
+      return missing;
+    },
+    [client, commitHistory, setNodes],
+  );
+
+  // The last session's files, and (once a day) whether there's a newer Toolbox.
+  useEffect(() => {
+    void restoreFiles(graphRef.current);
+    if (!bridge) return;
+    const last = readStore<{ at: number }>(UPDATE_STORE, { at: 0 }).at;
+    if (Date.now() - last < 24 * 3600 * 1000) return;
+    void bridge.checkUpdate().then((u) => {
+      writeStore(UPDATE_STORE, { at: Date.now() });
+      setUpdate(u);
+    });
+  }, [restoreFiles]);
+
+  // ---------------------------------------------------------------- editing
+
+  // The background shows one chosen node (its eye button, or ⌥-click), not whatever is selected.
+  const togglePreview = useCallback((id: string) => setView((v) => ({ ...v, preview: v.preview === id ? undefined : id })), []);
 
   const addNode = useCallback(
     (type: string, position?: { x: number; y: number }) => {
@@ -254,6 +412,60 @@ export function App() {
     [flow, setNodes],
   );
 
+  /** Adds a graph's nodes and wires next to what's there, selected, with fresh ids. */
+  const insertGraph = useCallback(
+    (g: Graph, offset: { x: number; y: number }) => {
+      const ids = new Map(g.nodes.map((n) => [n.id, newId("n")]));
+      const added: ToolFlowNode[] = g.nodes.map((n) => ({
+        id: ids.get(n.id)!,
+        type: "tool",
+        position: { x: n.position.x + offset.x, y: n.position.y + offset.y },
+        data: { type: n.type, params: structuredClone(n.params) },
+        selected: true,
+      }));
+      setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...added]);
+      setEdges((es) => [
+        ...es.map((e) => ({ ...e, selected: false })),
+        ...g.edges.map((e) => ({ ...e, id: newId("e"), source: ids.get(e.source)!, target: ids.get(e.target)! })),
+      ]);
+    },
+    [setEdges, setNodes],
+  );
+
+  const clipboard = useRef<{ graph: Graph; pastes: number } | null>(null);
+  const copy = useCallback(() => {
+    const picked = flow.getNodes().filter((n) => n.selected);
+    if (!picked.length) return false;
+    const ids = new Set(picked.map((n) => n.id));
+    const g = toGraph(picked, flow.getEdges().filter((e) => ids.has(e.source) && ids.has(e.target)));
+    clipboard.current = { graph: g, pastes: 0 };
+    return true;
+  }, [flow]);
+  const deleteSelected = useCallback(() => {
+    const ids = new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id));
+    setNodes((ns) => ns.filter((n) => !ids.has(n.id)));
+    setEdges((es) => es.filter((e) => !ids.has(e.source) && !ids.has(e.target)));
+  }, [flow, setEdges, setNodes]);
+  /** Pastes under the pointer when it's on the canvas, otherwise a step down and right of the copies. */
+  const paste = useCallback(
+    (nearCopies = false) => {
+      const clip = clipboard.current;
+      if (!clip?.graph.nodes.length) return;
+      clip.pastes++;
+      const left = Math.min(...clip.graph.nodes.map((n) => n.position.x));
+      const top = Math.min(...clip.graph.nodes.map((n) => n.position.y));
+      const r = canvasRef.current!.getBoundingClientRect();
+      const p = pointer.current;
+      const onCanvas = !nearCopies && p && p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+      const at = onCanvas ? flow.screenToFlowPosition(p) : { x: left + 40 * clip.pastes, y: top + 40 * clip.pastes };
+      insertGraph(clip.graph, { x: at.x - left, y: at.y - top });
+    },
+    [flow, insertGraph],
+  );
+  const duplicate = useCallback(() => {
+    if (copy()) paste(true);
+  }, [copy, paste]);
+
   /** Opens the Add node menu at a point on screen, or the canvas centre. */
   const openMenu = useCallback(
     (client?: { x: number; y: number }, from?: MenuState["from"], workflows?: boolean) => {
@@ -266,29 +478,93 @@ export function App() {
     [flow],
   );
 
-  const render = useCallback(async () => {
-    if (rendering) return;
-    setRendering(true);
-    const g = graphRef.current;
-    // A webcam records from now until Stop.
-    const live = g.nodes.some((n) => n.type === "input.webcam") && g.edges.some((e) => g.nodes.find((n) => n.id === e.source)?.type === "input.webcam");
-    if (live) webcams.startRecording();
-    setRecording(live);
-    if (live) flash("Recording. Press Stop to finish.");
-    const result = await client.render(g);
-    webcams.stopRecording();
-    setRecording(false);
-    setRendering(false);
-    if (result.error) flash(result.error);
-    for (const f of result.files) {
-      const node = g.nodes.find((n) => n.id === f.nodeId);
-      const where = await saveFile(f.name, f.mime, f.bytes, node?.params.folder ? String(node.params.folder) : undefined);
-      if (!where) continue;
-      setOutputs((o) => [{ id: newId("o"), name: f.name, bytes: f.bytes.byteLength, savedTo: where }, ...o].slice(0, 30));
-      setRuntime((prev) => ({ ...prev, [f.nodeId]: { ...prev[f.nodeId], savedTo: where } }));
-    }
-    if (!result.error && !result.files.length) flash("Rendered. Add a Save node to write files.");
-  }, [client, flash, rendering, webcams]);
+  /** The first input of `def` that the menu's wire can feed. */
+  const portFor = useCallback(
+    (def: NodeDef, from: MenuState["from"]) => {
+      const shape = from && shapes.get(`${from.node}:${from.handle}`);
+      return shape ? def.inputs.find((p) => canConnect(shape, def, p, CONVERTERS).ok) : undefined;
+    },
+    [shapes],
+  );
+
+  const onConnect = useCallback(
+    (c: Connection) =>
+      setEdges((es) =>
+        addEdge(
+          { ...c, id: newId("e") },
+          // One wire per input: a new wire replaces the old one.
+          es.filter((e) => !(e.target === c.target && e.targetHandle === c.targetHandle)),
+        ),
+      ),
+    [setEdges],
+  );
+
+  // ---------------------------------------------------------------- render
+
+  /** What each Save node last wrote, so an unchanged file isn't saved again. */
+  const savedKeys = useRef(new Map<string, string>());
+
+  /**
+   * Renders the graph, or just what feeds one Save node (`only`), and writes the files.
+   * A Save node whose file hasn't changed since it last saved is skipped, unless it's `only`.
+   */
+  const render = useCallback(
+    async (only?: string) => {
+      if (rendering) return;
+      let full = graphRef.current;
+      // Nothing to save to: save the selected node's output, if a Save node can take it.
+      if (!only && !full.nodes.some((n) => REGISTRY.get(n.type)?.saves)) {
+        const sel = flow.getNodes().find((n) => n.selected);
+        const def = sel && REGISTRY.get(sel.data.type);
+        const save = REGISTRY.get("output.save-file")!;
+        const out = def?.outputs.find((o) => {
+          const s = shapes.get(`${sel!.id}:${o.key}`);
+          return s && canConnect(s, save, save.inputs[0], CONVERTERS).ok;
+        });
+        if (!sel || !out) return flash("Add a Save node (or select the node whose result you want) to write files.");
+        const n = newNode(save.type, { x: sel.position.x + 300, y: sel.position.y });
+        const edge = { id: newId("e"), source: sel.id, sourceHandle: out.key, target: n.id, targetHandle: save.inputs[0].key };
+        setNodes((ns) => [...ns, { id: n.id, type: "tool", position: n.position, data: { type: n.type, params: n.params } }]);
+        setEdges((es) => [...es, edge]);
+        full = { ...full, nodes: [...full.nodes, n], edges: [...full.edges, edge] };
+        flash(`Added a Save node after ${def!.title}.`);
+      }
+      const g = only ? upstreamOf(full, only) : full;
+      setRendering(true);
+      // A webcam records from now until Stop.
+      const live = g.nodes.some((n) => n.type === "input.webcam") && g.edges.some((e) => g.nodes.find((n) => n.id === e.source)?.type === "input.webcam");
+      if (live) {
+        webcams.startRecording();
+        flash("Recording. Press Stop to finish.");
+      }
+      setRecording(live);
+      const result = await client.render(g);
+      webcams.stopRecording();
+      setRecording(false);
+      setRendering(false);
+      if (result.error) flash(result.error);
+      let unchanged = 0;
+      let saved = 0;
+      for (const f of result.files) {
+        if (f.nodeId !== only && f.key && savedKeys.current.get(f.nodeId) === f.key) {
+          unchanged++;
+          continue;
+        }
+        const node = g.nodes.find((n) => n.id === f.nodeId);
+        const where = await saveFile(f.name, f.mime, f.bytes, node?.params.folder ? String(node.params.folder) : undefined);
+        if (!where) continue;
+        saved++;
+        if (f.key) savedKeys.current.set(f.nodeId, f.key);
+        setOutputs((o) => [{ id: newId("o"), name: where.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: where }, ...o].slice(0, 30));
+        setRuntime((prev) => ({ ...prev, [f.nodeId]: { ...prev[f.nodeId], savedTo: where } }));
+      }
+      if (result.error) return;
+      if (unchanged && !saved) flash("Nothing changed since the last save. Press Save on a Save node to write it again.");
+      else if (unchanged) flash(`Saved ${saved} file${saved === 1 ? "" : "s"}; ${unchanged} unchanged since the last save.`);
+    },
+    [client, flash, flow, rendering, setEdges, setNodes, shapes, webcams],
+  );
+  const saveNode = useCallback((id: string) => void render(id), [render]);
 
   const loadGraph = useCallback(
     (g: Graph) => {
@@ -305,46 +581,70 @@ export function App() {
     const f = await openGraphFile();
     if (!f) return;
     try {
-      loadGraph(parseGraph(f.text));
-      flash(`Opened ${f.name}. Drop the input files again.`);
+      const g = parseGraph(f.text);
+      loadGraph(g);
+      const missing = await restoreFiles(g);
+      const needsFiles = g.nodes.some((n) => REGISTRY.get(n.type)?.category === "input" && "assetId" in n.params && !n.params.path);
+      flash(missing ? `Opened ${f.name}. ${missing} file${missing === 1 ? " has" : "s have"} moved: drop ${missing === 1 ? "it" : "them"} in again.` : needsFiles ? `Opened ${f.name}. Drop the input files in again.` : `Opened ${f.name}`);
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err));
     }
-  }, [flash, loadGraph]);
+  }, [flash, loadGraph, restoreFiles]);
 
   const saveGraph = useCallback(async () => {
     const where = await saveGraphFile(serializeGraph(graphRef.current), "graph.toolbox");
     if (where) flash(`Saved ${where.split(/[\\/]/).pop()}`);
   }, [flash]);
 
-  // Keyboard and menu shortcuts.
+  // ---------------------------------------------------------------- commands
+
   const commands = useRef<Record<string, () => void>>({});
   commands.current = {
     render: () => void render(),
     open: () => void openGraph(),
     save: () => void saveGraph(),
-    new: () => loadGraph(starterGraph()),
+    new: () => {
+      loadGraph(starterGraph());
+      flash("New graph. ⌘Z brings the old one back.");
+    },
     addNode: () => openMenu(pointer.current),
     workflows: () => openMenu(undefined, undefined, true),
     tutorial: () => setTutorial(true),
+    undo,
+    redo,
+    copy: () => void copy(),
+    cut: () => {
+      if (copy()) deleteSelected();
+    },
+    paste: () => paste(),
+    duplicate,
+    selectAll: () => setNodes((ns) => ns.map((n) => ({ ...n, selected: true }))),
   };
   useEffect(() => {
-    bridge?.onMenu((c) => commands.current[c]?.());
+    const TEXT = new Set(["undo", "redo", "cut", "copy", "paste", "selectAll"]);
+    // The desktop Edit menu sends its commands here; in a text field they edit the text instead.
+    bridge?.onMenu((c) => {
+      if (TEXT.has(c) && typingIn(document.activeElement)) void bridge!.editText(c);
+      else if (c === "duplicate" && typingIn(document.activeElement)) return;
+      else commands.current[c]?.();
+    });
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
       // Tab opens the Add node menu at the pointer, unless you're typing or moving between inspector fields.
       if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const t = e.target as HTMLElement;
         if (t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu, .tutorial")) return;
         e.preventDefault();
         commands.current.addNode();
         return;
       }
       if (!(e.metaKey || e.ctrlKey) || isDesktop) return; // the desktop menu owns these
-      const c = { r: "render", o: "open", s: "save" }[e.key.toLowerCase()];
-      if (c) {
-        e.preventDefault();
-        commands.current[c]();
-      }
+      const k = e.key.toLowerCase();
+      const c =
+        k === "z" ? (e.shiftKey ? "redo" : "undo")
+        : ({ y: "redo", r: "render", o: "open", s: "save", c: "copy", x: "cut", v: "paste", d: "duplicate", a: "selectAll" } as Record<string, string>)[k];
+      if (!c || (typingIn(t) && !["render", "open", "save"].includes(c))) return;
+      e.preventDefault();
+      commands.current[c]();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -375,18 +675,6 @@ export function App() {
     [flow, shapes],
   );
 
-  const onConnect = useCallback(
-    (c: Connection) =>
-      setEdges((es) =>
-        addEdge(
-          { ...c, id: newId("e") },
-          // One wire per input: a new wire replaces the old one.
-          es.filter((e) => !(e.target === c.target && e.targetHandle === c.targetHandle)),
-        ),
-      ),
-    [setEdges],
-  );
-
   // A wire dropped on empty canvas opens the menu with the nodes that can take it.
   const onConnectEnd = useCallback(
     (e: MouseEvent | TouchEvent, c: FinalConnectionState) => {
@@ -397,15 +685,7 @@ export function App() {
     [openMenu],
   );
 
-  /** The first input of `def` that the menu's wire can feed. */
-  const portFor = useCallback(
-    (def: NodeDef, from: MenuState["from"]) => {
-      const shape = from && shapes.get(`${from.node}:${from.handle}`);
-      return shape ? def.inputs.find((p) => canConnect(shape, def, p, CONVERTERS).ok) : undefined;
-    },
-    [shapes],
-  );
-  const menuDefs = useMemo(() => (menu?.from ? NODE_DEFS.filter((d) => portFor(d, menu.from)) : NODE_DEFS), [menu, portFor]);
+  const menuDefs = useMemo(() => NODE_DEFS.filter((d) => !d.hidden && (!menu?.from || portFor(d, menu.from))), [menu, portFor]);
 
   const pickFromMenu = useCallback(
     (type: string) => {
@@ -419,20 +699,22 @@ export function App() {
   );
   const closeMenu = useCallback(() => setMenu(null), []);
 
-  // A workflow drops in next to what's already there; its first node is selected so the inspector shows what to fill in.
+  // A workflow takes over a graph that holds nothing of yours yet; otherwise it drops in under what's there.
+  // Its first node is selected so the inspector shows what to fill in.
   const pickWorkflow = useCallback(
     (id: string) => {
       const w = WORKFLOWS.find((x) => x.id === id);
       if (!menu || !w) return;
       setMenu(null);
-      // Where it was asked for, unless that covers nodes already there: then under them.
+      const current = flow.getNodes();
+      const replace = !hasContent(current);
       const box = (n: { position: { x: number; y: number }; measured?: { width?: number; height?: number } }) => ({
         l: n.position.x,
         t: n.position.y,
         r: n.position.x + (n.measured?.width ?? 2 * NODE_HALF_WIDTH),
         b: n.position.y + (n.measured?.height ?? 160),
       });
-      const existing = flow.getNodes().map(box);
+      const existing = replace ? [] : current.map(box);
       let placed = placeWorkflow(w, menu.at);
       const covers = placed.nodes.map(box).some((a) => existing.some((e) => a.l < e.r && e.l < a.r && a.t < e.b && e.t < a.b));
       if (covers) {
@@ -440,10 +722,16 @@ export function App() {
       }
       const f = toFlow(placed);
       f.nodes[0].selected = true;
-      setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...f.nodes]);
-      setEdges((es) => [...es, ...f.edges]);
+      if (replace) {
+        setNodes(f.nodes);
+        setEdges(f.edges);
+      } else {
+        setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...f.nodes]);
+        setEdges((es) => [...es, ...f.edges]);
+      }
       const first = REGISTRY.get(f.nodes[0].data.type)!;
-      flash(`${w.title}: ${first.type === "input.download" ? "paste a link in the inspector" : first.type === "input.text" ? "type or paste your text" : "drop in your file"}, then Render.`);
+      const todo = first.type === "input.download" ? "paste a link in the inspector" : first.type === "input.text" ? "type or paste your text" : "drop in your file";
+      flash(`${w.title}: ${todo}, then Render.${replace && current.length ? " ⌘Z brings back the old graph." : ""}`);
       setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
     },
     [flash, flow, menu, setEdges, setNodes],
@@ -457,12 +745,17 @@ export function App() {
       const all = [...e.dataTransfer.files];
       const unknown = all.filter((f) => !inputNodeFor(f));
       if (unknown.length) flash(`Toolbox can't open ${unknown.map((f) => f.name).join(", ")}`);
-      // An empty Images node takes all the dropped images at once.
+      // A file dropped onto an input node goes into that node.
+      const onto = (e.target as HTMLElement).closest(".react-flow__node")?.getAttribute("data-id");
+      const ontoNode = onto ? flow.getNode(onto) : undefined;
+      // An empty Images node (or the one dropped onto) takes all the dropped images at once.
       const images = all.filter((f) => inputNodeFor(f) === "input.file");
-      const imagesNode = flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
+      const imagesNode =
+        ontoNode?.data.type === "input.images" ? ontoNode : flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
       if (imagesNode && images.length) setNodeFiles(imagesNode.id, images);
       // Fill empty inputs of the right kind first, then add new ones.
       const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !n.data.params.assetId);
+      if (ontoNode && ontoNode.data.type !== "input.images") empty.unshift(ontoNode);
       let row = 0;
       for (const f of imagesNode && images.length ? all.filter((f) => !images.includes(f)) : all) {
         const type = inputNodeFor(f);
@@ -481,12 +774,44 @@ export function App() {
     [addNode, flash, flow, setNodeFile, setNodeFiles, setParams],
   );
 
+  // ---------------------------------------------------------------- layout
+
   const selected = nodes.find((n) => n.selected);
-  const selectedRt = selected ? runtime[selected.id] : undefined;
   // Like TouchDesigner's background view, for the node picked with its eye button.
   const shownId = nodes.some((n) => n.id === view.preview) ? view.preview : undefined;
   const shown = shownId ? runtime[shownId] : undefined;
   const shownTitle = shownId ? REGISTRY.get(nodes.find((n) => n.id === shownId)!.data.type)?.title : undefined;
+  // The video the shown node is made from, whose playhead the scrubber moves.
+  const scrubbed = useMemo(() => {
+    if (!shownId) return undefined;
+    const seen = new Set<string>();
+    const stack = [shownId];
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const n = nodes.find((x) => x.id === id);
+      if (n && (n.data.type === "input.video" || n.data.type === "input.download") && "at" in n.data.params) return n;
+      for (const e of edges) if (e.target === id) stack.push(e.source);
+    }
+    return undefined;
+  }, [edges, nodes, shownId]);
+
+  const resizeInspector = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = viewRef.current.inspectorHidden ? 0 : viewRef.current.inspectorWidth;
+    const move = (m: PointerEvent) => {
+      const w = startW + startX - m.clientX;
+      setView((v) => (w < 160 ? { ...v, inspectorHidden: true } : { ...v, inspectorHidden: false, inspectorWidth: Math.min(640, Math.max(240, w)) }));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }, []);
 
   // Wires that pass through a converter are dashed and labelled with it; wires carrying video are thicker.
   const displayEdges = useMemo(
@@ -503,11 +828,14 @@ export function App() {
     [edges, nodes, shapes],
   );
 
+  const actions = useMemo(() => ({ setNodeFile, setNodeFiles, togglePreview, saveNode }), [saveNode, setNodeFile, setNodeFiles, togglePreview]);
+  const inspectorWidth = view.inspectorHidden ? 0 : view.inspectorWidth;
+
   return (
     <ShapesContext.Provider value={shapes}>
     <RuntimeContext.Provider value={runtime}>
       <PreviewContext.Provider value={shownId}>
-      <ActionsContext.Provider value={{ setNodeFile, setNodeFiles, togglePreview }}>
+      <ActionsContext.Provider value={actions}>
         <div className="app">
           <header className="topbar">
             <div className="brand">
@@ -526,37 +854,36 @@ export function App() {
             </div>
             <div className="message">{message}</div>
             <div className="group right">
-              <button
-                className={view.backdrop ? "active" : ""}
-                onClick={() => setView((v) => ({ ...v, backdrop: !v.backdrop }))}
-                title="Show the selected node's output behind the graph"
-              >
-                Background
-              </button>
-              <button className={view.panel ? "active" : ""} onClick={() => setView((v) => ({ ...v, panel: !v.panel }))} title="Preview panel under the graph">
-                Panel
-              </button>
+              {update && (
+                <a className="update" href={update.url} target="_blank" rel="noreferrer" title="Opens the download page">
+                  Toolbox {update.version} is out
+                </a>
+              )}
               <button className="help" onClick={() => setTutorial(true)} title="Show the tutorial again">
                 ?
               </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
               {recording ? (
-                <button className="primary rec" onClick={() => {
+                <button
+                  className="primary rec"
+                  onClick={() => {
                     client.stopRecording();
                     webcams.stopRecording();
-                  }} title="Stop recording and write the files">
+                  }}
+                  title="Stop recording and write the files"
+                >
                   Stop
                 </button>
               ) : (
-                <button className="primary" onClick={render} disabled={rendering} title="Render (⌘R)">
+                <button className="primary" onClick={() => void render()} disabled={rendering} title="Render and save what changed (⌘R)">
                   {rendering ? "Rendering…" : "Render"}
                 </button>
               )}
             </div>
           </header>
 
-          <div className="main">
-            <section className={`center${view.panel ? "" : " no-panel"}`}>
+          <div className="main" style={{ gridTemplateColumns: `minmax(0, 1fr) ${inspectorWidth}px` }}>
+            <section className="center">
               <div
                 className="canvas"
                 ref={canvasRef}
@@ -568,10 +895,13 @@ export function App() {
                 onDrop={onDrop}
                 onPointerMove={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}
               >
-                {view.backdrop && shown && (shown.bitmap || shown.text !== undefined) && (
+                {shown && (shown.bitmap || shown.text !== undefined) && (
                   <div className="backdrop">
                     {shown.bitmap ? <Bitmap bitmap={shown.bitmap} className="backdrop-img" /> : <pre className="backdrop-text">{shown.text}</pre>}
-                    <span className="backdrop-label">{shownTitle}</span>
+                    <span className="backdrop-label">
+                      {shownTitle}
+                      {shown.size ? ` · ${shown.size.width}×${shown.size.height}` : ""}
+                    </span>
                   </div>
                 )}
                 <ReactFlow
@@ -598,6 +928,18 @@ export function App() {
                   <Background gap={20} size={1} />
                   <Controls showInteractive={false} />
                 </ReactFlow>
+                {shown && scrubbed && (
+                  <label className="scrub" title="Playhead: the frame every live node previews">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      value={Number(scrubbed.data.params.at ?? 0)}
+                      onChange={(e) => setParams(scrubbed.id, { at: e.target.valueAsNumber })}
+                    />
+                  </label>
+                )}
                 {dropping && <div className="drop">Drop files to add them</div>}
                 {menu && (
                   <NodeMenu
@@ -616,26 +958,17 @@ export function App() {
                   <p className="canvas-hint">Press Tab or right-click to add a node, or pick a ready-made one under Workflows. Drop images, videos, sound, PDFs or text anywhere.</p>
                 )}
               </div>
-              {view.panel && (
-              <div className="preview">
-                <div className="preview-bar">
-                  <strong>{selected ? REGISTRY.get(selected.data.type)?.title : "Preview"}</strong>
-                  <span className="muted">
-                    {selectedRt?.size ? `${selectedRt.size.width}×${selectedRt.size.height}` : selected ? (selectedRt?.error ?? "") : "Select a node to see its output"}
-                  </span>
-                </div>
-                <div className="preview-body">
-                  {selectedRt?.bitmap ? (
-                    <Bitmap bitmap={selectedRt.bitmap} className="preview-canvas" />
-                  ) : (
-                    selectedRt?.text !== undefined && <pre className="preview-text">{selectedRt.text}</pre>
-                  )}
-                </div>
-              </div>
-              )}
             </section>
 
-            <Inspector node={selected} onParams={setParams} />
+            <div className="inspector-wrap">
+              <div
+                className="inspector-resize"
+                onPointerDown={resizeInspector}
+                onDoubleClick={() => setView((v) => ({ ...v, inspectorHidden: !v.inspectorHidden }))}
+                title="Drag to resize the settings panel; double-click to hide or show it"
+              />
+              {!view.inspectorHidden && <Inspector node={selected} onParams={setParams} />}
+            </div>
           </div>
 
           <footer className="tray">
@@ -643,7 +976,14 @@ export function App() {
             {outputs.length === 0 && <span className="muted">Rendered files show up here.</span>}
             {outputs.map((o) => (
               <span key={o.id} className="out-item" title={o.savedTo}>
-                {o.name} <span className="muted">{(o.bytes / 1024).toFixed(0)} KB</span>
+                {bridge ? (
+                  <button className="link" onClick={() => void bridge!.openPath(o.savedTo)} title={`Open ${o.savedTo}`}>
+                    {o.name}
+                  </button>
+                ) : (
+                  o.name
+                )}
+                <span className="muted">{(o.bytes / 1024).toFixed(0)} KB</span>
                 {bridge && (
                   <button className="icon" onClick={() => bridge!.reveal(o.savedTo)}>
                     Show
@@ -651,6 +991,11 @@ export function App() {
                 )}
               </span>
             ))}
+            {outputs.length > 0 && (
+              <button className="icon clear" onClick={() => setOutputs([])} title="Clear this list (the files stay)">
+                Clear
+              </button>
+            )}
           </footer>
           {tutorial && <Tutorial onClose={() => setTutorial(false)} />}
         </div>

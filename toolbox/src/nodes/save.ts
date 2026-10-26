@@ -1,5 +1,13 @@
-import type { FileValue, ImageValue, NodeDef } from "../runtime/types";
+import type { Converter, FileValue, ImageValue, NodeDef, TextValue } from "../runtime/types";
 import { encodeImage } from "./image";
+
+/** The extension for each kind of text. */
+export const TEXT_FILE: Record<string, { ext: string; mime: string }> = {
+  plain: { ext: "txt", mime: "text/plain" },
+  html: { ext: "html", mime: "text/html" },
+  ansi: { ext: "ans", mime: "text/plain" },
+  svg: { ext: "svg", mime: "image/svg+xml" },
+};
 
 const FORMATS: Record<string, { mime: string; ext: string }> = {
   png: { mime: "image/png", ext: "png" },
@@ -10,6 +18,7 @@ const FORMATS: Record<string, { mime: string; ext: string }> = {
 export const saveImage: NodeDef = {
   type: "output.save-image",
   title: "Save image",
+  hidden: true,
   category: "output",
   description: "Encodes the image on Render and saves it. Pick a folder to save without asking each time.",
   inputs: [{ key: "image", label: "Image", type: "image" }],
@@ -39,11 +48,37 @@ export const saveImage: NodeDef = {
   },
 };
 
+/** Lets an image or text wire straight into Save. */
+export const SAVE_CONVERTERS: Converter[] = [
+  {
+    from: "image",
+    to: "file",
+    label: "png",
+    async convert(v) {
+      const bytes = await encodeImage(v as ImageValue, "image/png", 1);
+      const f: FileValue = { kind: "file", name: "image.png", mime: "image/png", bytes };
+      return f;
+    },
+  },
+  {
+    from: "text",
+    to: "file",
+    label: "text",
+    async convert(v) {
+      const t = v as TextValue;
+      const f = TEXT_FILE[t.format ?? "plain"] ?? TEXT_FILE.plain;
+      const file: FileValue = { kind: "file", name: `text.${f.ext}`, mime: f.mime, bytes: new TextEncoder().encode(t.text) };
+      return file;
+    },
+  },
+];
+
 export const saveFile: NodeDef = {
   type: "output.save-file",
-  title: "Save file",
+  title: "Save",
   category: "output",
-  description: "Writes an encoded file (from Encode image and similar) on Render. Leave the name empty to keep the file's own.",
+  description:
+    "Writes what's wired into it on Render: images as PNG, text, sound, PDFs, or files from Encode image and Encode video. Leave the name empty to keep the file's own. Pick a folder to save without asking each time.",
   inputs: [{ key: "file", label: "File", type: "file" }],
   outputs: [{ key: "file", label: "File", type: "file" }],
   params: [{ key: "name", label: "File name", kind: "text" }],

@@ -4,7 +4,8 @@ import type { FromWorker, NodeUpdate, ProgressUpdate, ToWorker } from "./worker"
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
-  files: { nodeId: string; name: string; mime: string; bytes: Uint8Array }[];
+  /** `key` identifies what the file was made from: the same key means the same file. */
+  files: { nodeId: string; name: string; mime: string; bytes: Uint8Array; key?: string }[];
   error?: string;
 }
 
@@ -56,8 +57,8 @@ export class RuntimeClient {
     this.send({ type: "cam-audio", id, blob });
   }
 
-  addAsset(id: string, blob: Blob) {
-    this.send({ type: "asset", id, blob });
+  addAsset(id: string, blob: Blob, path?: string) {
+    this.send({ type: "asset", id, blob, path });
   }
 
   preview(graph: Graph) {

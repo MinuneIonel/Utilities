@@ -7,11 +7,18 @@ interface ToolboxBridge {
   openGraph(): Promise<{ name: string; text: string } | null>;
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
   reveal(path: string): Promise<void>;
+  openPath(path: string): Promise<string>;
+  /** Runs an Edit menu command in the focused text field. */
+  editText(command: string): Promise<void>;
+  /** A newer Toolbox on GitHub, if there is one. */
+  checkUpdate(): Promise<{ version: string; url: string } | null>;
+  /** Where a dropped or chosen file is on disk, or "" if it isn't a file on disk. */
+  pathForFile(file: File): string;
   onMenu(handler: (command: string) => void): void;
   toolsInfo(): Promise<ToolsInfo>;
-  runTool(id: string, tool: NativeTool, args: string[], files: Record<string, Uint8Array>): Promise<ToolResult>;
+  runTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;
   /** Like runTool, but the process reads stdin from writeTool until endTool. */
-  openTool(id: string, tool: NativeTool, args: string[], files: Record<string, Uint8Array>): Promise<ToolResult>;
+  openTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;
   writeTool(id: string, bytes: Uint8Array): Promise<void>;
   endTool(id: string): Promise<void>;
   cancelTool(id: string): Promise<void>;
@@ -19,6 +26,9 @@ interface ToolboxBridge {
 }
 
 export type NativeTool = "ffmpeg" | "yt-dlp";
+
+/** A file for a tool's temp folder: its bytes, or where it already is on disk. */
+export type ToolFile = Uint8Array | { path: string };
 
 export interface ToolsInfo {
   ffmpeg: boolean;
@@ -37,6 +47,19 @@ export interface ToolResult {
 export const bridge: ToolboxBridge | undefined = (window as unknown as { toolbox?: ToolboxBridge }).toolbox;
 
 export const isDesktop = !!bridge;
+
+/** A file from an earlier session, read again from disk (desktop app only). */
+export async function reopenFile(path: string, name: string): Promise<File | null> {
+  if (!bridge || !path) return null;
+  try {
+    const res = await fetch(`app://toolbox/@local/${encodeURIComponent(path)}`);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return new File([blob], name || path.split(/[\\/]/).pop() || "file", { type: blob.type });
+  } catch {
+    return null; // moved or deleted since
+  }
+}
 
 function download(blob: Blob, name: string) {
   const a = document.createElement("a");

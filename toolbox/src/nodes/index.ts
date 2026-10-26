@@ -6,7 +6,7 @@ import { download } from "./download";
 import { fileInput, imagesInput } from "./file";
 import { imageEncode, imageTransform } from "./media";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
-import { saveFile, saveImage } from "./save";
+import { SAVE_CONVERTERS, saveFile, saveImage } from "./save";
 import { diacritics, saveText, textInput } from "./text";
 import { extractAudio, videoEncode, videoInput, webcam } from "./video";
 
@@ -43,7 +43,7 @@ export const NODE_DEFS: NodeDef[] = [
 
 export const REGISTRY: ReadonlyMap<string, NodeDef> = new Map(NODE_DEFS.map((d) => [d.type, d]));
 
-export const CONVERTERS: readonly Converter[] = [...ASCII_CONVERTERS, ...AUDIO_CONVERTERS, ...PDF_CONVERTERS];
+export const CONVERTERS: readonly Converter[] = [...ASCII_CONVERTERS, ...AUDIO_CONVERTERS, ...PDF_CONVERTERS, ...SAVE_CONVERTERS];
 
 /** Which input node takes a dropped file. */
 export function inputNodeFor(file: { type: string; name: string }): string | undefined {

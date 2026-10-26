@@ -14,13 +14,14 @@ export function newNode(type: string, position: { x: number; y: number }): Graph
 export function starterGraph(): Graph {
   const a = newNode("input.file", { x: 40, y: 120 });
   const b = newNode("dither.recipe", { x: 340, y: 120 });
-  const c = newNode("output.save-image", { x: 640, y: 120 });
+  const c = newNode("output.save-file", { x: 640, y: 120 });
+  c.params.name = "dithered";
   return {
     version: 1,
     nodes: [a, b, c],
     edges: [
       { id: newId("e"), source: a.id, sourceHandle: "image", target: b.id, targetHandle: "image" },
-      { id: newId("e"), source: b.id, sourceHandle: "image", target: c.id, targetHandle: "image" },
+      { id: newId("e"), source: b.id, sourceHandle: "image", target: c.id, targetHandle: "file" },
     ],
   };
 }
@@ -205,7 +206,7 @@ export const WORKFLOWS: Workflow[] = [
       chain([
         ["input.text", { text: "Lipeste aici textul fara diacritice." }],
         ["text.diacritics", {}],
-        ["output.save-text", { name: "text-cu-diacritice" }],
+        ["output.save-file", { name: "text-cu-diacritice" }, "file"],
       ]),
   },
   {

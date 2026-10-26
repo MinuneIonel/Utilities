@@ -181,6 +181,8 @@ async function mapNode(
       fps: lead.fps,
       poster,
       audioSource: lead.audioSource,
+      range: lead.range,
+      soundLater: lead.soundLater,
       async *frames(signal) {
         const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
         try {

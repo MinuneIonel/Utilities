@@ -3,13 +3,14 @@
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { audioCodec } from "../nodes/audio";
-import { setNativeTools, type NativeTool, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import { setLocalPath, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
 
 export type ToWorker =
-  | { type: "asset"; id: string; blob: Blob }
+  /** A dropped file, and where it is on disk in the desktop app. */
+  | { type: "asset"; id: string; blob: Blob; path?: string }
   | { type: "run"; reqId: number; mode: "preview" | "render"; graph: Graph }
   | { type: "cancel" }
   /** A webcam frame. `t` is in seconds. */
@@ -38,7 +39,8 @@ export interface NodeUpdate {
   bitmap?: ImageBitmap;
   size?: { width: number; height: number };
   text?: string;
-  file?: { name: string; mime: string; bytes: Uint8Array };
+  /** What a Save node writes on Render, with the cache key of what it was made from. */
+  file?: { name: string; mime: string; bytes: Uint8Array; key?: string };
   /** Name and size of a File output, for the node card. */
   fileInfo?: { name: string; bytes: number };
   /** A short description of a video, audio or document output. */
@@ -58,8 +60,8 @@ export interface ProgressUpdate {
 
 /** Asks the window to run a native tool through the desktop app. */
 export type ToolRequest =
-  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
-  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
+  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
+  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
   | { type: "tool-write"; callId: string; writeId: number; bytes: Uint8Array }
   | { type: "tool-end"; callId: string }
   | { type: "tool-cancel"; callId: string };
@@ -134,7 +136,7 @@ const toolWrites = new Map<number, { resolve(): void; reject(e: Error): void }>(
 let toolWriteN = 0;
 
 /** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
-function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
+function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
   const callId = `t${++toolCallN}`;
   toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
   opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
@@ -162,7 +164,10 @@ const post = (msg: FromWorker, transfer: Transferable[] = []) => (self as Dedica
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
-  if (msg.type === "asset") assets.set(msg.id, msg.blob);
+  if (msg.type === "asset") {
+    assets.set(msg.id, msg.blob);
+    if (msg.path) setLocalPath(msg.blob, msg.path);
+  }
   else if (msg.type === "cancel") {
     renderCancelled = true;
     renderAbort.abort();
@@ -319,7 +324,7 @@ async function report(
     const a = first;
     if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice() };
+      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
       transfer.push(msg.file.bytes.buffer);
     }
   } else if (first?.kind === "document") {
@@ -339,7 +344,7 @@ async function report(
       }
     }
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice() };
+      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
       transfer.push(msg.file.bytes.buffer);
     }
   }

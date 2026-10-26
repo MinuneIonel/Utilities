@@ -1,7 +1,7 @@
 // Electron main process: one window, native menus, and the file access a
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerTools } from "./tools.js";
@@ -77,7 +77,20 @@ function buildMenu() {
         isMac ? { role: "close" } : { role: "quit" },
       ],
     },
-    { role: "editMenu" },
+    {
+      // The graph has its own undo, copy and paste; text fields keep the usual ones (the window decides which).
+      label: "Edit",
+      submenu: [
+        { label: "Undo", accelerator: "CmdOrCtrl+Z", click: () => send("undo") },
+        { label: "Redo", accelerator: isMac ? "Shift+CmdOrCtrl+Z" : "CmdOrCtrl+Y", click: () => send("redo") },
+        { type: "separator" },
+        { label: "Cut", accelerator: "CmdOrCtrl+X", click: () => send("cut") },
+        { label: "Copy", accelerator: "CmdOrCtrl+C", click: () => send("copy") },
+        { label: "Paste", accelerator: "CmdOrCtrl+V", click: () => send("paste") },
+        { label: "Duplicate", accelerator: "CmdOrCtrl+D", click: () => send("duplicate") },
+        { label: "Select All", accelerator: "CmdOrCtrl+A", click: () => send("selectAll") },
+      ],
+    },
     {
       label: "View",
       submenu: [
@@ -103,11 +116,25 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/** `name` in `folder`, or "name (2).ext" and so on when that's taken, so a Render never writes over an earlier file. */
+async function freeName(folder, name) {
+  const ext = path.extname(name);
+  const stem = path.basename(name, ext);
+  for (let n = 1; ; n++) {
+    const p = path.join(folder, n === 1 ? name : `${stem} (${n})${ext}`);
+    try {
+      await access(p);
+    } catch {
+      return p;
+    }
+  }
+}
+
 ipcMain.handle("save-file", async (_e, name, bytes, folder) => {
   let target;
   if (folder) {
     await mkdir(folder, { recursive: true });
-    target = path.join(folder, path.basename(name));
+    target = await freeName(folder, path.basename(name));
   } else {
     const r = await dialog.showSaveDialog(win, { defaultPath: name });
     if (r.canceled || !r.filePath) return null;
@@ -142,12 +169,41 @@ ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
 });
 
 ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
+ipcMain.handle("open-path", (_e, p) => shell.openPath(p));
+
+/** Edit menu commands for text fields, which the window hands back when one has focus. */
+const TEXT_EDITS = new Set(["undo", "redo", "cut", "copy", "paste", "selectAll"]);
+ipcMain.handle("edit-text", (e, command) => {
+  if (TEXT_EDITS.has(command)) e.sender[command]();
+});
+
+/** The newest Toolbox release on GitHub, when it's newer than this app. */
+const RELEASES = "https://api.github.com/repos/MinuneIonel/Utilities/releases?per_page=20";
+const newer = (a, b) => {
+  const x = a.split(".").map(Number);
+  const y = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+ipcMain.handle("check-update", async () => {
+  try {
+    const res = await net.fetch(RELEASES, { headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) return null;
+    const latest = (await res.json()).find((r) => !r.draft && !r.prerelease && /^toolbox-v\d/.test(r.tag_name));
+    const version = latest?.tag_name.replace(/^toolbox-v/, "");
+    return version && newer(version, app.getVersion()) ? { version, url: latest.html_url } : null;
+  } catch {
+    return null; // offline: try again another day
+  }
+});
 
 app.whenReady().then(() => {
   allowCamera();
   registerTools();
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
+    // Files dropped into a graph earlier, read again from where they are on disk.
+    if (pathname.startsWith("/@local/")) return net.fetch(pathToFileURL(decodeURIComponent(pathname.slice("/@local/".length))).toString());
     const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));
     if (!file.startsWith(dist + path.sep)) return new Response("Not found", { status: 404 });
     return net.fetch(pathToFileURL(file).toString());

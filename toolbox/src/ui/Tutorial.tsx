@@ -13,43 +13,24 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    title: "Welcome to Toolbox",
-    body: "Toolbox chains small tools together. Each box is a node, and wires carry images, video, sound, text or PDFs from one node to the next. This tour takes a minute.",
-  },
-  {
-    title: "Start from a workflow",
-    body: "Workflows drop in a whole ready-made chain, like downloading a YouTube video or pulling the sound out of a video. Fill in the first node, then press Render.",
+    title: "Start with a workflow",
+    body: "Toolbox chains small tools: each box is a node, and wires carry images, video, sound, text or PDFs between them. Workflows drop in a ready-made chain, like downloading a video. Press Tab (or right-click) to add a single node.",
     target: [".topbar .workflows"],
   },
   {
-    title: "Add nodes",
-    body: "Press Tab or right-click the canvas to add a single node, and type to search. Drag a wire from an output onto empty canvas to see only the nodes that can take it.",
-    target: [".topbar .add-node"],
-  },
-  {
-    title: "Wire and drop",
-    body: "Drag from a dot on the right of a node to a dot on the left of another to wire them. Drop images, videos, sound, PDFs or text files anywhere here to add them.",
+    title: "Drop your files",
+    body: "Drop images, videos, sound, PDFs or text anywhere here, or onto an input node. Drag from a dot on the right of a node to one on the left of another to wire them.",
     target: [".canvas"],
   },
   {
-    title: "Settings",
-    body: "Select a node to change its settings here. Previews update as you go.",
-    target: [".inspector"],
-  },
-  {
-    title: "See the result",
-    body: "The eye button on a node shows its output large, behind the graph. Background turns that view off and on.",
-    target: [".tnode .preview-toggle", ".topbar .group.right button"],
+    title: "Look and tweak",
+    body: "Select a node to change its settings here; previews update as you go. The eye on a node shows its result large, behind the graph.",
+    target: [".inspector", ".inspector-wrap"],
   },
   {
     title: "Render",
-    body: "Previews are quick and small. Render runs the whole job at full size, and the Save nodes write the files.",
+    body: "Render runs everything at full size and the Save nodes write what changed; the files show up at the bottom. ⌘Z undoes, and the ? button brings this tour back.",
     target: [".topbar .primary"],
-  },
-  {
-    title: "Outputs",
-    body: "Everything you render shows up here, with a button to find it on disk. You can reopen this tour any time from the ? button.",
-    target: [".tray"],
   },
 ];
 

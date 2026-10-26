@@ -26,7 +26,7 @@ export const fileInput: NodeDef = {
 
 export const imagesInput: NodeDef = {
   type: "input.images",
-  title: "Images",
+  title: "Several images",
   category: "input",
   description: "Several images as one sequence, one per second: feed it to Images to PDF for a document, or to Encode video for a slideshow.",
   inputs: [],

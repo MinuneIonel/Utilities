@@ -95,6 +95,15 @@ export function audioArgs(codec: NativeCodec, container: string): string[] {
   return ["-c:a", "aac", "-b:a", "192k"];
 }
 
+/** A part of a file, in seconds. */
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
+/** Input options that read only part of the next input. */
+const rangeArgs = (r?: TimeRange) => (r ? ["-ss", r.start.toFixed(3), "-t", (r.end - r.start).toFixed(3)] : []);
+
 export interface RawInput {
   width: number;
   height: number;
@@ -105,9 +114,9 @@ export interface RawInput {
  * The whole command for raw RGBA frames on stdin, with the sound taken from
  * `audioFile` when there is one.
  */
-export function rawEncodeArgs(input: RawInput, e: Encoder, codec: NativeCodec, container: string, quality: QualityLevel, prores: ProresProfile, audioFile: string | undefined, out: string): string[] {
+export function rawEncodeArgs(input: RawInput, e: Encoder, codec: NativeCodec, container: string, quality: QualityLevel, prores: ProresProfile, audioFile: string | undefined, out: string, audioRange?: TimeRange): string[] {
   const args = ["-hide_banner", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${input.width}x${input.height}`, "-framerate", String(input.fps), "-i", "pipe:0"];
-  if (audioFile) args.push("-i", audioFile, "-map", "0:v:0", "-map", "1:a:0?", "-shortest");
+  if (audioFile) args.push(...rangeArgs(audioRange), "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0?", "-shortest");
   args.push(...encoderArgs(e, quality, prores));
   if (audioFile) args.push(...audioArgs(codec, container));
   if (container === "mp4" || container === "mov") args.push("-movflags", "+faststart");
@@ -116,11 +125,11 @@ export function rawEncodeArgs(input: RawInput, e: Encoder, codec: NativeCodec, c
 }
 
 /** The whole command for a file ffmpeg reads itself, decoding with VideoToolbox when it can. */
-export function fileEncodeArgs(inName: string, hwaccels: ReadonlySet<string>, e: Encoder, codec: NativeCodec, container: string, quality: QualityLevel, prores: ProresProfile, fps: number, audio: boolean, out: string): string[] {
+export function fileEncodeArgs(inName: string, hwaccels: ReadonlySet<string>, e: Encoder, codec: NativeCodec, container: string, quality: QualityLevel, prores: ProresProfile, fps: number, audio: boolean, out: string, range?: TimeRange): string[] {
   const args = ["-hide_banner", "-y"];
   // ffmpeg falls back to software decoding by itself when VideoToolbox can't take the stream.
   if (hwaccels.has("videotoolbox")) args.push("-hwaccel", "videotoolbox");
-  args.push("-i", inName, "-map", "0:v:0");
+  args.push(...rangeArgs(range), "-i", inName, "-map", "0:v:0");
   if (audio) args.push("-map", "0:a:0?");
   if (fps > 0) args.push("-r", String(fps));
   args.push(...encoderArgs(e, quality, prores));
