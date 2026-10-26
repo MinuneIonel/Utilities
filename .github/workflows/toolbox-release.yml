@@ -2,7 +2,8 @@
 # Pull requests that touch the app and manual runs only build (the installers
 # are attached to the run). Pushing a tag like toolbox-v0.2.0, or a manual run
 # with a version filled in, also publishes them on a GitHub Release with the
-# install notes from toolbox/INSTALL.md.
+# install notes from toolbox/INSTALL.md, after toolbox/release-notes/<version>.md
+# when that file exists.
 name: Toolbox release
 
 on:
@@ -64,16 +65,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ inputs.release || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # What's new (toolbox/release-notes/<version>.md, when there is one) above the install steps.
+      - name: Write the release notes
+        run: |
+          v="${VERSION#toolbox-v}"
+          echo "TOOLBOX_VERSION=$v" >> "$GITHUB_ENV"
+          notes="toolbox/release-notes/$v.md"
+          { if [ -f "$notes" ]; then cat "$notes"; echo; fi; cat toolbox/INSTALL.md; } > release-body.md
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release && format('toolbox-v{0}', inputs.release) || github.ref_name }}
+          tag_name: toolbox-v${{ env.TOOLBOX_VERSION }}
           target_commitish: ${{ github.sha }}
-          name: Toolbox ${{ inputs.release && format('toolbox-v{0}', inputs.release) || github.ref_name }}
-          body_path: toolbox/INSTALL.md
+          name: Toolbox ${{ env.TOOLBOX_VERSION }}
+          body_path: release-body.md
           files: dist/*
