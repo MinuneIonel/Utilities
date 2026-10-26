@@ -14,7 +14,7 @@ import {
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, placeWorkflow, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
-import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile } from "./platform";
+import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile, type UpdateInfo } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
 import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
@@ -22,6 +22,7 @@ import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type Nod
 import { Inspector } from "./ui/Inspector";
 import { NodeMenu } from "./ui/NodeMenu";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
+import { UpdateButton } from "./ui/UpdateButton";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 import { Webcams, type CamSpec } from "./ui/webcam";
 import logoUrl from "../build/icon.svg?url";
@@ -151,7 +152,7 @@ export function App() {
   const [dropping, setDropping] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [tutorial, setTutorial] = useState(() => !tutorialSeen());
-  const [update, setUpdate] = useState<{ version: string; url: string } | null>(null);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [view, setView] = useState<View>(() => readStore<View>(VIEW_STORE, { inspectorWidth: 320, inspectorHidden: false }));
   useEffect(() => writeStore(VIEW_STORE, view), [view]);
   const viewRef = useRef(view);
@@ -625,6 +626,17 @@ export function App() {
     addNode: () => openMenu(pointer.current),
     workflows: () => openMenu(undefined, undefined, true),
     tutorial: () => setTutorial(true),
+    checkUpdate: () => {
+      flash("Checking for updates…");
+      bridge?.checkUpdate(true).then(
+        (u) => {
+          writeStore(UPDATE_STORE, { at: Date.now() });
+          setUpdate(u);
+          flash(u ? `Toolbox ${u.version} is out: ${u.canInstall ? "press Update in the top bar" : "download it from the link in the top bar"}.` : "Toolbox is up to date.");
+        },
+        () => flash("Couldn't reach GitHub to check for updates."),
+      );
+    },
     undo,
     redo,
     copy: () => void copy(),
@@ -873,11 +885,7 @@ export function App() {
             </div>
             <div className="message">{message}</div>
             <div className="group right">
-              {update && (
-                <a className="update" href={update.url} target="_blank" rel="noreferrer" title="Opens the download page">
-                  Toolbox {update.version} is out
-                </a>
-              )}
+              {update && <UpdateButton update={update} busy={rendering || recording} onError={flash} />}
               <button className="help" onClick={() => setTutorial(true)} title="Show the tutorial again">
                 ?
               </button>

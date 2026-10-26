@@ -9,7 +9,10 @@ contextBridge.exposeInMainWorld("toolbox", {
   reveal: (p) => ipcRenderer.invoke("reveal", p),
   openPath: (p) => ipcRenderer.invoke("open-path", p),
   editText: (command) => ipcRenderer.invoke("edit-text", command),
-  checkUpdate: () => ipcRenderer.invoke("check-update"),
+  checkUpdate: (strict) => ipcRenderer.invoke("check-update", strict),
+  downloadUpdate: () => ipcRenderer.invoke("update-download"),
+  installUpdate: () => ipcRenderer.invoke("update-install"),
+  onUpdateProgress: (handler) => ipcRenderer.on("update-progress", (_e, fraction) => handler(fraction)),
   /** Where a dropped or chosen file is on disk ("" for files that aren't). */
   pathForFile: (file) => {
     try {

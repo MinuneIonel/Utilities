@@ -5,6 +5,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerTools } from "./tools.js";
+import { registerUpdater } from "./updater.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(here, "../dist");
@@ -110,6 +111,8 @@ function buildMenu() {
       submenu: [
         { label: "Tutorial", click: () => send("tutorial") },
         { label: "Workflows…", click: () => send("workflows") },
+        { type: "separator" },
+        { label: "Check for Updates…", click: () => send("checkUpdate") },
       ],
     },
   ];
@@ -177,29 +180,10 @@ ipcMain.handle("edit-text", (e, command) => {
   if (TEXT_EDITS.has(command)) e.sender[command]();
 });
 
-/** The newest Toolbox release on GitHub, when it's newer than this app. */
-const RELEASES = "https://api.github.com/repos/MinuneIonel/Utilities/releases?per_page=20";
-const newer = (a, b) => {
-  const x = a.split(".").map(Number);
-  const y = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
-  return false;
-};
-ipcMain.handle("check-update", async () => {
-  try {
-    const res = await net.fetch(RELEASES, { headers: { Accept: "application/vnd.github+json" } });
-    if (!res.ok) return null;
-    const latest = (await res.json()).find((r) => !r.draft && !r.prerelease && /^toolbox-v\d/.test(r.tag_name));
-    const version = latest?.tag_name.replace(/^toolbox-v/, "");
-    return version && newer(version, app.getVersion()) ? { version, url: latest.html_url } : null;
-  } catch {
-    return null; // offline: try again another day
-  }
-});
-
 app.whenReady().then(() => {
   allowCamera();
   registerTools();
+  registerUpdater(() => win);
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
     // Files dropped into a graph earlier, read again from where they are on disk.
