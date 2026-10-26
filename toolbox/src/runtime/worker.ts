@@ -22,10 +22,17 @@ export type ToWorker =
   /** The microphone's recording, sent after Stop (none if recording it failed). */
   | { type: "cam-audio"; id: string; blob?: Blob }
   /** Which native tools the desktop app has (none in a browser). */
-  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; encoders?: string[]; hwaccels?: string[] }
+  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; sips?: boolean; encoders?: string[]; hwaccels?: string[] }
   | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string };
+
+export interface SavedFile {
+  name: string;
+  mime: string;
+  bytes: Uint8Array;
+  key?: string;
+}
 
 export interface NodeUpdate {
   type: "node";
@@ -40,7 +47,9 @@ export interface NodeUpdate {
   size?: { width: number; height: number };
   text?: string;
   /** What a Save node writes on Render, with the cache key of what it was made from. */
-  file?: { name: string; mime: string; bytes: Uint8Array; key?: string };
+  file?: SavedFile;
+  /** A Save node fed a list writes several. */
+  files?: SavedFile[];
   /** Name and size of a File output, for the node card. */
   fileInfo?: { name: string; bytes: number };
   /** A short description of a video, audio or document output. */
@@ -186,11 +195,13 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     cameras.get(msg.id)?.setSound(msg.blob);
   } else if (msg.type === "tools") {
     const { ffmpeg, ytdlp } = msg;
+    const sips = !!msg.sips;
     setNativeTools(
-      ffmpeg || ytdlp
+      ffmpeg || ytdlp || sips
         ? {
             ffmpeg,
             ytdlp,
+            sips,
             encoders: new Set(msg.encoders ?? []),
             hwaccels: new Set(msg.hwaccels ?? []),
             run: (tool, args, files, opts = {}) => new Promise((resolve, reject) => void callTool("tool-run", tool, args, files, opts, { resolve, reject })),
@@ -311,7 +322,7 @@ async function report(
   if (first?.kind === "video") {
     const v = first;
     const parts = [`${v.width}×${v.height}`];
-    if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} pages` : `${v.duration.toFixed(1)} s`);
+    if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} item${v.duration === 1 ? "" : "s"}` : `${v.duration.toFixed(1)} s`);
     else if (v.duration === 0 && !v.origin) parts.push("live");
     msg.info = parts.join(" · ");
     first = v.poster;
@@ -333,6 +344,7 @@ async function report(
     if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {
     msg.fileInfo = { name: first.name, bytes: first.bytes.byteLength };
+    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + f.bytes.byteLength, 0))}`;
     // Show encoded images as they decode, so compression artefacts are visible.
     if (changed && first.mime.startsWith("image/")) {
       try {
@@ -344,8 +356,8 @@ async function report(
       }
     }
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
-      transfer.push(msg.file.bytes.buffer);
+      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, bytes: f.bytes.slice(), key }));
+      for (const f of msg.files) transfer.push(f.bytes.buffer);
     }
   }
   post(msg, transfer);

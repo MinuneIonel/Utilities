@@ -126,6 +126,7 @@ export class RuntimeClient {
     if (msg.type === "node") {
       const r = this.renders.get(msg.reqId);
       if (r && msg.file) r.files.push({ nodeId: msg.id, ...msg.file });
+      if (r && msg.files) for (const f of msg.files) r.files.push({ nodeId: msg.id, ...f });
       this.onUpdate(msg);
       return;
     }

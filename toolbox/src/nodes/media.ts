@@ -131,7 +131,7 @@ export const imageEncode: NodeDef = {
   type: "media.encode",
   title: "Encode image",
   category: "image",
-  description: "Media Lab's encoders (MozJPEG, WebP, AVIF, oxipng PNG), with an optional size limit. Feed it to Save file.",
+  description: "Media Lab's encoders (MozJPEG, WebP, AVIF, oxipng PNG), with an optional size limit. Runs on each image of a list. Feed it to Save.",
   inputs: [{ key: "image", label: "Image", type: "image" }],
   outputs: [{ key: "file", label: "File", type: "file" }],
   params: [
@@ -160,6 +160,7 @@ export const imageEncode: NodeDef = {
     return true;
   },
   kind: "job",
+  perItem: true,
   async run(inputs, params) {
     const src = inputs.image as ImageValue;
     const r = await (await engine()).processImage(src, { ...job(params, src.width, src.height), crop: undefined, rotate: 0, flipH: false, flipV: false, resize: { mode: "none" } });

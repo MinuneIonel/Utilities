@@ -26,6 +26,8 @@ function findFfmpeg() {
 }
 
 const ffmpegPath = findFfmpeg();
+/** macOS's own image converter, for iPhone photos (HEIC) that Chromium can't decode. */
+const sipsPath = process.platform === "darwin" && existsSync("/usr/bin/sips") ? "/usr/bin/sips" : null;
 const ytdlpHome = () => path.join(app.getPath("userData"), "bin", exe("yt-dlp"));
 
 const YTDLP_ASSET = { darwin: "yt-dlp_macos", linux: "yt-dlp_linux", win32: "yt-dlp.exe" }[process.platform];
@@ -153,6 +155,7 @@ async function run(sender, id, tool, args, files, stdin = false) {
   };
   let bin;
   if (tool === "ffmpeg") bin = ffmpegPath;
+  else if (tool === "sips") bin = sipsPath;
   else if (tool === "yt-dlp") {
     bin = await getYtdlp(report);
     if (ffmpegPath) args = ["--ffmpeg-location", ffmpegPath, ...args];
@@ -231,7 +234,7 @@ async function runTool(sender, id, tool, args, files) {
 }
 
 export function registerTools() {
-  ipcMain.handle("tools-info", async () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET, ...(await ffmpegCaps()) }));
+  ipcMain.handle("tools-info", async () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET, sips: !!sipsPath, ...(await ffmpegCaps()) }));
   ipcMain.handle("tool-run", (e, id, tool, args, files) => runTool(e.sender, id, tool, args, files));
   // A job fed through stdin: tool-open starts it and resolves when it exits; tool-write and tool-end feed it.
   ipcMain.handle("tool-open", (e, id, tool, args, files) => run(e.sender, id, tool, args, files, true).finally(() => stopped.delete(id)));

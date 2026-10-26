@@ -29,7 +29,7 @@ function statusLine(rt: NodeRuntime | undefined): string {
   }
   if (rt.savedTo) return `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
   if (rt.status === "waiting" || rt.status === "error" || rt.status === "skipped") return rt.error ?? "";
-  if (rt.fileInfo) return `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
+  if (rt.fileInfo) return rt.info ?? `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
   if (rt.info) return rt.status === "cached" ? `${rt.info} · cached` : rt.info;
   const size = rt.size
     ? `${rt.size.width}×${rt.size.height}`

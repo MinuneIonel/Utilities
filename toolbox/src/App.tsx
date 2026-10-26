@@ -545,18 +545,33 @@ export function App() {
       if (result.error) flash(result.error);
       let unchanged = 0;
       let saved = 0;
-      for (const f of result.files) {
-        if (f.nodeId !== only && f.key && savedKeys.current.get(f.nodeId) === f.key) {
-          unchanged++;
+      const byNode = new Map<string, typeof result.files>();
+      for (const f of result.files) byNode.set(f.nodeId, [...(byNode.get(f.nodeId) ?? []), f]);
+      for (const [nodeId, files] of byNode) {
+        const key = files[0].key;
+        if (nodeId !== only && key && savedKeys.current.get(nodeId) === key) {
+          unchanged += files.length;
           continue;
         }
-        const node = g.nodes.find((n) => n.id === f.nodeId);
-        const where = await saveFile(f.name, f.mime, f.bytes, node?.params.folder ? String(node.params.folder) : undefined);
-        if (!where) continue;
-        saved++;
-        if (f.key) savedKeys.current.set(f.nodeId, f.key);
-        setOutputs((o) => [{ id: newId("o"), name: where.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: where }, ...o].slice(0, 30));
-        setRuntime((prev) => ({ ...prev, [f.nodeId]: { ...prev[f.nodeId], savedTo: where } }));
+        const node = g.nodes.find((n) => n.id === nodeId);
+        let folder = node?.params.folder ? String(node.params.folder) : undefined;
+        // A batch goes into one folder, asked for once, rather than a save dialog per file.
+        if (!folder && files.length > 1 && bridge) {
+          folder = (await bridge.chooseFolder()) ?? undefined;
+          if (!folder) continue;
+        }
+        let last = "";
+        for (const f of files) {
+          const where = await saveFile(f.name, f.mime, f.bytes, folder);
+          if (!where) continue;
+          saved++;
+          last = where;
+          setOutputs((o) => [{ id: newId("o"), name: where.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: where }, ...o].slice(0, 30));
+        }
+        if (!last) continue;
+        if (key) savedKeys.current.set(nodeId, key);
+        const savedTo = files.length > 1 ? `${files.length} files in ${last.split(/[\\/]/).slice(-2, -1)[0] ?? "the folder"}` : last;
+        setRuntime((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
       }
       if (result.error) return;
       if (unchanged && !saved) flash("Nothing changed since the last save. Press Save on a Save node to write it again.");
@@ -730,7 +745,11 @@ export function App() {
         setEdges((es) => [...es, ...f.edges]);
       }
       const first = REGISTRY.get(f.nodes[0].data.type)!;
-      const todo = first.type === "input.download" ? "paste a link in the inspector" : first.type === "input.text" ? "type or paste your text" : "drop in your file";
+      const todo =
+        first.type === "input.download" ? "paste a link in the inspector"
+        : first.type === "input.text" ? "type or paste your text"
+        : first.type === "input.images" ? "drop in your photos"
+        : "drop in your file";
       flash(`${w.title}: ${todo}, then Render.${replace && current.length ? " ⌘Z brings back the old graph." : ""}`);
       setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
     },

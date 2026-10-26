@@ -25,7 +25,7 @@ interface ToolboxBridge {
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
 }
 
-export type NativeTool = "ffmpeg" | "yt-dlp";
+export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
 
 /** A file for a tool's temp folder: its bytes, or where it already is on disk. */
 export type ToolFile = Uint8Array | { path: string };
@@ -33,6 +33,7 @@ export type ToolFile = Uint8Array | { path: string };
 export interface ToolsInfo {
   ffmpeg: boolean;
   ytdlp: boolean;
+  sips?: boolean;
   /** ffmpeg's encoders and hardware decoders, e.g. prores_videotoolbox and videotoolbox. */
   encoders?: string[];
   hwaccels?: string[];

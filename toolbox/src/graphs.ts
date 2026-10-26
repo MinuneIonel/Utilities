@@ -161,6 +161,29 @@ export const WORKFLOWS: Workflow[] = [
         ["output.save-file", {}],
       ]),
   },
+  {
+    id: "compress-photos",
+    title: "Compress many photos",
+    description: "Drop in a pile of photos and save each as a JPEG under 500 KB, into one folder.",
+    build: () =>
+      chain([
+        ["input.images", {}],
+        ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "watermark-photos",
+    title: "Watermark photos",
+    description: "Drop in photos, type your name, and save each with it in the corner.",
+    build: () =>
+      chain([
+        ["input.images", {}],
+        ["image.overlay", {}],
+        ["media.encode", { format: "jpeg", quality: 88 }],
+        ["output.save-file", {}],
+      ]),
+  },
   { id: "dither", title: "Dither an image", description: "Drop in an image, pick a look, save a PNG.", build: starterGraph },
   {
     id: "video-ascii",

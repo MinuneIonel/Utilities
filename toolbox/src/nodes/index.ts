@@ -5,6 +5,7 @@ import { ditherRecipe } from "./dither";
 import { download } from "./download";
 import { fileInput, imagesInput } from "./file";
 import { imageEncode, imageTransform } from "./media";
+import { overlay } from "./overlay";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
 import { SAVE_CONVERTERS, saveFile, saveImage } from "./save";
 import { diacritics, saveText, textInput } from "./text";
@@ -20,6 +21,7 @@ export const NODE_DEFS: NodeDef[] = [
   pdfInput,
   textInput,
   imageTransform,
+  overlay,
   ditherRecipe,
   asciiConvert,
   asciiRender,
@@ -50,7 +52,7 @@ export function inputNodeFor(file: { type: string; name: string }): string | und
   const t = file.type;
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (t === "application/pdf" || ext === "pdf") return "input.pdf";
-  if (t.startsWith("image/")) return "input.file";
+  if (t.startsWith("image/") || ["heic", "heif"].includes(ext)) return "input.file";
   if (t.startsWith("video/") || ["mp4", "m4v", "mov", "webm", "mkv"].includes(ext)) return "input.video";
   if (t.startsWith("audio/") || ["mp3", "wav", "flac", "m4a", "ogg", "opus", "aac"].includes(ext)) return "input.audio";
   if (t.startsWith("text/") || ["txt", "md", "csv", "srt"].includes(ext)) return "input.text";
@@ -59,8 +61,8 @@ export function inputNodeFor(file: { type: string; name: string }): string | und
 
 /** File chooser filter for each input node. */
 export const INPUT_ACCEPT: Record<string, string> = {
-  "input.file": "image/*",
-  "input.images": "image/*",
+  "input.file": "image/*,.heic,.heif",
+  "input.images": "image/*,.heic,.heif",
   "input.video": "video/*,.mkv",
   "input.audio": "audio/*",
   "input.pdf": "application/pdf,.pdf",

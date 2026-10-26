@@ -103,7 +103,7 @@ export function outputShapes(graph: Graph, registry: ReadonlyMap<string, NodeDef
   for (const node of order) {
     const def = registry.get(node.type);
     if (!def) continue;
-    const mapped = def.kind === "frame" && def.inputs.some((p) => {
+    const mapped = (def.kind === "frame" || !!def.perItem) && def.inputs.some((p) => {
       if (p.type === "video" || p.sequence) return false;
       const e = graph.edges.find((x) => x.target === node.id && x.targetHandle === p.key);
       return !!e && !!shapes.get(`${e.source}:${e.sourceHandle}`)?.seq;
@@ -118,7 +118,7 @@ export function outputShapes(graph: Graph, registry: ReadonlyMap<string, NodeDef
 /** Whether an output of this shape can feed this input, and the converter it would need. */
 export function canConnect(from: Shape, target: NodeDef, port: PortDef, converters: readonly Converter[]): { ok: boolean; converter?: Converter } {
   const want: PortType = port.type === "video" ? "image" : port.type;
-  if (from.seq && port.type !== "video" && !port.sequence && target.kind !== "frame") return { ok: false };
+  if (from.seq && port.type !== "video" && !port.sequence && target.kind !== "frame" && !target.perItem) return { ok: false };
   if (!from.seq && port.type === "video") return { ok: false };
   if (from.type === want) return { ok: true };
   const converter = findConverter(converters, from.type, want);
@@ -170,7 +170,7 @@ async function mapNode(
       if (poster) out[port.key] = poster;
       continue;
     }
-    const of = poster.kind === "image" || poster.kind === "grid" ? poster.kind : "text";
+    const of = poster.kind === "image" || poster.kind === "grid" || poster.kind === "file" ? poster.kind : "text";
     const scale = poster.kind === "image" ? (poster.scale ?? 1) : 1;
     out[port.key] = {
       kind: "video",
@@ -191,7 +191,7 @@ async function mapNode(
             if (steps.some((s) => s.done)) return;
             const items = steps.map((s) => s.value as FrameItem);
             const res = await runOn(items.map((f) => f.value), frameCtx);
-            yield { value: res[port.key], timestamp: items[0].timestamp, duration: items[0].duration };
+            yield { value: res[port.key], timestamp: items[0].timestamp, duration: items[0].duration, name: items[0].name };
           }
         } finally {
           await Promise.all(its.map((it) => it.return?.()));

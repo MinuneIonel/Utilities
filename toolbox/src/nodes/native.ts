@@ -3,7 +3,7 @@
 // browser tab there are none, and nodes fall back to ffmpeg.wasm or explain why.
 import type { FfmpegLike } from "../../../audio/src/engine";
 
-export type NativeTool = "ffmpeg" | "yt-dlp";
+export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
 
 export interface ToolResult {
   code: number;
@@ -45,6 +45,8 @@ export interface ToolStream {
 export interface NativeTools {
   ffmpeg: boolean;
   ytdlp: boolean;
+  /** macOS's image converter, which reads iPhone (HEIC) photos. */
+  sips: boolean;
   /** ffmpeg's encoders and hardware decoders (h264_videotoolbox, videotoolbox, …). */
   encoders: ReadonlySet<string>;
   hwaccels: ReadonlySet<string>;

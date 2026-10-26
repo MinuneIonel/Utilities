@@ -37,6 +37,8 @@ export interface FileValue {
   name: string;
   mime: string;
   bytes: Uint8Array;
+  /** Every file a Save node writes when it was fed a list (this file is the first of them). */
+  batch?: FileValue[];
 }
 
 /** One frame of a video, at its place in time (seconds). */
@@ -44,6 +46,8 @@ export interface FrameItem {
   value: Value;
   timestamp: number;
   duration: number;
+  /** The file it came from, for a list of images, so a batch keeps their names. */
+  name?: string;
 }
 
 /**
@@ -53,7 +57,7 @@ export interface FrameItem {
 export interface VideoValue {
   kind: "video";
   /** What each frame is. Image for real video; grid or text after e.g. ASCII convert. */
-  of: "image" | "grid" | "text";
+  of: "image" | "grid" | "text" | "file";
   /** Full-size frame size. */
   width: number;
   height: number;
@@ -171,6 +175,8 @@ export interface NodeDef {
   visible?(key: string, params: Params): boolean;
   /** frame = runs during live preview; job = runs only on Render. */
   kind: "frame" | "job";
+  /** A job node that, fed a list (Several images), runs once per item on Render, like a frame node does. */
+  perItem?: boolean;
   /** Output nodes whose File result the window writes to disk after Render. */
   saves?: boolean;
   /** Kept so older graphs still open, but no longer offered in the Add node menu. */
