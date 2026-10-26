@@ -38,5 +38,5 @@ If it doesn't start: on Ubuntu 22.04 and newer install FUSE with `sudo apt insta
 
 - ffmpeg comes inside the app. The Download node fetches yt-dlp the first time you use it and keeps it up to date, since sites like YouTube change often.
 - iPhone photos (HEIC) open in the Mac app. On Windows and Linux, export them as JPEG first.
-- The app says in its top bar when a newer version is out; download it from the same page.
+- Toolbox updates itself: when a newer version is out, press **Update** in its top bar, then **Restart to update**. Your graph stays as it was. On a Mac this works once Toolbox is in Applications.
 - ProRes encodes on Apple Silicon's media engine on a Mac and in software elsewhere. HEVC uses an NVIDIA, Intel or AMD GPU on Windows when there is one, otherwise software.

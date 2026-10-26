@@ -10,8 +10,14 @@ interface ToolboxBridge {
   openPath(path: string): Promise<string>;
   /** Runs an Edit menu command in the focused text field. */
   editText(command: string): Promise<void>;
-  /** A newer Toolbox on GitHub, if there is one. */
-  checkUpdate(): Promise<{ version: string; url: string } | null>;
+  /** A newer Toolbox on GitHub, if there is one. Offline it says there isn't, unless `strict`, which rejects. */
+  checkUpdate(strict?: boolean): Promise<UpdateInfo | null>;
+  /** Downloads the update found by checkUpdate and gets it ready; resolves with its version. */
+  downloadUpdate(): Promise<string>;
+  /** Quits, puts the downloaded update in place and opens Toolbox again. */
+  installUpdate(): Promise<void>;
+  /** Download progress, 0–1, or -1 while it's unpacked and checked. */
+  onUpdateProgress(handler: (fraction: number) => void): void;
   /** Where a dropped or chosen file is on disk, or "" if it isn't a file on disk. */
   pathForFile(file: File): string;
   onMenu(handler: (command: string) => void): void;
@@ -23,6 +29,14 @@ interface ToolboxBridge {
   endTool(id: string): Promise<void>;
   cancelTool(id: string): Promise<void>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
+}
+
+export interface UpdateInfo {
+  version: string;
+  /** The release page, for downloading by hand. */
+  url: string;
+  /** Whether this copy can update itself (not when it runs from the .dmg, say). */
+  canInstall: boolean;
 }
 
 export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
