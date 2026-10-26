@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Toolbox: wire the Utilities tools together as a node graph",
   "type": "module",
   "main": "electron/main.js",
