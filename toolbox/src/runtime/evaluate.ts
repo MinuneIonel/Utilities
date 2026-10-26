@@ -103,7 +103,7 @@ export function outputShapes(graph: Graph, registry: ReadonlyMap<string, NodeDef
   for (const node of order) {
     const def = registry.get(node.type);
     if (!def) continue;
-    const mapped = def.kind === "frame" && def.inputs.some((p) => {
+    const mapped = (def.kind === "frame" || !!def.perItem) && def.inputs.some((p) => {
       if (p.type === "video" || p.sequence) return false;
       const e = graph.edges.find((x) => x.target === node.id && x.targetHandle === p.key);
       return !!e && !!shapes.get(`${e.source}:${e.sourceHandle}`)?.seq;
@@ -118,7 +118,7 @@ export function outputShapes(graph: Graph, registry: ReadonlyMap<string, NodeDef
 /** Whether an output of this shape can feed this input, and the converter it would need. */
 export function canConnect(from: Shape, target: NodeDef, port: PortDef, converters: readonly Converter[]): { ok: boolean; converter?: Converter } {
   const want: PortType = port.type === "video" ? "image" : port.type;
-  if (from.seq && port.type !== "video" && !port.sequence && target.kind !== "frame") return { ok: false };
+  if (from.seq && port.type !== "video" && !port.sequence && target.kind !== "frame" && !target.perItem) return { ok: false };
   if (!from.seq && port.type === "video") return { ok: false };
   if (from.type === want) return { ok: true };
   const converter = findConverter(converters, from.type, want);
@@ -170,7 +170,7 @@ async function mapNode(
       if (poster) out[port.key] = poster;
       continue;
     }
-    const of = poster.kind === "image" || poster.kind === "grid" ? poster.kind : "text";
+    const of = poster.kind === "image" || poster.kind === "grid" || poster.kind === "file" ? poster.kind : "text";
     const scale = poster.kind === "image" ? (poster.scale ?? 1) : 1;
     out[port.key] = {
       kind: "video",
@@ -181,6 +181,8 @@ async function mapNode(
       fps: lead.fps,
       poster,
       audioSource: lead.audioSource,
+      range: lead.range,
+      soundLater: lead.soundLater,
       async *frames(signal) {
         const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
         try {
@@ -189,7 +191,7 @@ async function mapNode(
             if (steps.some((s) => s.done)) return;
             const items = steps.map((s) => s.value as FrameItem);
             const res = await runOn(items.map((f) => f.value), frameCtx);
-            yield { value: res[port.key], timestamp: items[0].timestamp, duration: items[0].duration };
+            yield { value: res[port.key], timestamp: items[0].timestamp, duration: items[0].duration, name: items[0].name };
           }
         } finally {
           await Promise.all(its.map((it) => it.return?.()));
@@ -248,97 +250,115 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
     onNode?.(id, r);
   };
 
-  for (const node of topoSort(graph)) {
-    if (cancelled?.()) break;
+  const order = topoSort(graph);
+  for (const node of order) {
     const def = registry.get(node.type);
-    if (!def) {
-      finish(node.id, { status: "error", outputs: {}, error: `Unknown node type ${node.type}` });
-      continue;
-    }
-
-    const inputs: Record<string, Value | undefined> = {};
-    const inputKeys: string[] = [];
-    const toConvert: [string, Converter, Value][] = [];
-    const seqKeys: string[] = [];
-    const frameConvs: Record<string, Converter | undefined> = {};
-    let missing: string | undefined;
-    if (def.live) live.add(node.id);
-    for (const port of def.inputs) {
-      const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
-      if (edge && live.has(edge.source)) live.add(node.id);
-      const upstream = edge && results.get(edge.source);
-      const value = edge && upstream?.outputs[edge.sourceHandle];
-      if (!value || !upstream?.key) {
-        if (!edge && port.optional) continue;
-        missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
-        continue;
-      }
-      const from = shapeOf(value);
-      const check = canConnect(from, def, port, converters);
-      if (!check.ok) {
-        missing ??= from.seq
-          ? `${def.title} takes a single ${port.type}, not a video`
-          : port.type === "video"
-            ? `Needs a video`
-            : `Can't turn ${from.type} into ${port.type}`;
-        continue;
-      }
-      const conv = check.converter;
-      // Mapped over every frame: a video into a frame node's single-value input.
-      const mapped = from.seq && port.type !== "video" && !port.sequence;
-      if (mapped) {
-        seqKeys.push(port.key);
-        frameConvs[port.key] = conv;
-        inputs[port.key] = value;
-      } else if (conv) {
-        // Converted only if the node actually runs (not on a cache hit).
-        toConvert.push([port.key, conv, value]);
-      } else inputs[port.key] = value;
-      inputKeys.push(`${port.key}=${upstream.key}:${edge.sourceHandle}${conv ? `>${port.type}` : ""}`);
-    }
-    if (missing) {
-      finish(node.id, { status: "waiting", outputs: {}, error: missing });
-      continue;
-    }
-
-    const key = hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, { ...ctx, nodeId: node.id }) ?? "", ...inputKeys].join("|"));
-
-    if (def.kind === "job" && ctx.mode === "preview") {
-      const last = cache.lastRender.get(node.id);
-      if (last) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key });
-      else finish(node.id, { status: "skipped", outputs: {}, error: "Render to see" });
-      continue;
-    }
-
-    const hit = cache.get(key);
-    if (hit) {
-      if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs: hit });
-      finish(node.id, { status: "cached", outputs: hit, key });
-      continue;
-    }
-
-    const t0 = Date.now();
-    onStart?.(node.id);
-    const nodeCtx: RunContext = { ...ctx, nodeId: node.id, progress: (f, label) => onProgress?.(node.id, f, label) };
-    try {
-      for (const [k, conv, v] of toConvert) {
-        // A video into a sequence input (or a video port) converts frame by frame.
-        if (v.kind === "video") inputs[k] = convertVideo(v, conv, await conv.convert(v.poster));
-        else inputs[k] = await conv.convert(v);
-      }
-      const outputs = seqKeys.length
-        ? await mapNode(def, node.params, inputs, seqKeys, frameConvs, nodeCtx)
-        : await def.run(inputs, node.params, nodeCtx);
-      if (!live.has(node.id)) cache.set(key, outputs);
-      if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
-      finish(node.id, { status: "ok", outputs, key, ms: Date.now() - t0 });
-    } catch (err) {
-      if (ctx.signal?.aborted) {
-        finish(node.id, { status: "error", outputs: {}, error: "Cancelled" });
-        break;
-      }
-      finish(node.id, { status: "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
-    }
+    if (def?.live || graph.edges.some((e) => e.target === node.id && live.has(e.source))) live.add(node.id);
   }
+  let stopped = false;
+  const tasks = new Map<string, Promise<void>>();
+  for (const node of order) {
+    const sources = graph.edges.filter((e) => e.target === node.id).map((e) => tasks.get(e.source));
+    const task = (async () => {
+      await Promise.all(sources);
+      if (stopped || cancelled?.()) {
+        stopped = true;
+        return;
+      }
+      const def = registry.get(node.type);
+      if (!def) {
+        finish(node.id, { status: "error", outputs: {}, error: `Unknown node type ${node.type}` });
+        return;
+      }
+
+      const inputs: Record<string, Value | undefined> = {};
+      const inputKeys: string[] = [];
+      const toConvert: [string, Converter, Value][] = [];
+      const seqKeys: string[] = [];
+      const frameConvs: Record<string, Converter | undefined> = {};
+      let missing: string | undefined;
+      for (const port of def.inputs) {
+        const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
+        const upstream = edge && results.get(edge.source);
+        const value = edge && upstream?.outputs[edge.sourceHandle];
+        if (!value || !upstream?.key) {
+          if (!edge && port.optional) continue;
+          missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
+          continue;
+        }
+        const from = shapeOf(value);
+        const check = canConnect(from, def, port, converters);
+        if (!check.ok) {
+          missing ??= from.seq
+            ? `${def.title} takes a single ${port.type}, not a video`
+            : port.type === "video"
+              ? `Needs a video`
+              : `Can't turn ${from.type} into ${port.type}`;
+          continue;
+        }
+        const conv = check.converter;
+        // Mapped over every frame: a video into a frame node's single-value input.
+        const mapped = from.seq && port.type !== "video" && !port.sequence;
+        if (mapped) {
+          seqKeys.push(port.key);
+          frameConvs[port.key] = conv;
+          inputs[port.key] = value;
+        } else if (conv) {
+          // Converted only if the node actually runs (not on a cache hit).
+          toConvert.push([port.key, conv, value]);
+        } else inputs[port.key] = value;
+        inputKeys.push(`${port.key}=${upstream.key}:${edge.sourceHandle}${conv ? `>${port.type}` : ""}`);
+      }
+      if (missing) {
+        finish(node.id, { status: "waiting", outputs: {}, error: missing });
+        return;
+      }
+
+      const key = hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, { ...ctx, nodeId: node.id }) ?? "", ...inputKeys].join("|"));
+
+      if (def.kind === "job" && ctx.mode === "preview") {
+        const last = cache.lastRender.get(node.id);
+        if (last) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key });
+        else finish(node.id, { status: "skipped", outputs: {}, error: "Render to see" });
+        return;
+      }
+
+      const hit = cache.get(key);
+      if (hit) {
+        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs: hit });
+        finish(node.id, { status: "cached", outputs: hit, key });
+        return;
+      }
+
+      const t0 = Date.now();
+      onStart?.(node.id);
+      const nodeCtx: RunContext = { ...ctx, nodeId: node.id, progress: (f, label) => onProgress?.(node.id, f, label) };
+      try {
+        for (const [k, conv, v] of toConvert) {
+          // A video into a sequence input (or a video port) converts frame by frame.
+          if (v.kind === "video") inputs[k] = convertVideo(v, conv, await conv.convert(v.poster));
+          else inputs[k] = await conv.convert(v);
+        }
+        const outputs = seqKeys.length
+          ? await mapNode(def, node.params, inputs, seqKeys, frameConvs, nodeCtx)
+          : await def.run(inputs, node.params, nodeCtx);
+        if (!live.has(node.id)) cache.set(key, outputs);
+        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
+        finish(node.id, { status: "ok", outputs, key, ms: Date.now() - t0 });
+      } catch (err) {
+        if (ctx.signal?.aborted) {
+          finish(node.id, { status: "error", outputs: {}, error: "Cancelled" });
+          stopped = true;
+          return;
+        }
+        finish(node.id, { status: "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    tasks.set(node.id, task);
+    // A recording runs every node after the webcam at once, so two encoders both see every frame;
+    // everything else runs one node at a time.
+    if (!(ctx.mode === "render" && live.has(node.id))) await task;
+  }
+  await Promise.all(tasks.values());
   return results;
 }

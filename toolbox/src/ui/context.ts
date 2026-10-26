@@ -35,9 +35,11 @@ export interface Actions {
   setNodeFiles(nodeId: string, files: File[]): void;
   /** Shows this node's output behind the graph, or stops showing it. */
   togglePreview(nodeId: string): void;
+  /** Renders what feeds a Save node and saves it. */
+  saveNode(nodeId: string): void;
 }
 
-export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {} });
+export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {}, saveNode: () => {} });
 
 /** The node whose output fills the background, if any. */
 export const PreviewContext = createContext<string | undefined>(undefined);

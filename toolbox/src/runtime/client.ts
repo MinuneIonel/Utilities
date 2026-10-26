@@ -4,7 +4,8 @@ import type { FromWorker, NodeUpdate, ProgressUpdate, ToWorker } from "./worker"
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
-  files: { nodeId: string; name: string; mime: string; bytes: Uint8Array }[];
+  /** `key` identifies what the file was made from: the same key means the same file. */
+  files: { nodeId: string; name: string; mime: string; bytes: Uint8Array; key?: string }[];
   error?: string;
 }
 
@@ -47,8 +48,17 @@ export class RuntimeClient {
     this.send({ type: "cam-stop" });
   }
 
-  addAsset(id: string, blob: Blob) {
-    this.send({ type: "asset", id, blob });
+  /** A camera's recording starts; with sound, its file follows through camAudio after Stop. */
+  camRecording(id: string, sound: boolean) {
+    this.send({ type: "cam-rec", id, sound });
+  }
+
+  camAudio(id: string, blob: Blob | undefined) {
+    this.send({ type: "cam-audio", id, blob });
+  }
+
+  addAsset(id: string, blob: Blob, path?: string) {
+    this.send({ type: "asset", id, blob, path });
   }
 
   preview(graph: Graph) {
@@ -116,6 +126,7 @@ export class RuntimeClient {
     if (msg.type === "node") {
       const r = this.renders.get(msg.reqId);
       if (r && msg.file) r.files.push({ nodeId: msg.id, ...msg.file });
+      if (r && msg.files) for (const f of msg.files) r.files.push({ nodeId: msg.id, ...f });
       this.onUpdate(msg);
       return;
     }

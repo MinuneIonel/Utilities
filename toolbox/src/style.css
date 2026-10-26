@@ -57,8 +57,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 .app { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
 .main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; }
-.center { display: grid; grid-template-rows: minmax(0, 1fr) 240px; min-width: 0; min-height: 0; }
-.center.no-panel { grid-template-rows: minmax(0, 1fr); }
+.center { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
+.inspector-wrap { position: relative; display: grid; min-height: 0; min-width: 0; }
+.inspector-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 6; }
+.inspector-resize:hover { background: linear-gradient(90deg, transparent 3px, var(--accent) 3px 5px, transparent 5px); }
 
 .topbar {
   display: flex; align-items: center; gap: 18px;
@@ -94,6 +96,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
   max-width: 100%; max-height: 100%; overflow: hidden; margin: 0;
   font: 14px/1.35 var(--mono); color: var(--text); opacity: 0.55; white-space: pre-wrap;
 }
+/* The playhead of the video behind the shown node. */
+.scrub { position: absolute; left: 64px; right: 64px; bottom: 10px; z-index: 5; display: flex; }
+.scrub input { width: 100%; }
+.update { color: var(--accent); font-size: 12px; text-decoration: none; border: 1px solid rgba(232, 255, 89, 0.4); border-radius: 6px; padding: 5px 10px; }
+.update:hover { border-color: var(--accent); }
+details.advanced { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+details.advanced summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .backdrop-label { position: absolute; right: 16px; bottom: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .react-flow.dark, .react-flow { --xy-background-color: transparent; background: transparent; }
 .react-flow__edge.converted path { stroke-dasharray: 6 4; }
@@ -108,19 +117,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
   pointer-events: none;
 }
 
-.preview { display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid var(--line); min-height: 0; }
-.preview-bar { display: flex; gap: 10px; align-items: baseline; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.preview-body {
-  min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; padding: 10px; overflow: hidden;
-  background: repeating-conic-gradient(#16171a 0 25%, #131416 0 50%) 0 0 / 16px 16px;
-}
-.preview-text { margin: 0; max-width: 100%; max-height: 100%; overflow: auto; font: 12px/1.35 var(--mono); white-space: pre-wrap; justify-self: stretch; align-self: stretch; }
-.preview-canvas { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
-
 .tray {
   display: flex; gap: 12px; align-items: center; overflow-x: auto; white-space: nowrap;
   padding: 6px 16px; border-top: 1px solid var(--line); background: var(--panel); min-height: 38px;
 }
+.out-item button.link { height: auto; padding: 0; border: 0; background: none; color: var(--text); }
+.out-item button.link:hover { text-decoration: underline; }
+.tray .clear { margin-left: auto; }
 .out-item { display: inline-flex; gap: 6px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px 2px 8px; }
 
 /* ------------------------------------------------------------ nodes */
@@ -139,8 +142,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tnode.selected { border-color: var(--accent); }
 .tnode-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .tnode-title { font-weight: 600; flex: 1; }
-.badge { font-family: var(--mono); font-size: 10px; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
-.badge.frame { color: var(--accent); border-color: rgba(232, 255, 89, 0.4); }
+.tnode .save-now { height: 20px; padding: 0 7px; font-size: 11px; color: var(--accent); border-color: rgba(232, 255, 89, 0.4); background: transparent; }
+.tnode .save-now:hover { border-color: var(--accent); }
 .tnode-ports { display: flex; justify-content: space-between; padding: 6px 0; font-size: 12px; color: var(--muted); }
 .port { position: relative; padding: 2px 12px; }
 .port.out { text-align: right; }
@@ -223,7 +226,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Phase 4: video wires, per-frame nodes, progress */
 .react-flow__edge.seq path { stroke-width: 3; }
-.badge.frames { color: var(--t-video); border-color: color-mix(in srgb, var(--t-video) 50%, transparent); }
 .tnode-progress { height: 3px; margin: 4px 8px 0; background: var(--line); border-radius: 2px; overflow: hidden; }
 .tnode-progress > div { height: 100%; background: var(--accent); transition: width 0.1s linear; }
 .tnode-progress.busy > div { width: 30% !important; animation: tnode-busy 1.2s ease-in-out infinite; }

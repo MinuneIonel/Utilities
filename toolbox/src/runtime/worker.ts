@@ -3,24 +3,36 @@
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { audioCodec } from "../nodes/audio";
-import { setNativeTools, type NativeTool, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import { setLocalPath, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
 
 export type ToWorker =
-  | { type: "asset"; id: string; blob: Blob }
+  /** A dropped file, and where it is on disk in the desktop app. */
+  | { type: "asset"; id: string; blob: Blob; path?: string }
   | { type: "run"; reqId: number; mode: "preview" | "render"; graph: Graph }
   | { type: "cancel" }
   /** A webcam frame. `t` is in seconds. */
   | { type: "cam-frame"; id: string; bitmap: ImageBitmap; t: number }
   /** Ends every webcam recording, so Render can finish the files. */
   | { type: "cam-stop" }
+  /** A recording is about to start on this camera, with or without sound. */
+  | { type: "cam-rec"; id: string; sound: boolean }
+  /** The microphone's recording, sent after Stop (none if recording it failed). */
+  | { type: "cam-audio"; id: string; blob?: Blob }
   /** Which native tools the desktop app has (none in a browser). */
-  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; encoders?: string[]; hwaccels?: string[] }
+  | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; sips?: boolean; encoders?: string[]; hwaccels?: string[] }
   | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string };
+
+export interface SavedFile {
+  name: string;
+  mime: string;
+  bytes: Uint8Array;
+  key?: string;
+}
 
 export interface NodeUpdate {
   type: "node";
@@ -34,7 +46,10 @@ export interface NodeUpdate {
   bitmap?: ImageBitmap;
   size?: { width: number; height: number };
   text?: string;
-  file?: { name: string; mime: string; bytes: Uint8Array };
+  /** What a Save node writes on Render, with the cache key of what it was made from. */
+  file?: SavedFile;
+  /** A Save node fed a list writes several. */
+  files?: SavedFile[];
   /** Name and size of a File output, for the node card. */
   fileInfo?: { name: string; bytes: number };
   /** A short description of a video, audio or document output. */
@@ -54,8 +69,8 @@ export interface ProgressUpdate {
 
 /** Asks the window to run a native tool through the desktop app. */
 export type ToolRequest =
-  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
-  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, Uint8Array> }
+  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
+  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
   | { type: "tool-write"; callId: string; writeId: number; bytes: Uint8Array }
   | { type: "tool-end"; callId: string }
   | { type: "tool-cancel"; callId: string };
@@ -66,7 +81,19 @@ export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "do
 class Feed implements CameraFeed {
   version = 0;
   latest?: ImageValue;
+  sound?: Promise<Blob | undefined>;
+  private gotSound?: (b: Blob | undefined) => void;
   private listeners = new Set<(f: FrameItem | null) => void>();
+
+  /** A new recording: with sound, encoders wait for its file after Stop. */
+  expectSound(sound: boolean) {
+    this.sound = sound ? new Promise((resolve) => (this.gotSound = resolve)) : undefined;
+  }
+
+  setSound(blob: Blob | undefined) {
+    this.gotSound?.(blob);
+    this.gotSound = undefined;
+  }
 
   push(img: ImageValue, t: number) {
     this.latest = img;
@@ -76,6 +103,9 @@ class Feed implements CameraFeed {
 
   stop() {
     for (const l of this.listeners) l(null);
+    // The window sends the sound shortly after Stop; don't let a lost message hold up the files.
+    const done = this.gotSound;
+    if (done) setTimeout(() => done(undefined), 10_000);
   }
 
   async *record(signal?: AbortSignal): AsyncGenerator<FrameItem> {
@@ -115,7 +145,7 @@ const toolWrites = new Map<number, { resolve(): void; reject(e: Error): void }>(
 let toolWriteN = 0;
 
 /** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
-function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
+function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
   const callId = `t${++toolCallN}`;
   toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
   opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
@@ -143,23 +173,35 @@ const post = (msg: FromWorker, transfer: Transferable[] = []) => (self as Dedica
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
-  if (msg.type === "asset") assets.set(msg.id, msg.blob);
+  if (msg.type === "asset") {
+    assets.set(msg.id, msg.blob);
+    if (msg.path) setLocalPath(msg.blob, msg.path);
+  }
   else if (msg.type === "cancel") {
     renderCancelled = true;
     renderAbort.abort();
+    for (const f of cameras.values()) f.setSound(undefined);
   } else if (msg.type === "cam-frame") {
     let feed = cameras.get(msg.id);
     if (!feed) cameras.set(msg.id, (feed = new Feed()));
     feed.push(bitmapToImage(msg.bitmap), msg.t);
   } else if (msg.type === "cam-stop") {
     for (const f of cameras.values()) f.stop();
+  } else if (msg.type === "cam-rec") {
+    let feed = cameras.get(msg.id);
+    if (!feed) cameras.set(msg.id, (feed = new Feed()));
+    feed.expectSound(msg.sound);
+  } else if (msg.type === "cam-audio") {
+    cameras.get(msg.id)?.setSound(msg.blob);
   } else if (msg.type === "tools") {
     const { ffmpeg, ytdlp } = msg;
+    const sips = !!msg.sips;
     setNativeTools(
-      ffmpeg || ytdlp
+      ffmpeg || ytdlp || sips
         ? {
             ffmpeg,
             ytdlp,
+            sips,
             encoders: new Set(msg.encoders ?? []),
             hwaccels: new Set(msg.hwaccels ?? []),
             run: (tool, args, files, opts = {}) => new Promise((resolve, reject) => void callTool("tool-run", tool, args, files, opts, { resolve, reject })),
@@ -280,7 +322,7 @@ async function report(
   if (first?.kind === "video") {
     const v = first;
     const parts = [`${v.width}×${v.height}`];
-    if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} pages` : `${v.duration.toFixed(1)} s`);
+    if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} item${v.duration === 1 ? "" : "s"}` : `${v.duration.toFixed(1)} s`);
     else if (v.duration === 0 && !v.origin) parts.push("live");
     msg.info = parts.join(" · ");
     first = v.poster;
@@ -293,7 +335,7 @@ async function report(
     const a = first;
     if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice() };
+      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
       transfer.push(msg.file.bytes.buffer);
     }
   } else if (first?.kind === "document") {
@@ -302,6 +344,7 @@ async function report(
     if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {
     msg.fileInfo = { name: first.name, bytes: first.bytes.byteLength };
+    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + f.bytes.byteLength, 0))}`;
     // Show encoded images as they decode, so compression artefacts are visible.
     if (changed && first.mime.startsWith("image/")) {
       try {
@@ -313,8 +356,8 @@ async function report(
       }
     }
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice() };
-      transfer.push(msg.file.bytes.buffer);
+      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, bytes: f.bytes.slice(), key }));
+      for (const f of msg.files) transfer.push(f.bytes.buffer);
     }
   }
   post(msg, transfer);

@@ -14,13 +14,14 @@ export function newNode(type: string, position: { x: number; y: number }): Graph
 export function starterGraph(): Graph {
   const a = newNode("input.file", { x: 40, y: 120 });
   const b = newNode("dither.recipe", { x: 340, y: 120 });
-  const c = newNode("output.save-image", { x: 640, y: 120 });
+  const c = newNode("output.save-file", { x: 640, y: 120 });
+  c.params.name = "dithered";
   return {
     version: 1,
     nodes: [a, b, c],
     edges: [
       { id: newId("e"), source: a.id, sourceHandle: "image", target: b.id, targetHandle: "image" },
-      { id: newId("e"), source: b.id, sourceHandle: "image", target: c.id, targetHandle: "image" },
+      { id: newId("e"), source: b.id, sourceHandle: "image", target: c.id, targetHandle: "file" },
     ],
   };
 }
@@ -160,6 +161,29 @@ export const WORKFLOWS: Workflow[] = [
         ["output.save-file", {}],
       ]),
   },
+  {
+    id: "compress-photos",
+    title: "Compress many photos",
+    description: "Drop in a pile of photos and save each as a JPEG under 500 KB, into one folder.",
+    build: () =>
+      chain([
+        ["input.images", {}],
+        ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "watermark-photos",
+    title: "Watermark photos",
+    description: "Drop in photos, type your name, and save each with it in the corner.",
+    build: () =>
+      chain([
+        ["input.images", {}],
+        ["image.overlay", {}],
+        ["media.encode", { format: "jpeg", quality: 88 }],
+        ["output.save-file", {}],
+      ]),
+  },
   { id: "dither", title: "Dither an image", description: "Drop in an image, pick a look, save a PNG.", build: starterGraph },
   {
     id: "video-ascii",
@@ -205,7 +229,7 @@ export const WORKFLOWS: Workflow[] = [
       chain([
         ["input.text", { text: "Lipeste aici textul fara diacritice." }],
         ["text.diacritics", {}],
-        ["output.save-text", { name: "text-cu-diacritice" }],
+        ["output.save-file", { name: "text-cu-diacritice" }, "file"],
       ]),
   },
   {

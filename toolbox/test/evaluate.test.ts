@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ResultCache, evaluate, hash, topoSort } from "../src/runtime/evaluate.ts";
-import type { Graph, NodeDef, RunContext, Value } from "../src/runtime/types.ts";
+import type { FrameItem, Graph, NodeDef, RunContext, Value, VideoValue } from "../src/runtime/types.ts";
 
 // Text nodes keep the tests free of canvases: "src" emits params.text, "upper" upper-cases, "save" is a job.
 let runs: string[] = [];
@@ -195,4 +195,85 @@ test("live nodes and everything after them stay out of the cache", async () => {
 test("cache keys are 64-bit", () => {
   assert.match(hash("a"), /^[0-9a-f]{16}$/);
   assert.notEqual(hash("ab"), hash("ba"));
+});
+
+// A live source whose frames only reach the readers listening when they arrive, like a webcam.
+function liveDefs(): { defs: NodeDef[]; emit(): Promise<void> } {
+  const readers = new Set<(f: FrameItem | null) => void>();
+  const video = (): VideoValue => ({
+    kind: "video", of: "text", width: 1, height: 1, duration: 0, fps: 30,
+    poster: { kind: "text", text: "poster" },
+    range: { start: 1, end: 2 },
+    soundLater: async () => undefined,
+    async *frames() {
+      const queue: (FrameItem | null)[] = [];
+      let wake: (() => void) | undefined;
+      const r = (f: FrameItem | null) => (queue.push(f), wake?.());
+      readers.add(r);
+      try {
+        for (;;) {
+          if (!queue.length) await new Promise<void>((res) => (wake = res));
+          const f = queue.shift()!;
+          if (!f) return;
+          yield f;
+        }
+      } finally {
+        readers.delete(r);
+      }
+    },
+  });
+  const defs: NodeDef[] = [
+    {
+      type: "cam", title: "Cam", category: "input", description: "", inputs: [], params: [], live: true,
+      outputs: [{ key: "video", label: "Video", type: "video" }], defaults: () => ({}), kind: "frame",
+      run: async () => ({ video: video() }),
+    },
+    defs0("upper"),
+    {
+      type: "count", title: "Count", category: "output", description: "", params: [],
+      inputs: [{ key: "video", label: "Video", type: "text", sequence: true }],
+      outputs: [{ key: "text", label: "Text", type: "text" }], defaults: () => ({}), kind: "job",
+      async run(i) {
+        const v = i.video as VideoValue;
+        let n = 0;
+        for await (const f of v.frames()) n += f.value.kind === "text" && f.value.text === f.value.text.toUpperCase() ? 1 : 0;
+        return { text: { kind: "text", text: `${n} ${v.range?.start}-${v.range?.end} ${!!v.soundLater}` } };
+      },
+    },
+  ];
+  return {
+    defs,
+    async emit() {
+      // Give every consumer time to start reading, as a person takes time to press Stop.
+      await new Promise((r) => setTimeout(r, 20));
+      for (const t of ["a", "b", "c"]) for (const r of readers) r({ value: { kind: "text", text: t }, timestamp: 0, duration: 0 });
+      for (const r of [...readers]) r(null);
+    },
+  };
+}
+const defs0 = (type: string) => defs.find((d) => d.type === type)!;
+
+test("during a recording, two consumers of a live video both get every frame", async () => {
+  const live = liveDefs();
+  const reg = new Map(live.defs.map((d) => [d.type, d]));
+  const g: Graph = {
+    version: 1,
+    nodes: [
+      { id: "cam", type: "cam", params: {}, position: { x: 0, y: 0 } },
+      { id: "up", type: "upper", params: {}, position: { x: 0, y: 0 } },
+      { id: "n1", type: "count", params: {}, position: { x: 0, y: 0 } },
+      { id: "n2", type: "count", params: {}, position: { x: 0, y: 0 } },
+    ],
+    edges: [
+      { id: "1", source: "cam", sourceHandle: "video", target: "up", targetHandle: "text" },
+      { id: "2", source: "up", sourceHandle: "text", target: "n1", targetHandle: "video" },
+      { id: "3", source: "up", sourceHandle: "text", target: "n2", targetHandle: "video" },
+    ],
+  };
+  const done = evaluate(g, { registry: reg, ctx: renderCtx, cache: new ResultCache() });
+  await live.emit();
+  const r = await done;
+  // The mapped node keeps the trim and the late sound of the video it runs on.
+  assert.equal(textOf(r, "n1"), "3 1-2 true");
+  assert.equal(textOf(r, "n2"), "3 1-2 true");
 });

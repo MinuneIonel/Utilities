@@ -4,6 +4,7 @@ import { restoreText } from "../../../diacritics/src/engine/restore";
 import modelUrl from "../../../diacritics/public/model.dat?url";
 import neuralUrl from "../../../diacritics/public/neural.dat?url";
 import type { NodeDef, TextValue } from "../runtime/types";
+import { TEXT_FILE } from "./save";
 
 export const textInput: NodeDef = {
   type: "input.text",
@@ -48,7 +49,7 @@ function loadModel(): Promise<Model> {
 
 export const diacritics: NodeDef = {
   type: "text.diacritics",
-  title: "Diacritice",
+  title: "Romanian diacritics",
   category: "text",
   description: "Restores Romanian diacritics (ă â î ș ț) in text typed without them. Offline, no LLM.",
   inputs: [{ key: "text", label: "Text", type: "text" }],
@@ -63,16 +64,11 @@ export const diacritics: NodeDef = {
   },
 };
 
-const EXT: Record<string, { ext: string; mime: string }> = {
-  plain: { ext: "txt", mime: "text/plain" },
-  html: { ext: "html", mime: "text/html" },
-  ansi: { ext: "ans", mime: "text/plain" },
-  svg: { ext: "svg", mime: "image/svg+xml" },
-};
 
 export const saveText: NodeDef = {
   type: "output.save-text",
   title: "Save text",
+  hidden: true,
   category: "output",
   description: "Writes text on Render. The extension follows the text's format (.txt, .html, .ans, .svg).",
   inputs: [{ key: "text", label: "Text", type: "text" }],
@@ -83,7 +79,7 @@ export const saveText: NodeDef = {
   saves: true,
   async run(inputs, params) {
     const t = inputs.text as TextValue;
-    const f = EXT[t.format ?? "plain"] ?? EXT.plain;
+    const f = TEXT_FILE[t.format ?? "plain"] ?? TEXT_FILE.plain;
     const base = String(params.name || "toolbox-text").replace(/[\\/:*?"<>|]+/g, "-");
     return { file: { kind: "file", name: `${base}.${f.ext}`, mime: f.mime, bytes: new TextEncoder().encode(t.text) } };
   },

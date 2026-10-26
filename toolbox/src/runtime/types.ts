@@ -37,6 +37,8 @@ export interface FileValue {
   name: string;
   mime: string;
   bytes: Uint8Array;
+  /** Every file a Save node writes when it was fed a list (this file is the first of them). */
+  batch?: FileValue[];
 }
 
 /** One frame of a video, at its place in time (seconds). */
@@ -44,6 +46,8 @@ export interface FrameItem {
   value: Value;
   timestamp: number;
   duration: number;
+  /** The file it came from, for a list of images, so a batch keeps their names. */
+  name?: string;
 }
 
 /**
@@ -53,7 +57,7 @@ export interface FrameItem {
 export interface VideoValue {
   kind: "video";
   /** What each frame is. Image for real video; grid or text after e.g. ASCII convert. */
-  of: "image" | "grid" | "text";
+  of: "image" | "grid" | "text" | "file";
   /** Full-size frame size. */
   width: number;
   height: number;
@@ -65,6 +69,13 @@ export interface VideoValue {
   poster: Value;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
   audioSource?: Blob;
+  /**
+   * The part of `origin` and `audioSource` the frames come from (a trimmed Video file), in the file's seconds.
+   * Frame timestamps still start at 0.
+   */
+  range?: { start: number; end: number };
+  /** Sound recorded alongside live frames (a webcam's microphone), ready once the frames end. */
+  soundLater?: () => Promise<Blob | undefined>;
   /** Set only by input nodes, when frames are still the file's own (lets encoders skip decoding). */
   origin?: Blob;
   /** Full-size frames in order. Each call starts from the beginning. */
@@ -114,14 +125,16 @@ export interface PortDef {
   sequence?: boolean;
 }
 
-export type ParamDef =
+/** `advanced` settings sit folded away under Advanced in the inspector. */
+export type ParamDef = { advanced?: boolean } & (
   | { key: string; label: string; kind: "number"; min: number; max: number; step: number }
   | { key: string; label: string; kind: "select"; options: { value: string; label: string }[] }
   /** `commit` applies the value on Enter or blur instead of every keystroke. */
   | { key: string; label: string; kind: "text"; multiline?: boolean; commit?: boolean; placeholder?: string }
   | { key: string; label: string; kind: "toggle" }
   /** Edited by a node-specific inspector panel (e.g. Dither Lab's effect stack). */
-  | { key: string; label: string; kind: "custom" };
+  | { key: string; label: string; kind: "custom" }
+);
 
 export interface RunContext {
   /** "preview" works on small frames and skips job nodes; "render" does everything at full size. */
@@ -145,6 +158,8 @@ export interface CameraFeed {
   latest?: ImageValue;
   /** Frames from now until the recording stops. */
   record(signal?: AbortSignal): AsyncIterable<FrameItem>;
+  /** The microphone's recording, when this Render records sound; resolves after Stop. */
+  sound?: Promise<Blob | undefined>;
 }
 
 export interface NodeDef {
@@ -160,8 +175,12 @@ export interface NodeDef {
   visible?(key: string, params: Params): boolean;
   /** frame = runs during live preview; job = runs only on Render. */
   kind: "frame" | "job";
+  /** A job node that, fed a list (Several images), runs once per item on Render, like a frame node does. */
+  perItem?: boolean;
   /** Output nodes whose File result the window writes to disk after Render. */
   saves?: boolean;
+  /** Kept so older graphs still open, but no longer offered in the Add node menu. */
+  hidden?: boolean;
   /**
    * Output changes on its own (a webcam's newest frame). Its results, and those of
    * every node after it, are never cached: they would only fill the cache with

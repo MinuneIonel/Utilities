@@ -62,7 +62,7 @@ export const asciiConvert: NodeDef = {
 
 export const asciiRender: NodeDef = {
   type: "ascii.render",
-  title: "Draw ASCII",
+  title: "ASCII to image",
   category: "image",
   description: "Draws a character grid as an image, with the font and colours from the ASCII node.",
   inputs: [{ key: "grid", label: "Grid", type: "grid" }],
@@ -105,4 +105,10 @@ export const asciiText: NodeDef = {
 export const ASCII_CONVERTERS: Converter[] = [
   { from: "grid", to: "image", label: "draw", convert: async (v) => gridToImage(v as GridValue) },
   { from: "grid", to: "text", label: "text", convert: async (v) => gridToText(v as GridValue, "plain") },
+  {
+    from: "grid",
+    to: "file",
+    label: "txt",
+    convert: async (v) => ({ kind: "file", name: "ascii.txt", mime: "text/plain", bytes: new TextEncoder().encode(gridToText(v as GridValue, "plain").text) }),
+  },
 ];

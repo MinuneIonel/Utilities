@@ -15,11 +15,17 @@ export const videoInput: NodeDef = {
   type: "input.video",
   title: "Video file",
   category: "input",
-  description: "A video dropped into Toolbox. Image nodes wired after it run on every frame; the preview shows the frame at the playhead.",
+  description:
+    "A video dropped into Toolbox. Image nodes wired after it run on every frame; the preview shows the frame at the playhead. Start and End keep only part of it; at another Speed the sound is left out.",
   inputs: [],
   outputs: [{ key: "video", label: "Video", type: "video" }],
-  params: [{ key: "at", label: "Preview at %", kind: "number", min: 0, max: 100, step: 0.5 }],
-  defaults: () => ({ assetId: "", name: "", at: 10 }),
+  params: [
+    { key: "at", label: "Playhead %", kind: "number", min: 0, max: 100, step: 0.5 },
+    { key: "start", label: "Start s", kind: "number", min: 0, max: 7200, step: 0.1 },
+    { key: "end", label: "End s (0 = to the end)", kind: "number", min: 0, max: 7200, step: 0.1 },
+    { key: "speed", label: "Speed ×", kind: "number", min: 0.25, max: 8, step: 0.25 },
+  ],
+  defaults: () => ({ assetId: "", name: "", at: 10, start: 0, end: 0, speed: 1 }),
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
   async run(_inputs, params, ctx) {
@@ -33,7 +39,7 @@ export const webcam: NodeDef = {
   type: "input.webcam",
   title: "Webcam",
   category: "input",
-  description: "Your camera, live. Render records until you press Stop, running every frame through the nodes after it.",
+  description: "Your camera, live. Render records until you press Stop, running every frame through the nodes after it. Encode video adds the microphone's sound.",
   inputs: [],
   outputs: [{ key: "video", label: "Video", type: "video" }],
   params: [
@@ -48,8 +54,9 @@ export const webcam: NodeDef = {
       ],
     },
     { key: "mirror", label: "Mirror", kind: "toggle" },
+    { key: "sound", label: "Record sound", kind: "toggle" },
   ],
-  defaults: () => ({ resolution: "1280x720", mirror: true }),
+  defaults: () => ({ resolution: "1280x720", mirror: true, sound: true }),
   kind: "frame",
   live: true,
   // Each new camera frame is a new input.
@@ -58,6 +65,7 @@ export const webcam: NodeDef = {
     const feed = ctx.cameras?.get(ctx.nodeId ?? "");
     const latest = feed?.latest;
     if (!feed || !latest) throw new Error("Waiting for the camera…");
+    const sound = ctx.mode === "render" ? feed.sound : undefined;
     const s = Math.min(1, PREVIEW_MAX / Math.max(latest.width, latest.height));
     const poster =
       ctx.mode === "preview" && s < 1 ? { ...scaleImage(latest, Math.round(latest.width * s), Math.round(latest.height * s), true), scale: s } : latest;
@@ -70,6 +78,7 @@ export const webcam: NodeDef = {
       fps: 30,
       poster,
       frames: (signal) => feed.record(signal),
+      soundLater: sound && (() => sound),
     };
     return { video };
   },
@@ -95,7 +104,7 @@ export const videoEncode: NodeDef = {
   type: "video.encode",
   title: "Encode video",
   category: "video",
-  description: "Writes a video (MP4, WebM, MOV, MKV) or an animated GIF on Render, streaming frame by frame. ProRes and HEVC use the Mac's hardware encoders in the desktop app. Feed it to Save file.",
+  description: "Writes a video (MP4, WebM, MOV, MKV) or an animated GIF on Render, streaming frame by frame. Codec (ProRes, HEVC) and frame rate are under Advanced. Feed it to Save.",
   inputs: [{ key: "video", label: "Video", type: "video" }],
   outputs: [{ key: "file", label: "File", type: "file" }],
   params: [
@@ -109,6 +118,7 @@ export const videoEncode: NodeDef = {
       key: "codec",
       label: "Codec",
       kind: "select",
+      advanced: true,
       options: [
         ...(Object.keys(CODEC_LABEL) as VideoCodecChoice[]).map((c) => ({ value: c, label: CODEC_LABEL[c] })),
         { value: "prores", label: "ProRes (MOV, desktop app)" },
@@ -118,6 +128,7 @@ export const videoEncode: NodeDef = {
       key: "prores",
       label: "ProRes flavour",
       kind: "select",
+      advanced: true,
       options: (Object.keys(PRORES_LABEL) as ProresProfile[]).map((p) => ({ value: p, label: PRORES_LABEL[p] })),
     },
     {
@@ -132,7 +143,7 @@ export const videoEncode: NodeDef = {
         { value: "very-high", label: "Very high" },
       ],
     },
-    { key: "fps", label: "Frame rate (0 = source)", kind: "number", min: 0, max: 60, step: 1 },
+    { key: "fps", label: "Frame rate (0 = source)", kind: "number", min: 0, max: 60, step: 1, advanced: true },
     { key: "audio", label: "Keep sound", kind: "toggle" },
     { key: "name", label: "File name", kind: "text" },
   ],
@@ -162,28 +173,31 @@ export const extractAudio: NodeDef = {
   async run(inputs) {
     const v = inputs.video as VideoValue;
     if (!v.audioSource) throw new Error("This video has no sound");
-    return { audio: await soundOf(v.audioSource, v.duration || undefined) };
+    return { audio: await soundOf(v.audioSource, v.duration || undefined, v.range) };
   },
 };
 
-const sounds = new WeakMap<Blob, Promise<AudioValue>>();
+const sounds = new WeakMap<Blob, Map<string, Promise<AudioValue>>>();
 /**
- * A file's sound as an audio value, read once per file. Moving a video's playhead
- * re-runs everything after it; handing back the same bytes lets the waveform
- * (which decodes the whole track) come from its cache instead.
+ * A file's sound (or the `range` of it) as an audio value, made once per file and range.
+ * Moving a video's playhead re-runs everything after it; handing back the same bytes lets
+ * the waveform (which decodes the whole track) come from its cache instead.
  */
-export function soundOf(blob: Blob, duration?: number): Promise<AudioValue> {
-  let p = sounds.get(blob);
+export function soundOf(blob: Blob, duration?: number, range?: { start: number; end: number }): Promise<AudioValue> {
+  let byRange = sounds.get(blob);
+  if (!byRange) sounds.set(blob, (byRange = new Map()));
+  const key = range ? `${range.start}-${range.end}` : "";
+  let p = byRange.get(key);
   if (!p) {
-    p = blob.arrayBuffer().then((b) => ({
-      kind: "audio" as const,
-      name: (blob as File).name || "video.mp4",
-      mime: blob.type || "video/mp4",
-      bytes: new Uint8Array(b),
-      duration,
-    }));
-    sounds.set(blob, p);
-    p.catch(() => sounds.delete(blob));
+    p = videoCodec()
+      .then((c) => c.soundTrack(blob, range))
+      .catch(async (e: Error) => {
+        if (range || /no sound/.test(e.message)) throw e;
+        // A sound the copier can't handle still reaches ffmpeg, in the whole file.
+        return { kind: "audio" as const, name: (blob as File).name || "video.mp4", mime: blob.type || "video/mp4", bytes: new Uint8Array(await blob.arrayBuffer()), duration };
+      });
+    byRange.set(key, p);
+    p.catch(() => byRange.delete(key));
   }
   return p;
 }

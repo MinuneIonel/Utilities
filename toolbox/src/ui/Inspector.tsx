@@ -86,19 +86,26 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
   if (!def) return <aside className="inspector empty">Unknown node.</aside>;
   const p = node.data.params;
   const set = (key: string) => (v: unknown) => onParams(node.id, { [key]: v });
+  const shown = def.params.filter((d) => def.visible?.(d.key, p) ?? true);
+  const field = (d: ParamDef) => {
+    if (d.kind !== "custom") return <Field key={d.key} def={d} value={p[d.key]} set={set(d.key)} />;
+    if (def.type === "dither.recipe") return <DitherPanel key={node.id} value={p.recipe} onChange={set("recipe")} />;
+    if (def.type === "ascii.convert") return <AsciiPanel key={node.id} value={p.settings} onChange={set("settings")} />;
+    return null;
+  };
+  const advanced = shown.filter((d) => d.advanced);
 
   return (
     <aside className="inspector">
       <h2>{def.title}</h2>
       <p className="hint">{def.description}</p>
-      {def.params
-        .filter((d) => def.visible?.(d.key, p) ?? true)
-        .map((d) => {
-          if (d.kind !== "custom") return <Field key={d.key} def={d} value={p[d.key]} set={set(d.key)} />;
-          if (def.type === "dither.recipe") return <DitherPanel key={node.id} value={p.recipe} onChange={set("recipe")} />;
-          if (def.type === "ascii.convert") return <AsciiPanel key={node.id} value={p.settings} onChange={set("settings")} />;
-          return null;
-        })}
+      {shown.filter((d) => !d.advanced).map(field)}
+      {advanced.length > 0 && (
+        <details className="advanced">
+          <summary>Advanced</summary>
+          {advanced.map(field)}
+        </details>
+      )}
       {def.saves && (
         <div className="field">
           <label>Folder</label>

@@ -1,5 +1,5 @@
 // Exposes the few native abilities the UI needs, as window.toolbox (see src/platform.ts).
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("toolbox", {
   saveFile: (name, bytes, folder) => ipcRenderer.invoke("save-file", name, bytes, folder),
@@ -7,6 +7,17 @@ contextBridge.exposeInMainWorld("toolbox", {
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
   reveal: (p) => ipcRenderer.invoke("reveal", p),
+  openPath: (p) => ipcRenderer.invoke("open-path", p),
+  editText: (command) => ipcRenderer.invoke("edit-text", command),
+  checkUpdate: () => ipcRenderer.invoke("check-update"),
+  /** Where a dropped or chosen file is on disk ("" for files that aren't). */
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
   onMenu: (handler) => ipcRenderer.on("menu", (_e, command) => handler(command)),
   toolsInfo: () => ipcRenderer.invoke("tools-info"),
   runTool: (id, tool, args, files) => ipcRenderer.invoke("tool-run", id, tool, args, files),

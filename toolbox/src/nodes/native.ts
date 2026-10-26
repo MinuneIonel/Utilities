@@ -3,12 +3,28 @@
 // browser tab there are none, and nodes fall back to ffmpeg.wasm or explain why.
 import type { FfmpegLike } from "../../../audio/src/engine";
 
-export type NativeTool = "ffmpeg" | "yt-dlp";
+export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
 
 export interface ToolResult {
   code: number;
   files: Record<string, Uint8Array>;
   log: string;
+}
+
+/** A file for a tool's temp folder: its bytes, or (in the desktop app) where it already is on disk. */
+export type ToolFile = Uint8Array | { path: string };
+
+const paths = new WeakMap<Blob, string>();
+
+/** Remembers where a dropped file lives, so tools can read it there instead of being sent its bytes. */
+export function setLocalPath(blob: Blob, path: string) {
+  paths.set(blob, path);
+}
+
+/** A file for a tool: its path on disk when known, otherwise its bytes. */
+export async function toolFile(blob: Blob): Promise<ToolFile> {
+  const p = paths.get(blob);
+  return p ? { path: p } : new Uint8Array(await blob.arrayBuffer());
 }
 
 export interface ToolOptions {
@@ -29,11 +45,13 @@ export interface ToolStream {
 export interface NativeTools {
   ffmpeg: boolean;
   ytdlp: boolean;
+  /** macOS's image converter, which reads iPhone (HEIC) photos. */
+  sips: boolean;
   /** ffmpeg's encoders and hardware decoders (h264_videotoolbox, videotoolbox, …). */
   encoders: ReadonlySet<string>;
   hwaccels: ReadonlySet<string>;
-  run(tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts?: ToolOptions): Promise<ToolResult>;
-  open(tool: NativeTool, args: string[], files: Record<string, Uint8Array>, opts?: ToolOptions): ToolStream;
+  run(tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts?: ToolOptions): Promise<ToolResult>;
+  open(tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts?: ToolOptions): ToolStream;
 }
 
 let tools: NativeTools | undefined;

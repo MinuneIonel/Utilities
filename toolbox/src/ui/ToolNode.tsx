@@ -29,7 +29,7 @@ function statusLine(rt: NodeRuntime | undefined): string {
   }
   if (rt.savedTo) return `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
   if (rt.status === "waiting" || rt.status === "error" || rt.status === "skipped") return rt.error ?? "";
-  if (rt.fileInfo) return `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
+  if (rt.fileInfo) return rt.info ?? `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
   if (rt.info) return rt.status === "cached" ? `${rt.info} · cached` : rt.info;
   const size = rt.size
     ? `${rt.size.width}×${rt.size.height}`
@@ -51,21 +51,26 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const accept = INPUT_ACCEPT[def.type];
   const multiple = def.type === "input.images";
   const empty = !!accept && !(multiple ? (data.params.assetIds as unknown[] | undefined)?.length : data.params.assetId);
-  // A frame node fed a video runs on every frame; its outputs are videos too.
-  const mapped = def.outputs.some((p) => p.type !== "video" && shapes.get(`${id}:${p.key}`)?.seq);
+  // An input waiting for its file or link is a normal state, not an error.
+  const waitingForInput = def.category === "input" && (empty || (def.type === "input.download" && !String(data.params.url ?? "").trim()));
+  const status = waitingForInput ? (accept ? "" : "Paste a link in the inspector") : statusLine(rt);
 
   return (
     <div className={`tnode${selected ? " selected" : ""}`}>
       <div className="tnode-head">
         <span className="tnode-title">{def.title}</span>
-        {mapped && (
-          <span className="badge frames" title="Runs on every frame of the video wired into it">
-            frames
-          </span>
+        {def.saves && (
+          <button
+            className="nodrag save-now"
+            onClick={(e) => {
+              e.stopPropagation();
+              actions.saveNode(id);
+            }}
+            title="Render just what feeds this node and save it, even if it hasn't changed"
+          >
+            Save
+          </button>
         )}
-        <span className={`badge ${def.kind}`} title={def.kind === "frame" ? "Previews live" : "Runs on Render"}>
-          {def.kind === "frame" ? "live" : "render"}
-        </span>
         <button
           className={`nodrag preview-toggle${previewed ? " on" : ""}`}
           onClick={(e) => {
@@ -101,7 +106,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
       </div>
       {accept && (
         <div className="tnode-file">
-          <span className="file-name">{empty ? "Drop a file on the window" : String(data.params.name)}</span>
+          <span className="file-name">{empty ? (data.params.path ? `${String(data.params.name)} (not found)` : "Drop a file here") : String(data.params.name)}</span>
           <button className="nodrag" onClick={() => fileRef.current?.click()}>
             {empty ? "Choose…" : "Replace…"}
           </button>
@@ -127,7 +132,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
           <div style={{ width: `${Math.max(0, rt.progress) * 100}%` }} />
         </div>
       )}
-      <div className={`tnode-status s-${rt?.status ?? "idle"}`}>{statusLine(rt)}</div>
+      {(status || !waitingForInput) && <div className={`tnode-status s-${waitingForInput ? "idle" : (rt?.status ?? "idle")}`}>{status}</div>}
     </div>
   );
 }
