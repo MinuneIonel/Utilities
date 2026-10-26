@@ -47,6 +47,15 @@ export class RuntimeClient {
     this.send({ type: "cam-stop" });
   }
 
+  /** A camera's recording starts; with sound, its file follows through camAudio after Stop. */
+  camRecording(id: string, sound: boolean) {
+    this.send({ type: "cam-rec", id, sound });
+  }
+
+  camAudio(id: string, blob: Blob | undefined) {
+    this.send({ type: "cam-audio", id, blob });
+  }
+
   addAsset(id: string, blob: Blob) {
     this.send({ type: "asset", id, blob });
   }

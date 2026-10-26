@@ -21,12 +21,16 @@ let win = null;
 /** Permissions the UI uses. Anything else a page asks for is refused. */
 const ALLOWED = new Set(["media", "fullscreen", "clipboard-sanitized-write"]);
 
-/** Webcam nodes need the camera; macOS asks the user once. */
+/** Webcam nodes need the camera, and the microphone to record sound; macOS asks the user once for each. */
 function allowCamera() {
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
     if (!ALLOWED.has(permission)) return callback(false);
     if (permission !== "media" || process.platform !== "darwin") return callback(true);
-    systemPreferences.askForMediaAccess("camera").then(callback, () => callback(false));
+    const kinds = "mediaTypes" in details && details.mediaTypes?.length ? details.mediaTypes : ["video"];
+    Promise.all(kinds.map((k) => systemPreferences.askForMediaAccess(k === "audio" ? "microphone" : "camera"))).then(
+      (ok) => callback(ok.every(Boolean)),
+      () => callback(false),
+    );
   });
 }
 

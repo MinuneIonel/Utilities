@@ -173,7 +173,7 @@ export function App() {
       .filter((n) => n.type === "input.webcam")
       .map((n): CamSpec => {
         const [w, h] = String(n.params.resolution || "1280x720").split("x").map(Number);
-        return { id: n.id, width: w || 1280, height: h || 720, mirror: n.params.mirror !== false };
+        return { id: n.id, width: w || 1280, height: h || 720, mirror: n.params.mirror !== false, sound: n.params.sound !== false };
       }),
   );
   useEffect(() => webcams.sync(JSON.parse(camKey)), [camKey, webcams]);
@@ -272,11 +272,11 @@ export function App() {
     const g = graphRef.current;
     // A webcam records from now until Stop.
     const live = g.nodes.some((n) => n.type === "input.webcam") && g.edges.some((e) => g.nodes.find((n) => n.id === e.source)?.type === "input.webcam");
-    webcams.recording = live;
+    if (live) webcams.startRecording();
     setRecording(live);
     if (live) flash("Recording. Press Stop to finish.");
     const result = await client.render(g);
-    webcams.recording = false;
+    webcams.stopRecording();
     setRecording(false);
     setRendering(false);
     if (result.error) flash(result.error);
@@ -541,7 +541,10 @@ export function App() {
               </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
               {recording ? (
-                <button className="primary rec" onClick={() => client.stopRecording()} title="Stop recording and write the files">
+                <button className="primary rec" onClick={() => {
+                    client.stopRecording();
+                    webcams.stopRecording();
+                  }} title="Stop recording and write the files">
                   Stop
                 </button>
               ) : (

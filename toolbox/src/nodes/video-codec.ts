@@ -28,7 +28,7 @@ import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoC
 import type { FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
-import { encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile } from "./ffmpeg-video";
+import { audioArgs, encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile } from "./ffmpeg-video";
 import { lastError, nativeTools, type NativeTools, type ToolStream } from "./native";
 import { CODEC_LABEL, frameImage } from "./video";
 
@@ -277,7 +277,11 @@ async function encodeStream(
         codec = c;
         video = new VideoSampleSource({ codec: c, bitrate: new Quality(level) });
         output.addVideoTrack(video, fps > 0 ? { frameRate: fps } : undefined);
-        const audio = keepAudio && v.audioSource ? await audioTrackFor(v.audioSource, format, output) : undefined;
+        const audio = !keepAudio
+          ? undefined
+          : v.audioSource
+            ? await audioTrackFor(v.audioSource, format, output)
+            : v.soundLater && (await laterAudioTrack(v.soundLater, format, output));
         await output.start();
         if (audio) audioDone = audio();
       }
@@ -309,33 +313,56 @@ async function encodeStream(
   return { bytes: new Uint8Array((output.target as BufferTarget).buffer!), codec };
 }
 
+/** The audio codec for this container: AAC first in MP4 and MOV, since QuickTime doesn't play Opus there. */
+async function audioCodecFor(format: OutputFormat, numberOfChannels: number, sampleRate: number) {
+  const supported = format.getSupportedAudioCodecs();
+  const order = (["aac", "opus", "mp3", "vorbis"] as const).filter((c) => supported.includes(c));
+  return getFirstEncodableAudioCodec(order.length ? [...order] : supported, { numberOfChannels, sampleRate });
+}
+
+/** Decodes a file's sound into an encoding track. */
+async function feedSound(source: Blob, src: AudioSampleSource) {
+  const input = new Input({ source: new BlobSource(source), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (!track || !(await track.canDecode())) return;
+    for await (const s of new AudioSampleSink(track).samples()) {
+      try {
+        await src.add(s);
+      } finally {
+        s.close();
+      }
+    }
+  } finally {
+    input.dispose?.();
+  }
+}
+
 /** Adds the source's sound as a track and returns the function that feeds it. */
 async function audioTrackFor(source: Blob, format: OutputFormat, output: Output): Promise<(() => Promise<void>) | undefined> {
   const input = new Input({ source: new BlobSource(source), formats: ALL_FORMATS });
   const track = await input.getPrimaryAudioTrack();
-  if (!track || !(await track.canDecode())) return undefined;
-  // AAC first in MP4 and MOV, since QuickTime doesn't play Opus there.
-  const supported = format.getSupportedAudioCodecs();
-  const order = (["aac", "opus", "mp3", "vorbis"] as const).filter((c) => supported.includes(c));
-  const codec = await getFirstEncodableAudioCodec(order.length ? [...order] : supported, {
-    numberOfChannels: track.numberOfChannels,
-    sampleRate: track.sampleRate,
-  });
+  const ok = !!track && (await track.canDecode());
+  const codec = ok ? await audioCodecFor(format, track.numberOfChannels, track.sampleRate) : null;
+  input.dispose?.();
   if (!codec) return undefined;
   const src = new AudioSampleSource({ codec, bitrate: 160_000 });
   output.addAudioTrack(src);
+  return () => feedSound(source, src);
+}
+
+/**
+ * A track for sound that arrives after the frames (a webcam's microphone).
+ * The track has to exist before the file starts, so it is added now and fed at the end.
+ */
+async function laterAudioTrack(later: () => Promise<Blob | undefined>, format: OutputFormat, output: Output): Promise<(() => Promise<void>) | undefined> {
+  const codec = await audioCodecFor(format, 1, 48000);
+  if (!codec) return undefined;
+  const src = new AudioSampleSource({ codec, bitrate: 128_000 });
+  output.addAudioTrack(src);
   return async () => {
-    try {
-      for await (const s of new AudioSampleSink(track).samples()) {
-        try {
-          await src.add(s);
-        } finally {
-          s.close();
-        }
-      }
-    } finally {
-      input.dispose?.();
-    }
+    const blob = await later();
+    if (blob) await feedSound(blob, src);
   };
 }
 
@@ -435,7 +462,18 @@ async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, j
   if (ctx.signal?.aborted) throw new Error("Cancelled");
   const bytes = r.files[out];
   if (r.code !== 0 || !bytes) throw new EncoderFailed(lastError(r.log));
-  return bytes;
+  const sound = job.audio && !audioName && v.soundLater ? await v.soundLater() : undefined;
+  return sound ? await addSound(tools, bytes, out, sound, job, ctx) : bytes;
+}
+
+/** Puts sound that arrived after the frames (a webcam's microphone) into an encoded video, copying the picture. */
+async function addSound(tools: NativeTools, video: Uint8Array, name: string, sound: Blob, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+  const soundName = `sound.${extOf(sound, "webm")}`;
+  const out = `with-sound.${VIDEO_CONTAINERS[job.container].ext}`;
+  const args = ["-hide_banner", "-y", "-i", name, "-i", soundName, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", ...audioArgs(job.codec, job.container), "-shortest", out];
+  const r = await tools.run("ffmpeg", args, { [name]: video, [soundName]: new Uint8Array(await sound.arrayBuffer()) }, { signal: ctx.signal });
+  // A video without its sound beats no video.
+  return r.code === 0 && r.files[out] ? r.files[out] : video;
 }
 
 /** Tries each encoder for the codec in turn: hardware first where it's faster, software if that fails. */

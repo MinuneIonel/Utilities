@@ -16,6 +16,10 @@ export type ToWorker =
   | { type: "cam-frame"; id: string; bitmap: ImageBitmap; t: number }
   /** Ends every webcam recording, so Render can finish the files. */
   | { type: "cam-stop" }
+  /** A recording is about to start on this camera, with or without sound. */
+  | { type: "cam-rec"; id: string; sound: boolean }
+  /** The microphone's recording, sent after Stop (none if recording it failed). */
+  | { type: "cam-audio"; id: string; blob?: Blob }
   /** Which native tools the desktop app has (none in a browser). */
   | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; encoders?: string[]; hwaccels?: string[] }
   | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
@@ -66,7 +70,19 @@ export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "do
 class Feed implements CameraFeed {
   version = 0;
   latest?: ImageValue;
+  sound?: Promise<Blob | undefined>;
+  private gotSound?: (b: Blob | undefined) => void;
   private listeners = new Set<(f: FrameItem | null) => void>();
+
+  /** A new recording: with sound, encoders wait for its file after Stop. */
+  expectSound(sound: boolean) {
+    this.sound = sound ? new Promise((resolve) => (this.gotSound = resolve)) : undefined;
+  }
+
+  setSound(blob: Blob | undefined) {
+    this.gotSound?.(blob);
+    this.gotSound = undefined;
+  }
 
   push(img: ImageValue, t: number) {
     this.latest = img;
@@ -76,6 +92,9 @@ class Feed implements CameraFeed {
 
   stop() {
     for (const l of this.listeners) l(null);
+    // The window sends the sound shortly after Stop; don't let a lost message hold up the files.
+    const done = this.gotSound;
+    if (done) setTimeout(() => done(undefined), 10_000);
   }
 
   async *record(signal?: AbortSignal): AsyncGenerator<FrameItem> {
@@ -147,12 +166,19 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   else if (msg.type === "cancel") {
     renderCancelled = true;
     renderAbort.abort();
+    for (const f of cameras.values()) f.setSound(undefined);
   } else if (msg.type === "cam-frame") {
     let feed = cameras.get(msg.id);
     if (!feed) cameras.set(msg.id, (feed = new Feed()));
     feed.push(bitmapToImage(msg.bitmap), msg.t);
   } else if (msg.type === "cam-stop") {
     for (const f of cameras.values()) f.stop();
+  } else if (msg.type === "cam-rec") {
+    let feed = cameras.get(msg.id);
+    if (!feed) cameras.set(msg.id, (feed = new Feed()));
+    feed.expectSound(msg.sound);
+  } else if (msg.type === "cam-audio") {
+    cameras.get(msg.id)?.setSound(msg.blob);
   } else if (msg.type === "tools") {
     const { ffmpeg, ytdlp } = msg;
     setNativeTools(

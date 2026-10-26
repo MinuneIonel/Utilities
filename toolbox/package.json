@@ -68,7 +68,8 @@
       "icon": "build/icon.icns",
       "identity": "-",
       "extendInfo": {
-        "NSCameraUsageDescription": "Webcam nodes use the camera to preview and record."
+        "NSCameraUsageDescription": "Webcam nodes use the camera to preview and record.",
+        "NSMicrophoneUsageDescription": "Webcam nodes record the microphone's sound with the video."
       },
       "extraResources": [
         {

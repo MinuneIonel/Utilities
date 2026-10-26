@@ -33,7 +33,7 @@ export const webcam: NodeDef = {
   type: "input.webcam",
   title: "Webcam",
   category: "input",
-  description: "Your camera, live. Render records until you press Stop, running every frame through the nodes after it.",
+  description: "Your camera, live. Render records until you press Stop, running every frame through the nodes after it. Encode video adds the microphone's sound.",
   inputs: [],
   outputs: [{ key: "video", label: "Video", type: "video" }],
   params: [
@@ -48,8 +48,9 @@ export const webcam: NodeDef = {
       ],
     },
     { key: "mirror", label: "Mirror", kind: "toggle" },
+    { key: "sound", label: "Record sound", kind: "toggle" },
   ],
-  defaults: () => ({ resolution: "1280x720", mirror: true }),
+  defaults: () => ({ resolution: "1280x720", mirror: true, sound: true }),
   kind: "frame",
   live: true,
   // Each new camera frame is a new input.
@@ -58,6 +59,7 @@ export const webcam: NodeDef = {
     const feed = ctx.cameras?.get(ctx.nodeId ?? "");
     const latest = feed?.latest;
     if (!feed || !latest) throw new Error("Waiting for the camera…");
+    const sound = ctx.mode === "render" ? feed.sound : undefined;
     const s = Math.min(1, PREVIEW_MAX / Math.max(latest.width, latest.height));
     const poster =
       ctx.mode === "preview" && s < 1 ? { ...scaleImage(latest, Math.round(latest.width * s), Math.round(latest.height * s), true), scale: s } : latest;
@@ -70,6 +72,7 @@ export const webcam: NodeDef = {
       fps: 30,
       poster,
       frames: (signal) => feed.record(signal),
+      soundLater: sound && (() => sound),
     };
     return { video };
   },

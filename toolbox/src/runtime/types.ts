@@ -65,6 +65,8 @@ export interface VideoValue {
   poster: Value;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
   audioSource?: Blob;
+  /** Sound recorded alongside live frames (a webcam's microphone), ready once the frames end. */
+  soundLater?: () => Promise<Blob | undefined>;
   /** Set only by input nodes, when frames are still the file's own (lets encoders skip decoding). */
   origin?: Blob;
   /** Full-size frames in order. Each call starts from the beginning. */
@@ -145,6 +147,8 @@ export interface CameraFeed {
   latest?: ImageValue;
   /** Frames from now until the recording stops. */
   record(signal?: AbortSignal): AsyncIterable<FrameItem>;
+  /** The microphone's recording, when this Render records sound; resolves after Stop. */
+  sound?: Promise<Blob | undefined>;
 }
 
 export interface NodeDef {
