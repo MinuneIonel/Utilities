@@ -58,7 +58,11 @@ const YTDLP_MAX_AGE = 7 * 24 * 3600 * 1000;
 /** Updated after a failed download in this session already: a second update won't help. */
 let ytdlpRetried = false;
 
-/** A system yt-dlp, or the one Toolbox keeps in its own folder, downloading it the first time. */
+/**
+ * The yt-dlp Toolbox keeps in its own folder, downloading it the first time. A system copy
+ * (Homebrew) is only a fallback when that download fails: nothing keeps it up to date, and
+ * an old yt-dlp gets 403s from YouTube.
+ */
 let ytdlp = null;
 function getYtdlp(onProgress) {
   ytdlp ??= (async () => {
@@ -70,10 +74,14 @@ function getYtdlp(onProgress) {
       }
       return own;
     }
-    const system = SYSTEM_DIRS.map((d) => path.join(d, "yt-dlp")).find((p) => existsSync(p));
-    if (system) return system;
-    await fetchYtdlp(own, onProgress, "Downloading yt-dlp…");
-    return own;
+    try {
+      await fetchYtdlp(own, onProgress, "Downloading yt-dlp…");
+      return own;
+    } catch (e) {
+      const system = SYSTEM_DIRS.map((d) => path.join(d, "yt-dlp")).find((p) => existsSync(p));
+      if (system) return system;
+      throw e;
+    }
   })().catch((e) => {
     ytdlp = null;
     throw e;
@@ -162,7 +170,8 @@ async function run(sender, id, tool, args, files, stdin = false) {
     if (ffmpegPath) args = ["--ffmpeg-location", ffmpegPath, ...args];
     // YouTube's player challenges need a JavaScript runtime, or its video links answer 403.
     // Toolbox's own Electron runs as Node for that, so nothing else has to be installed.
-    args = ["--js-runtimes", `node:${process.execPath}`, ...args];
+    // A personal yt-dlp config (say -P ~/Downloads) would send files outside the job's folder.
+    args = ["--ignore-config", "--js-runtimes", `node:${process.execPath}`, ...args];
     env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
   }
   if (!bin) {
