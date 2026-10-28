@@ -321,7 +321,8 @@ async function report(
       .catch(() => undefined);
   if (first?.kind === "video") {
     const v = first;
-    const parts = [`${v.width}×${v.height}`];
+    // A list of files (Split into clips) has no picture size of its own.
+    const parts = v.of === "file" && !v.width ? [] : [`${v.width}×${v.height}`];
     if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} item${v.duration === 1 ? "" : "s"}` : `${v.duration.toFixed(1)} s`);
     else if (v.duration === 0 && !v.origin) parts.push("live");
     msg.info = parts.join(" · ");

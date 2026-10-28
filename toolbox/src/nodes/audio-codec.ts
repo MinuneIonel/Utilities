@@ -1,12 +1,14 @@
-// The heavy half of the audio nodes: ffmpeg.wasm for Convert audio and Mediabunny
-// for durations and waveforms. Loaded on first use, so only the graph worker pulls
-// these libraries in.
+// The heavy half of the audio nodes: ffmpeg.wasm for Convert audio, Cut audio and
+// Split into clips, and Mediabunny for durations and waveforms. Loaded on first
+// use, so only the graph worker pulls these libraries in.
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import coreURL from "@ffmpeg/core?url";
 import wasmURL from "@ffmpeg/core/wasm?url";
 import { ALL_FORMATS, AudioSampleSink, BufferSource, Input } from "mediabunny";
-import { convertAudio, defaultSettings, FORMATS, isAudioFormat, type AudioSettings } from "../../../audio/src/engine";
-import type { AudioValue, ImageValue, Params, RunContext, Value } from "../runtime/types";
+import { convertAudio, defaultSettings, FORMATS, isAudioFormat, type AudioFormat, type AudioSettings } from "../../../audio/src/engine";
+import type { AudioValue, FileValue, ImageValue, Params, RunContext, Value } from "../runtime/types";
+import { audioFormatOf, clipNames } from "./clips";
+import type { TimeRange } from "./ffmpeg-video";
 import { NativeFfmpeg, nativeTools } from "./native";
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -42,6 +44,9 @@ export async function duration(bytes: Uint8Array): Promise<number | undefined> {
   }
 }
 
+const clean = (s: unknown) => String(s).replace(/[\\/:*?"<>|]+/g, "-");
+const stem = (name: string) => name.replace(/\.[^./\\]+$/, "") || "audio";
+
 /** Convert audio's Render: native ffmpeg in the desktop app, ffmpeg.wasm otherwise. */
 export async function convert(a: AudioValue, params: Params, ctx: RunContext): Promise<Record<string, Value>> {
   const format = isAudioFormat(String(params.format)) ? (params.format as AudioSettings["format"]) : "mp3";
@@ -59,17 +64,52 @@ export async function convert(a: AudioValue, params: Params, ctx: RunContext): P
     normalize: params.normalize === true,
     gainDb: num(params.gainDb, 0),
   };
-  const finish = async (out: { name: string; bytes: Uint8Array; mime: string }) => {
-    const name = params.name ? `${String(params.name).replace(/[\\/:*?"<>|]+/g, "-")}.${FORMATS[format].ext}` : out.name;
-    const audio: AudioValue = { kind: "audio", name, mime: out.mime, bytes: out.bytes, duration: await duration(out.bytes) };
-    return { audio };
-  };
+  return { audio: await encode(a, settings, params.name ? `${clean(params.name)}.${FORMATS[format].ext}` : undefined, ctx, "Converting") };
+}
+
+/** Cut audio's Render: keep one part of the sound, or take one out and join the rest. */
+export async function cut(a: AudioValue, params: Params, ctx: RunContext): Promise<Record<string, Value>> {
+  const format = isAudioFormat(String(params.format)) ? (params.format as AudioFormat) : audioFormatOf(a.name);
+  const total = a.duration ?? (await duration(a.bytes));
+  const start = Math.max(0, num(params.start, 0));
+  const endAt = num(params.end, 0);
+  const end = endAt > 0 ? (total ? Math.min(endAt, total) : endAt) : (total ?? 1e6);
+  if (!(end > start)) throw new Error("End has to come after Start");
+  const range = { start, end };
+  const remove = params.mode === "remove";
+  const settings: AudioSettings = { ...defaultSettings(), format, bitrate: 0, trim: remove ? null : range, cut: remove ? range : null };
+  const name = params.name ? `${clean(params.name)}.${FORMATS[format].ext}` : `${stem(a.name)}-${remove ? "cut" : "part"}.${FORMATS[format].ext}`;
+  return { audio: await encode({ ...a, duration: total }, settings, name, ctx, "Cutting") };
+}
+
+/** Split into clips for a sound: one file per part. */
+export async function split(a: AudioValue, ranges: (duration: number) => TimeRange[], format: string, base: string, ctx: RunContext): Promise<FileValue[]> {
+  const total = a.duration ?? (await duration(a.bytes));
+  if (!total) throw new Error("This sound's length isn't known, so it can't be split");
+  const fmt = isAudioFormat(format) ? format : audioFormatOf(a.name);
+  const rs = ranges(total);
+  const names = clipNames(base || stem(a.name), rs.length, FORMATS[fmt].ext);
+  const clips: FileValue[] = [];
+  for (let i = 0; i < rs.length; i++) {
+    if (ctx.signal?.aborted) throw new Error("Cancelled");
+    const step = { ...ctx, progress: (f: number) => ctx.progress?.((i + Math.max(0, f)) / rs.length, `Clip ${i + 1} of ${rs.length}`) };
+    const settings: AudioSettings = { ...defaultSettings(), format: fmt, bitrate: 0, trim: rs[i] };
+    const out = await encode({ ...a, duration: total }, settings, names[i], step, "Cutting");
+    clips.push({ kind: "file", name: out.name, mime: out.mime, bytes: out.bytes });
+  }
+  return clips;
+}
+
+/** Runs one Audio Lab job: native ffmpeg in the desktop app, ffmpeg.wasm otherwise. */
+async function encode(a: AudioValue, settings: AudioSettings, name: string | undefined, ctx: RunContext, verb: string): Promise<AudioValue> {
+  const finish = async (out: { name: string; bytes: Uint8Array; mime: string }): Promise<AudioValue> =>
+    ({ kind: "audio", name: name ?? out.name, mime: out.mime, bytes: out.bytes, duration: await duration(out.bytes) });
   const input = { name: a.name, bytes: a.bytes, duration: a.duration };
 
   // The desktop app's native ffmpeg is several times faster and needs no 31 MB download.
   const tools = nativeTools();
   if (tools?.ffmpeg) {
-    const ff = new NativeFfmpeg(tools, { onProgress: (f) => ctx.progress?.(f, "Converting (ffmpeg)"), signal: ctx.signal });
+    const ff = new NativeFfmpeg(tools, { onProgress: (f) => ctx.progress?.(f, `${verb} (ffmpeg)`), signal: ctx.signal });
     try {
       return await finish(await convertAudio(ff, input, settings));
     } catch (e) {
@@ -80,7 +120,7 @@ export async function convert(a: AudioValue, params: Params, ctx: RunContext): P
 
   ctx.progress?.(-1, "Loading ffmpeg…");
   const ff = await getFfmpeg();
-  const onProgress = ({ progress }: { progress: number }) => ctx.progress?.(Math.min(0.99, Math.max(0, progress)), "Converting");
+  const onProgress = ({ progress }: { progress: number }) => ctx.progress?.(Math.min(0.99, Math.max(0, progress)), verb);
   const onAbort = () => killFfmpeg();
   ff.on("progress", onProgress);
   ctx.signal?.addEventListener("abort", onAbort);

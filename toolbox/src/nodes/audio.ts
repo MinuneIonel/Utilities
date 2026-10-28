@@ -74,6 +74,41 @@ export const audioConvert: NodeDef = {
   },
 };
 
+export const audioCut: NodeDef = {
+  type: "audio.cut",
+  title: "Cut audio",
+  category: "audio",
+  description:
+    "Keep just one part of a sound, or take a part out and join what's before and after it. Times are in seconds or minutes:seconds. Runs on Render.",
+  inputs: [{ key: "audio", label: "Audio", type: "audio" }],
+  outputs: [{ key: "audio", label: "Audio", type: "audio" }],
+  params: [
+    {
+      key: "mode",
+      label: "Mode",
+      kind: "select",
+      options: [
+        { value: "keep", label: "Keep this part" },
+        { value: "remove", label: "Take this part out" },
+      ],
+    },
+    { key: "start", label: "Start s", kind: "number", min: 0, max: 36000, step: 0.1 },
+    { key: "end", label: "End s (0 = to the end)", kind: "number", min: 0, max: 36000, step: 0.1 },
+    {
+      key: "format",
+      label: "Format",
+      kind: "select",
+      options: [{ value: "same", label: "Same as the source" }, ...FORMAT_LIST.map((f) => ({ value: f.id, label: f.label }))],
+    },
+    { key: "name", label: "File name", kind: "text" },
+  ],
+  defaults: () => ({ mode: "keep", start: 0, end: 0, format: "same", name: "" }),
+  kind: "job",
+  async run(inputs, params, ctx) {
+    return (await audioCodec()).cut(inputs.audio as AudioValue, params, ctx);
+  },
+};
+
 export const AUDIO_CONVERTERS: Converter[] = [
   {
     from: "audio",
