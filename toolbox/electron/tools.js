@@ -154,11 +154,16 @@ async function run(sender, id, tool, args, files, stdin = false) {
     if (!sender.isDestroyed()) sender.send("tool-progress", id, fraction, label);
   };
   let bin;
+  let env;
   if (tool === "ffmpeg") bin = ffmpegPath;
   else if (tool === "sips") bin = sipsPath;
   else if (tool === "yt-dlp") {
     bin = await getYtdlp(report);
     if (ffmpegPath) args = ["--ffmpeg-location", ffmpegPath, ...args];
+    // YouTube's player challenges need a JavaScript runtime, or its video links answer 403.
+    // Toolbox's own Electron runs as Node for that, so nothing else has to be installed.
+    args = ["--js-runtimes", `node:${process.execPath}`, ...args];
+    env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
   }
   if (!bin) {
     stream?.reject(new Error(`${tool} isn't available`));
@@ -177,7 +182,7 @@ async function run(sender, id, tool, args, files, stdin = false) {
     const parse = progressParser(tool, report);
     if (cancelled.has(id)) throw new Error("Cancelled");
     const code = await new Promise((resolve, reject) => {
-      const p = spawn(bin, args, { cwd: dir, stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+      const p = spawn(bin, args, { cwd: dir, env, stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
       jobs.set(id, p);
       if (stream) {
         // ffmpeg closing its input early (a failed encoder) shows up as EPIPE on the next write.
