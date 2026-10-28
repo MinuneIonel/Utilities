@@ -31,6 +31,8 @@ export interface AudioSettings {
   channels: 1 | 2 | null;
   /** null keeps the whole file. */
   trim: TrimRange | null;
+  /** A part to take out, joining what's before and after it. Not combined with trim. */
+  cut?: TrimRange | null;
   fadeIn: number;
   fadeOut: number;
   /** EBU R128 loudness normalization to -16 LUFS. */
@@ -56,12 +58,16 @@ export function defaultSettings(): AudioSettings {
 /** Length of the output in seconds, or undefined when the source length is unknown. */
 export function outputDuration(settings: AudioSettings, sourceDuration?: number): number | undefined {
   if (settings.trim) return Math.max(0, settings.trim.end - settings.trim.start);
+  if (settings.cut && sourceDuration !== undefined) {
+    const { start, end } = settings.cut;
+    return Math.max(0, sourceDuration - (Math.min(end, sourceDuration) - Math.max(0, start)));
+  }
   return sourceDuration;
 }
 
 export function outputName(inputName: string, settings: AudioSettings): string {
   const base = inputName.replace(/\.[^./\\]+$/, "") || "audio";
-  const suffix = settings.trim ? "-trim" : "";
+  const suffix = settings.trim ? "-trim" : settings.cut ? "-cut" : "";
   return `${base}${suffix}.${FORMATS[settings.format].ext}`;
 }
 
@@ -82,10 +88,23 @@ export function buildArgs(inPath: string, outPath: string, settings: AudioSettin
     args.push("-ss", fmt(start), "-t", fmt(end - start));
   }
 
-  // Drop cover art and any video track; keep tags.
-  args.push("-vn", "-map", "0:a:0", "-map_metadata", "0");
-
   const filters: string[] = [];
+  // The parts either side of a cut, joined back together.
+  const parts: string[] = [];
+  if (settings.cut) {
+    if (settings.trim) throw new Error("Trim and cut can't be combined");
+    const { start, end } = settings.cut;
+    if (!(end > start) || start < 0) throw new Error(`Invalid cut range ${start}–${end}`);
+    if (start > 0) parts.push(`atrim=end=${fmt(start)}`);
+    if (sourceDuration === undefined || end < sourceDuration) parts.push(`atrim=start=${fmt(end)},asetpts=PTS-STARTPTS`);
+    if (!parts.length) throw new Error("That cut takes out the whole sound");
+  }
+
+  // Drop cover art and any video track; keep tags.
+  args.push("-vn");
+  if (!parts.length) args.push("-map", "0:a:0");
+  args.push("-map_metadata", "0");
+
   const length = outputDuration(settings, sourceDuration);
   if (settings.fadeIn > 0) filters.push(`afade=t=in:st=0:d=${fmt(settings.fadeIn)}`);
   if (settings.fadeOut > 0 && length !== undefined) {
@@ -94,7 +113,12 @@ export function buildArgs(inPath: string, outPath: string, settings: AudioSettin
   }
   if (settings.normalize) filters.push("loudnorm=I=-16:TP=-1.5:LRA=11");
   if (settings.gainDb !== 0) filters.push(`volume=${fmt(settings.gainDb)}dB`);
-  if (filters.length) args.push("-af", filters.join(","));
+  if (parts.length) {
+    const graph = parts.map((p, i) => `[0:a:0]${p}[p${i}]`);
+    const joined = parts.length > 1 ? `${parts.map((_, i) => `[p${i}]`).join("")}concat=n=${parts.length}:v=0:a=1` : "[p0]anull";
+    graph.push(`${joined}${filters.length ? "," + filters.join(",") : ""}[out]`);
+    args.push("-filter_complex", graph.join(";"), "-map", "[out]");
+  } else if (filters.length) args.push("-af", filters.join(","));
 
   // loudnorm works at 192 kHz internally, so pin a sane rate when the user kept the source rate.
   const rate = settings.sampleRate ?? (settings.normalize ? 48000 : null);

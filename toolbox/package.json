@@ -13,6 +13,7 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "check:gpu": "node test/gpu/run.mjs",
     "check:encode": "npm run build && node test/e2e/encode.mjs",
+    "check:split": "npm run build && node test/e2e/split.mjs",
     "dist": "tsc --noEmit && vite build && electron-builder --mac dmg --arm64 --publish never",
     "pack": "vite build && electron-builder --dir",
     "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",

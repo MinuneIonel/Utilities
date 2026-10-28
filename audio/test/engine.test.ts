@@ -67,3 +67,21 @@ test("rejects an empty trim range", () => {
 test("output names keep dots in the base name", () => {
   assert.equal(outputName("my.song.v2.flac", defaultSettings()), "my.song.v2.mp3");
 });
+
+test("cuts a part out of the middle and joins the rest", async () => {
+  const out = await convertAudio(nativeFfmpeg, source, { ...defaultSettings(), format: "wav", cut: { start: 2, end: 5 }, fadeOut: 1 });
+  assert.equal(out.name, "tone-cut.wav");
+  const info = probe(out.bytes, "wav");
+  assert.ok(Math.abs(info.duration - 7) < 0.05, `duration ${info.duration}`);
+});
+
+test("cuts the start or the end off", async () => {
+  const head = await convertAudio(nativeFfmpeg, source, { ...defaultSettings(), format: "flac", cut: { start: 0, end: 4 } });
+  assert.ok(Math.abs(probe(head.bytes, "flac").duration - 6) < 0.05);
+  const tail = await convertAudio(nativeFfmpeg, source, { ...defaultSettings(), format: "flac", cut: { start: 8, end: 10 } });
+  assert.ok(Math.abs(probe(tail.bytes, "flac").duration - 8) < 0.05);
+});
+
+test("rejects a cut that takes out everything", () => {
+  assert.throws(() => buildArgs("a.wav", "b.mp3", { ...defaultSettings(), cut: { start: 0, end: 10 } }, 10), /whole sound/);
+});

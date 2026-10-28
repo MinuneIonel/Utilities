@@ -1,6 +1,6 @@
 import type { Converter, NodeDef } from "../runtime/types";
 import { ASCII_CONVERTERS, asciiConvert, asciiRender, asciiText } from "./ascii";
-import { AUDIO_CONVERTERS, audioConvert, audioInput } from "./audio";
+import { AUDIO_CONVERTERS, audioConvert, audioCut, audioInput } from "./audio";
 import { ditherRecipe } from "./dither";
 import { download } from "./download";
 import { fileInput, imagesInput } from "./file";
@@ -8,6 +8,7 @@ import { imageEncode, imageTransform } from "./media";
 import { overlay } from "./overlay";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
 import { SAVE_CONVERTERS, saveFile, saveImage } from "./save";
+import { splitClips } from "./split";
 import { diacritics, saveText, textInput } from "./text";
 import { extractAudio, videoEncode, videoInput, webcam } from "./video";
 
@@ -27,8 +28,10 @@ export const NODE_DEFS: NodeDef[] = [
   asciiRender,
   imageEncode,
   videoEncode,
+  splitClips,
   extractAudio,
   audioConvert,
+  audioCut,
   asciiText,
   diacritics,
   pdfMerge,

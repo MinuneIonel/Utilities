@@ -26,7 +26,8 @@ import {
 } from "mediabunny";
 import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/engine/video";
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
-import type { AudioValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import { clipNames } from "./clips";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
 import { audioArgs, encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile, type TimeRange } from "./ffmpeg-video";
@@ -553,6 +554,54 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
   }
   const r = await encodeStream(v, container, choice, level, fps, params.audio !== false, ctx.progress, ctx.signal);
   return file(r.bytes);
+}
+
+/**
+ * Split into clips for a video: one Encode video per part. An untouched file is cut
+ * straight from the file; frames after image nodes are encoded once first, then cut.
+ */
+export async function splitVideo(v: VideoValue, ranges: (duration: number) => TimeRange[], params: Params, ctx: RunContext): Promise<FileValue[]> {
+  const sourceName = ((v.origin ?? v.audioSource) as File | undefined)?.name;
+  let source: Blob;
+  let span: TimeRange;
+  let sound: Blob | undefined;
+  if (v.origin && v.of === "image") {
+    source = v.origin;
+    span = v.range ?? { start: 0, end: (await info(source)).duration };
+    sound = v.audioSource;
+  } else {
+    const whole = { ...ctx, progress: (f: number) => ctx.progress?.(Math.max(0, f) * 0.5, "Encoding the whole video first") };
+    const r = await encodeVideo(v, { container: "mp4", quality: "very-high", audio: true, name: "whole" }, whole);
+    const f = r.file as FileValue;
+    source = new File([f.bytes as Uint8Array<ArrayBuffer>], f.name, { type: f.mime });
+    const i = await info(source);
+    span = { start: 0, end: i.duration };
+    sound = i.hasAudio ? source : undefined;
+  }
+  const rs = ranges(span.end - span.start);
+  const container = (String(params.container) in VIDEO_CONTAINERS ? params.container : "mp4") as VideoContainer;
+  const base = clean(params.name, (sourceName ?? "video").replace(/\.[^.]+$/, "") || "video");
+  const names = clipNames(base, rs.length, VIDEO_CONTAINERS[container].ext);
+  const done = v.origin ? 0 : 0.5;
+  const clips: FileValue[] = [];
+  for (let n = 0; n < rs.length; n++) {
+    if (ctx.signal?.aborted) throw new Error("Cancelled");
+    const range = { start: span.start + rs[n].start, end: span.start + rs[n].end };
+    const clip: VideoValue = {
+      ...v,
+      of: "image",
+      duration: range.end - range.start,
+      origin: source,
+      range,
+      audioSource: sound,
+      soundLater: undefined,
+      frames: (signal) => fileFrames(source, signal, range),
+    };
+    const step = { ...ctx, progress: (f: number) => ctx.progress?.(done + ((1 - done) * (n + Math.max(0, f))) / rs.length, `Clip ${n + 1} of ${rs.length}`) };
+    const r = await encodeVideo(clip, { ...params, container, name: names[n].replace(/\.[^.]+$/, "") }, step);
+    clips.push(r.file as FileValue);
+  }
+  return clips;
 }
 
 /**

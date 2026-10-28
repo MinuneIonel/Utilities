@@ -127,6 +127,28 @@ export const WORKFLOWS: Workflow[] = [
       ]),
   },
   {
+    id: "split-video",
+    title: "Split a video into clips",
+    description: "Drop in a video and save it as 30-second clips, or pick the times to cut at.",
+    build: () =>
+      chain([
+        ["input.video", {}],
+        ["media.split", { mode: "every", every: 30 }, "video", "clips"],
+        ["output.save-file", {}],
+      ]),
+  },
+  {
+    id: "cut-audio",
+    title: "Cut a part out of a sound",
+    description: "Drop in a sound, set Start and End, and save it with that part taken out.",
+    build: () =>
+      chain([
+        ["input.audio", {}],
+        ["audio.cut", { mode: "remove" }],
+        ["output.save-file", {}, "file"],
+      ]),
+  },
+  {
     id: "video-gif",
     title: "Video to GIF",
     description: "Drop in a short video and save it as a 480px GIF.",

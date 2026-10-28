@@ -10,6 +10,7 @@ npm run toolbox:web    # the UI in a browser tab, for development (no ffmpeg, yt
 npm test -w toolbox    # graph runtime tests
 npm run check:gpu -w toolbox      # WebGPU against CPU output (add -- --bench for timings)
 npm run check:encode -w toolbox   # Encode video through the app: ProRes, HEVC, H.264 (add -- --bench for 1080p)
+npm run check:split -w toolbox    # Split into clips and Cut audio through the app
 npm run toolbox:dmg       # on a Mac: release/Toolbox-<version>-mac-arm64.dmg
 npm run toolbox:exe       # on Windows: release/Toolbox-<version>-win-x64.exe
 npm run toolbox:appimage  # on Linux: release/Toolbox-<version>-linux-x86_64.AppImage
@@ -56,6 +57,6 @@ The installers aren't signed with a paid certificate (the Mac app is ad-hoc sign
 | `src/ui/` | React components: graph node card, inspector, Dither Lab's stack editor |
 | `build/` | App icon: `icon.svg` is the source, `icon.png` (1024 px) and `icon.icns` are rendered from it |
 
-Nodes: Image file, Several images, Video, Audio and PDF files, Webcam, Download from link, Text; Resize / crop, Text / logo overlay, Dither, ASCII, ASCII to image, Encode image; Encode video (MP4, WebM, MOV, MKV, GIF; ProRes and HEVC through ffmpeg under Advanced); Extract audio, Convert audio; ASCII to text, Romanian diacritics; Merge PDFs, Pick pages, Watermark / numbers, Protect, Compact, Images to PDF, Pages to images; Save. (Save image and Save text still open in older graphs.)
+Nodes: Image file, Several images, Video, Audio and PDF files, Webcam, Download from link, Text; Resize / crop, Text / logo overlay, Dither, ASCII, ASCII to image, Encode image; Encode video (MP4, WebM, MOV, MKV, GIF; ProRes and HEVC through ffmpeg under Advanced), Split into clips (a video or sound cut every so many seconds, into equal parts, at listed times, or into listed parts; Save writes one file per clip); Extract audio, Convert audio, Cut audio (keep one part, or take a part out and join the rest); ASCII to text, Romanian diacritics; Merge PDFs, Pick pages, Watermark / numbers, Protect, Compact, Images to PDF, Pages to images; Save. (Save image and Save text still open in older graphs.)
 
 Video is decoded and encoded with Mediabunny (WebCodecs), except ProRes and HEVC in the desktop app (see above). In a browser tab, formats WebCodecs can't read (AVI, WMV…) need converting in Media Lab first; the desktop app converts them itself.
