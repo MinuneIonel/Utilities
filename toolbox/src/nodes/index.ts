@@ -8,6 +8,7 @@ import { imageEncode, imageTransform } from "./media";
 import { overlay } from "./overlay";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
 import { SAVE_CONVERTERS, saveFile, saveImage } from "./save";
+import { qrCode } from "./qr";
 import { splitClips } from "./split";
 import { diacritics, saveText, textInput } from "./text";
 import { extractAudio, videoEncode, videoInput, webcam } from "./video";
@@ -21,6 +22,7 @@ export const NODE_DEFS: NodeDef[] = [
   audioInput,
   pdfInput,
   textInput,
+  qrCode,
   imageTransform,
   overlay,
   ditherRecipe,
