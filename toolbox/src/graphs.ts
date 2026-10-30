@@ -244,6 +244,16 @@ export const WORKFLOWS: Workflow[] = [
       ]),
   },
   {
+    id: "qr-code",
+    title: "QR code for a link",
+    description: "Type a link (or Wi-Fi details) and save a QR code as a PNG. The SVG output makes a scalable .svg.",
+    build: () =>
+      chain([
+        ["input.qr", {}],
+        ["output.save-file", { name: "qr-code" }, "file"],
+      ]),
+  },
+  {
     id: "romanian",
     title: "Clean up Romanian text",
     description: "Paste Romanian text without diacritics and get it back with ă, â, î, ș and ț.",
