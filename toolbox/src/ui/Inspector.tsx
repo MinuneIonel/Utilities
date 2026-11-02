@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { REGISTRY } from "../nodes";
 import { bridge } from "../platform";
-import type { ParamDef, Params } from "../runtime/types";
+import { hasPresets, matchingPreset, PRESET_STORE, presetParams, readPresets, withoutPreset, withPreset, type PresetBook } from "../presets";
+import type { NodeDef, ParamDef, Params } from "../runtime/types";
 import type { ToolFlowNode } from "./context";
 import { AsciiPanel } from "./AsciiPanel";
 import { DitherPanel } from "./DitherPanel";
@@ -19,6 +20,116 @@ function CommitInput({ value, set, placeholder }: { value: string; set: (v: stri
       onBlur={() => draft !== value && set(draft)}
       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
     />
+  );
+}
+
+const storage = (): Storage | undefined => {
+  try {
+    return localStorage;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Save the node's settings under a name, and put saved ones back with one pick (⌘Z undoes it). */
+function PresetBar({ def, params, apply }: { def: NodeDef; params: Params; apply: (p: Params) => void }) {
+  const [book, setBook] = useState<PresetBook>(() => readPresets(storage()));
+  const [naming, setNaming] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  // Another window, or another inspector, may have saved one.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => e.key === PRESET_STORE && setBook(readPresets(storage()));
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  useEffect(() => setConfirm(false), [params]);
+
+  const list = book[def.type] ?? [];
+  const current = presetParams(def, params);
+  const match = matchingPreset(list, current);
+  const store = (next: PresetBook) => {
+    setBook(next);
+    try {
+      storage()?.setItem(PRESET_STORE, JSON.stringify(next));
+    } catch {
+      /* full or unavailable: the preset lasts until the app closes */
+    }
+  };
+  const save = () => {
+    const name = (naming ?? "").trim();
+    if (!name) return setNaming(null);
+    const p = structuredClone(current);
+    // Dither recipes and ASCII settings carry their own name, which their panels show.
+    for (const d of def.params) {
+      const v = p[d.key] as { name?: unknown } | undefined;
+      if (d.kind === "custom" && v && typeof v === "object" && typeof v.name === "string") v.name = name;
+    }
+    store(withPreset(book, def.type, { name, params: p }));
+    setNaming(null);
+    apply(p);
+  };
+
+  if (naming !== null)
+    return (
+      <div className="field presets">
+        <label>Preset name</label>
+        <input
+          type="text"
+          autoFocus
+          value={naming}
+          placeholder="e.g. Grainy Game Boy"
+          onChange={(e) => setNaming(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setNaming(null);
+          }}
+        />
+        <span className="preset-actions">
+          <button onClick={save} disabled={!naming.trim()}>
+            {list.some((p) => p.name === naming.trim()) ? "Replace" : "Save"}
+          </button>
+          <button onClick={() => setNaming(null)}>Cancel</button>
+        </span>
+      </div>
+    );
+  return (
+    <div className="field presets">
+      <label>My presets</label>
+      <select
+        value={match?.name ?? ""}
+        title={list.length ? "Put back settings you saved for this kind of node" : "Settings you save show up here"}
+        onChange={(e) => {
+          const p = list.find((x) => x.name === e.target.value);
+          if (p) apply(structuredClone(p.params));
+        }}
+      >
+        <option value="">{list.length ? (match ? "" : "Pick a preset…") : "None saved yet"}</option>
+        {list.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <span className="preset-actions">
+        <button onClick={() => setNaming(match?.name ?? "")} title="Save these settings as a preset for every node of this kind">
+          Save…
+        </button>
+        {match && (
+          <button
+            className={confirm ? "danger" : ""}
+            onClick={() => {
+              if (!confirm) return setConfirm(true);
+              store(withoutPreset(book, def.type, match.name));
+              setConfirm(false);
+            }}
+            onBlur={() => setConfirm(false)}
+            title={`Delete the preset “${match.name}”`}
+          >
+            {confirm ? "Delete?" : "Delete"}
+          </button>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -100,6 +211,7 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
     <aside className="inspector">
       <h2>{def.title}</h2>
       <p className="hint">{def.description}</p>
+      {hasPresets(def) && <PresetBar key={def.type} def={def} params={p} apply={(patch) => onParams(node.id, patch)} />}
       {shown.filter((d) => !d.advanced).map(field)}
       {advanced.length > 0 && (
         <details className="advanced">
