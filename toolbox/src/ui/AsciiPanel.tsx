@@ -15,10 +15,26 @@ export function AsciiPanel({ value, onChange }: { value: unknown; onChange: (s: 
   const syncRef = useRef<() => void>(() => {});
   const presets = useRef(builtInPresets());
 
+  // What this panel last sent, so a change from elsewhere (undo, a preset) can be told apart.
+  const sent = useRef(JSON.stringify(work.current));
+  const emit = (s: Settings) => {
+    sent.current = JSON.stringify(s);
+    changeRef.current(structuredClone(s));
+  };
+
   useEffect(() => {
-    syncRef.current = mountControls(rootRef.current!, () => work.current, () => changeRef.current(structuredClone(work.current)));
+    syncRef.current = mountControls(rootRef.current!, () => work.current, () => emit(work.current));
     return () => rootRef.current?.replaceChildren();
   }, []);
+
+  useEffect(() => {
+    const next = parseSettings(value);
+    const key = JSON.stringify(next);
+    if (key === sent.current) return;
+    sent.current = key;
+    work.current = next;
+    syncRef.current();
+  }, [value]);
 
   return (
     <div className="ascii-panel">
@@ -31,7 +47,7 @@ export function AsciiPanel({ value, onChange }: { value: unknown; onChange: (s: 
             if (!p) return;
             work.current = structuredClone(p);
             syncRef.current();
-            changeRef.current(structuredClone(p));
+            emit(p);
           }}
         >
           <option value="">{work.current.name}</option>

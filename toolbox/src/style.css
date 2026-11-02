@@ -184,6 +184,11 @@ details.advanced summary { cursor: pointer; color: var(--muted); font-size: 12px
 .field input.num { width: 64px; height: 26px; font: 11px var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .field.stacked { grid-template-columns: 1fr; }
 .field textarea { width: 100%; resize: vertical; font: 12px/1.4 var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.field.presets { grid-template-columns: 92px 1fr; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.field.presets select, .field.presets input[type="text"] { grid-column: 2; }
+.preset-actions { grid-column: 2; display: flex; gap: 6px; }
+.preset-actions button { padding: 3px 10px; font-size: 12px; }
+button.danger { border-color: #ff5a5a; color: #ff5a5a; }
 .field .path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dither-panel { margin-top: 12px; }
 
@@ -284,4 +289,5 @@ kbd { font: 10px var(--mono); padding: 1px 4px; margin-left: 4px; border: 1px so
 .tutorial-count { font: 11px var(--mono); color: var(--muted); }
 .tutorial-actions { display: flex; gap: 6px; align-items: center; }
 .tutorial-actions .spacer { flex: 1; }
+.topbar .undo, .topbar .redo { width: 30px; padding: 0; font-size: 15px; }
 .topbar .help { width: 30px; padding: 0; font-weight: 600; }
