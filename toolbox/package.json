@@ -15,6 +15,7 @@
     "check:encode": "npm run build && node test/e2e/encode.mjs",
     "check:split": "npm run build && node test/e2e/split.mjs",
     "check:qr": "npm run build && node test/e2e/qr.mjs",
+    "check:alpha": "npm run build && node test/e2e/alpha.mjs",
     "dist": "tsc --noEmit && vite build && electron-builder --mac dmg --arm64 --publish never",
     "pack": "vite build && electron-builder --dir",
     "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",
