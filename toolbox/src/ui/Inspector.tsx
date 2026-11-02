@@ -34,6 +34,7 @@ function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: un
             className="num"
             min={def.min}
             max={def.max}
+            step={def.step}
             value={Number(value)}
             onChange={(e) => Number.isFinite(e.target.valueAsNumber) && set(e.target.valueAsNumber)}
           />
