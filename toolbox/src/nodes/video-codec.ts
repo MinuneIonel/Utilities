@@ -27,6 +27,7 @@ import {
 import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/engine/video";
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
 import type { AudioValue, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import { flattenOnBlack, gifFrame, hasTransparency } from "./alpha";
 import { clipNames } from "./clips";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
@@ -204,7 +205,8 @@ function estimateFps(blob: Blob): Promise<number> {
 /**
  * A frame at exactly w × h. Most encoders need even sizes, so a frame one pixel
  * over loses its last row or column; a frame of another size (a slideshow of
- * mixed photos) is scaled to fit and centred on black.
+ * mixed photos) is scaled to fit and centred: on black, or on nothing when it has
+ * transparency of its own.
  */
 function evenFrame(img: ImageValue, w: number, h: number): Uint8ClampedArray {
   if (img.width === w && img.height === h) return img.data;
@@ -212,7 +214,7 @@ function evenFrame(img: ImageValue, w: number, h: number): Uint8ClampedArray {
     const s = Math.min(w / img.width, h / img.height);
     const fit = scaleImage(img, Math.max(1, Math.round(img.width * s)), Math.max(1, Math.round(img.height * s)), true);
     const out = new Uint8ClampedArray(w * h * 4);
-    for (let i = 3; i < out.length; i += 4) out[i] = 255;
+    if (!hasTransparency(img.data)) for (let i = 3; i < out.length; i += 4) out[i] = 255;
     const x0 = Math.floor((w - fit.width) / 2);
     const y0 = Math.floor((h - fit.height) / 2);
     for (let y = 0; y < fit.height; y++) out.set(fit.data.subarray(y * fit.width * 4, (y + 1) * fit.width * 4), ((y0 + y) * w + x0) * 4);
@@ -278,6 +280,7 @@ async function encodeStream(
   let audioDone: Promise<void> = Promise.resolve();
   let codec = "";
   let last = 0;
+  let alpha = false;
   try {
     for await (const f of paced(v.frames(signal), fps)) {
       if (signal?.aborted) throw new Error("Cancelled");
@@ -289,7 +292,9 @@ async function encodeStream(
         const c = await getFirstEncodableVideoCodec(wanted, { width: size.w, height: size.h });
         if (!c) throw new Error(`This system can't encode ${wanted.join("/")} at ${size.w}×${size.h}`);
         codec = c;
-        video = new VideoSampleSource({ codec: c, bitrate: new Quality(level) });
+        // WebM players show VP9/AV1 alpha; a transparent first frame keeps it for the whole video.
+        alpha = container === "webm" && hasTransparency(img.data);
+        video = new VideoSampleSource({ codec: c, bitrate: new Quality(level), alpha: alpha ? "keep" : "discard" });
         output.addVideoTrack(video, fps > 0 ? { frameRate: fps } : undefined);
         const audio = !keepAudio
           ? undefined
@@ -299,7 +304,8 @@ async function encodeStream(
         await output.start();
         if (audio) audioDone = audio();
       }
-      const sample = new VideoSample(evenFrame(img, size.w, size.h), {
+      const even = evenFrame(img, size.w, size.h);
+      const sample = new VideoSample(alpha ? even : flattenOnBlack(even), {
         format: "RGBA",
         codedWidth: size.w,
         codedHeight: size.h,
@@ -393,9 +399,15 @@ async function encodeGif(v: VideoValue, fps: number, progress: ((f: number, l?: 
     const img = frameImage(f.value);
     // Every frame takes the first one's size: GIF frames can't be larger than the image.
     size ??= { w: img.width, h: img.height };
-    const data = evenFrame(img, size.w, size.h);
-    const palette = quantize(data, 256);
-    gif.writeFrame(applyPalette(data, palette), size.w, size.h, { palette, delay: Math.round(f.duration * 1000) });
+    const { index, palette, transparentIndex } = gifFrame(evenFrame(img, size.w, size.h), { quantize, applyPalette });
+    // Every frame clears to see-through before the next, so transparent pixels never show the frame before.
+    gif.writeFrame(index, size.w, size.h, {
+      palette,
+      delay: Math.round(f.duration * 1000),
+      transparent: transparentIndex !== undefined,
+      transparentIndex,
+      dispose: 2,
+    });
     n++;
     if (v.duration > 0) progress?.(Math.min(0.99, f.timestamp / v.duration), `GIF frame ${n}`);
   }
@@ -461,7 +473,9 @@ async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, j
       stream = tools.open("ffmpeg", rawEncodeArgs({ width: size.w, height: size.h, fps: rate }, e, job.codec, job.container, job.level, job.prores, audioName, out, v.range), files, { signal: ctx.signal });
       stream.done.catch(() => undefined);
     }
-    const data = evenFrame(img, size.w, size.h);
+    // ProRes 4444 keeps alpha; the rest drop it, so transparent pixels go black instead of showing what's under them.
+    const even = evenFrame(img, size.w, size.h);
+    const data = job.codec === "prores" && job.prores === "4444" ? even : flattenOnBlack(even);
     try {
       await pending;
     } catch {
