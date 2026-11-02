@@ -32,7 +32,7 @@ export default defineConfig({
   // Engines are imported straight from the sibling app folders.
   server: { fs: { allow: [".."] } },
   // The codec packages load their .wasm files relative to their own modules, which breaks if Vite pre-bundles them.
-  optimizeDeps: { exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@jsquash/avif", "@jsquash/jpeg", "@jsquash/png", "@jsquash/webp", "@jsquash/oxipng", "@jsquash/resize"] },
+  optimizeDeps: { exclude: ["onnxruntime-web", "@ffmpeg/ffmpeg", "@ffmpeg/util", "@jsquash/avif", "@jsquash/jpeg", "@jsquash/png", "@jsquash/webp", "@jsquash/oxipng", "@jsquash/resize"] },
   worker: { format: "es" },
   // A desktop app loads from disk, so one large chunk costs nothing.
   build: { chunkSizeWarningLimit: 2000 },

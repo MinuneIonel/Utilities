@@ -206,6 +206,28 @@ export const WORKFLOWS: Workflow[] = [
         ["output.save-file", {}],
       ]),
   },
+  {
+    id: "remove-background",
+    title: "Remove the background",
+    description: "Drop in a photo and save the subject as a PNG with a transparent background. Works offline after the first run.",
+    build: () =>
+      chain([
+        ["input.file", {}],
+        ["image.removebg", {}],
+        ["output.save-file", { name: "no-background" }, "file"],
+      ]),
+  },
+  {
+    id: "remove-background-photos",
+    title: "Remove the background from many photos",
+    description: "Drop in a pile of photos and save each cut-out as a transparent PNG, into one folder.",
+    build: () =>
+      chain([
+        ["input.images", {}],
+        ["image.removebg", {}],
+        ["output.save-file", {}, "file"],
+      ]),
+  },
   { id: "dither", title: "Dither an image", description: "Drop in an image, pick a look, save a PNG.", build: starterGraph },
   {
     id: "video-ascii",

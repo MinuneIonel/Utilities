@@ -9,6 +9,7 @@ import { overlay } from "./overlay";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
 import { SAVE_CONVERTERS, saveFile, saveImage } from "./save";
 import { qrCode } from "./qr";
+import { removeBackground } from "./remove-bg";
 import { splitClips } from "./split";
 import { diacritics, saveText, textInput } from "./text";
 import { extractAudio, videoEncode, videoInput, webcam } from "./video";
@@ -25,6 +26,7 @@ export const NODE_DEFS: NodeDef[] = [
   qrCode,
   imageTransform,
   overlay,
+  removeBackground,
   ditherRecipe,
   asciiConvert,
   asciiRender,

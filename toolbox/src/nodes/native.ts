@@ -63,6 +63,18 @@ export function setNativeTools(t: NativeTools | undefined) {
 
 export const nativeTools = () => tools;
 
+/** Gets a model file by name (downloading it once, in the desktop app); progress is -1 while unknown. */
+export type ModelFetcher = (file: string, onProgress?: (fraction: number, label?: string) => void) => Promise<Uint8Array>;
+
+let models: ModelFetcher | undefined;
+
+/** Set by the worker in the desktop app, which keeps models in its own folder so they work offline. */
+export function setModelFetcher(f: ModelFetcher | undefined) {
+  models = f;
+}
+
+export const modelFetcher = () => models;
+
 /** The last useful line of a tool's log, for error messages. */
 export function lastError(log: string): string {
   const lines = log.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).reverse();

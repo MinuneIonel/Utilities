@@ -28,6 +28,8 @@ interface ToolboxBridge {
   writeTool(id: string, bytes: Uint8Array): Promise<void>;
   endTool(id: string): Promise<void>;
   cancelTool(id: string): Promise<void>;
+  /** A model file kept in Toolbox's folder, downloaded (with progress under `id`) the first time. */
+  getModel(id: string, file: string): Promise<Uint8Array>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
 }
 
