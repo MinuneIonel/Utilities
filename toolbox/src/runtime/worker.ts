@@ -3,7 +3,7 @@
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { audioCodec } from "../nodes/audio";
-import { setLocalPath, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import { setLocalPath, setModelFetcher, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
 import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
@@ -73,7 +73,9 @@ export type ToolRequest =
   | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
   | { type: "tool-write"; callId: string; writeId: number; bytes: Uint8Array }
   | { type: "tool-end"; callId: string }
-  | { type: "tool-cancel"; callId: string };
+  | { type: "tool-cancel"; callId: string }
+  /** A model file from the desktop app's folder (downloaded there the first time). */
+  | { type: "model-get"; callId: string; file: string };
 
 export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
 
@@ -194,6 +196,14 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   } else if (msg.type === "cam-audio") {
     cameras.get(msg.id)?.setSound(msg.blob);
   } else if (msg.type === "tools") {
+    setModelFetcher(
+      (file, onProgress) =>
+        new Promise((resolve, reject) => {
+          const callId = `t${++toolCallN}`;
+          toolCalls.set(callId, { resolve: (r) => resolve(r.files[file]), reject, onProgress });
+          post({ type: "model-get", callId, file });
+        }),
+    );
     const { ffmpeg, ytdlp } = msg;
     const sips = !!msg.sips;
     setNativeTools(

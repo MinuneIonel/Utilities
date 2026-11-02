@@ -4,6 +4,7 @@ import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shel
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { registerModels } from "./models.js";
 import { registerTools } from "./tools.js";
 import { registerUpdater } from "./updater.js";
 
@@ -15,6 +16,11 @@ const devUrl = process.env.TOOLBOX_DEV_URL;
 protocol.registerSchemesAsPrivileged([
   { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
+
+// WebAssembly threads need SharedArrayBuffer, which a page only gets when it is cross-origin
+// isolated. The UI only ever loads its own files, so it's turned on for the whole app: Remove
+// background's model then uses every CPU core on computers where it can't use the GPU.
+app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -183,6 +189,7 @@ ipcMain.handle("edit-text", (e, command) => {
 app.whenReady().then(() => {
   allowCamera();
   registerTools();
+  registerModels();
   registerUpdater(() => win);
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);

@@ -14,7 +14,14 @@ export function Bitmap({ bitmap, className }: { bitmap?: ImageBitmap; className?
     }
     c.width = bitmap.width;
     c.height = bitmap.height;
-    c.getContext("2d")!.drawImage(bitmap, 0, 0);
+    const g = c.getContext("2d")!;
+    // A checkerboard under the image, so transparent areas read as transparent instead of black.
+    const sq = Math.max(4, Math.round(Math.max(bitmap.width, bitmap.height) / 40));
+    g.fillStyle = "#2a2c30";
+    g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = "#1c1d20";
+    for (let y = 0; y * sq < c.height; y++) for (let x = y % 2; x * sq < c.width; x += 2) g.fillRect(x * sq, y * sq, sq, sq);
+    g.drawImage(bitmap, 0, 0);
   }, [bitmap]);
   return <canvas ref={ref} className={className} hidden={!bitmap} />;
 }

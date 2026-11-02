@@ -38,6 +38,8 @@ const NODE_HALF_WIDTH = 110;
 const HISTORY = 100;
 /** Changes closer together than this (a slider drag, a node drag) undo as one step. */
 const HISTORY_SETTLE = 400;
+/** How shortcuts are written on this computer. */
+const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
 /** The Add node menu: where it is, and the wire it was opened from, if any. */
 interface MenuState {
@@ -135,8 +137,12 @@ function hasContent(nodes: ToolFlowNode[]): boolean {
   });
 }
 
-/** Whether keys typed now belong to a text field rather than the graph. */
-const typingIn = (el: Element | null) => !!el?.closest("input, textarea, select, [contenteditable]");
+/**
+ * Whether keys typed now belong to a text field rather than the graph. Sliders, menus and
+ * checkboxes keep focus after you use them, but ⌘Z there should undo the change, not do nothing.
+ */
+const typingIn = (el: Element | null) =>
+  !!el?.closest('textarea, [contenteditable]:not([contenteditable="false"]), input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="email"], input[type="password"]');
 
 const inputPort = (nodeType: string, key: string | null) => REGISTRY.get(nodeType)?.inputs.find((p) => p.key === key);
 
@@ -259,6 +265,9 @@ export function App() {
   const graphKeyRef = useRef(graphKey);
   graphKeyRef.current = graphKey;
   const history = useRef({ past: [] as string[], future: [] as string[], at: graphKey, quiet: false });
+  // How many steps each way, for the Undo and Redo buttons.
+  const [steps, setSteps] = useState({ past: 0, future: 0 });
+  const countSteps = useCallback(() => setSteps({ past: history.current.past.length, future: history.current.future.length }), []);
   const commitHistory = useCallback(() => {
     const h = history.current;
     const now = graphKeyRef.current;
@@ -269,7 +278,11 @@ export function App() {
       h.future = [];
     }
     h.at = now;
-  }, []);
+    countSteps();
+  }, [countSteps]);
+  // A change that hasn't settled into a step yet can still be undone.
+  const canUndo = steps.past > 0 || graphKey !== history.current.at;
+  const canRedo = steps.future > 0 && graphKey === history.current.at;
   useEffect(() => {
     if (graphKey === history.current.at) return;
     const t = setTimeout(commitHistory, HISTORY_SETTLE);
@@ -279,7 +292,11 @@ export function App() {
   const applySnapshot = useCallback(
     (key: string) => {
       const f = toFlow(JSON.parse(key) as Graph);
-      setNodes(f.nodes);
+      // Keep what's selected, so the inspector stays on the node you were changing.
+      setNodes((ns) => {
+        const selected = new Set(ns.filter((n) => n.selected).map((n) => n.id));
+        return f.nodes.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n));
+      });
       setEdges(f.edges);
     },
     [setEdges, setNodes],
@@ -292,7 +309,8 @@ export function App() {
     h.future.push(h.at);
     h.at = prev;
     applySnapshot(prev);
-  }, [applySnapshot, commitHistory, flash]);
+    countSteps();
+  }, [applySnapshot, commitHistory, countSteps, flash]);
   const redo = useCallback(() => {
     commitHistory();
     const h = history.current;
@@ -301,7 +319,8 @@ export function App() {
     h.past.push(h.at);
     h.at = next;
     applySnapshot(next);
-  }, [applySnapshot, commitHistory, flash]);
+    countSteps();
+  }, [applySnapshot, commitHistory, countSteps, flash]);
 
   // ---------------------------------------------------------------- files
 
@@ -882,6 +901,12 @@ export function App() {
               </button>
               <button onClick={openGraph}>Open</button>
               <button onClick={saveGraph}>Save</button>
+              <button className="undo" onClick={undo} disabled={!canUndo} title={`Undo (${MOD}Z)`} aria-label="Undo">
+                ↶
+              </button>
+              <button className="redo" onClick={redo} disabled={!canRedo} title={`Redo (${MOD === "⌘" ? "⇧⌘Z" : "Ctrl+Y"})`} aria-label="Redo">
+                ↷
+              </button>
             </div>
             <div className="message">{message}</div>
             <div className="group right">

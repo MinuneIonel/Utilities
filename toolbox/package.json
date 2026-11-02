@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Toolbox: wire the Utilities tools together as a node graph",
   "type": "module",
   "main": "electron/main.js",
@@ -15,10 +15,13 @@
     "check:encode": "npm run build && node test/e2e/encode.mjs",
     "check:split": "npm run build && node test/e2e/split.mjs",
     "check:qr": "npm run build && node test/e2e/qr.mjs",
+    "check:alpha": "npm run build && node test/e2e/alpha.mjs",
+    "check:removebg": "npm run build && node test/e2e/removebg.mjs",
     "dist": "tsc --noEmit && vite build && electron-builder --mac dmg --arm64 --publish never",
     "pack": "vite build && electron-builder --dir",
     "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",
-    "dist:linux": "tsc --noEmit && vite build && electron-builder --linux AppImage --x64 --publish never"
+    "dist:linux": "tsc --noEmit && vite build && electron-builder --linux AppImage --x64 --publish never",
+    "check:presets": "npm run build && node test/e2e/presets.mjs"
   },
   "devDependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
@@ -36,6 +39,7 @@
     "gifenc": "^1.0.3",
     "jsqr": "^1.4.0",
     "mediabunny": "^1.62.1",
+    "onnxruntime-web": "^1.23.2",
     "pdfjs-dist": "^6.4.299",
     "playwright-core": "^1.63.0",
     "qrcode-generator": "^2.0.4",

@@ -107,6 +107,14 @@ export class RuntimeClient {
         .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
       return;
     }
+    if (msg.type === "model-get") {
+      const { callId, file } = msg;
+      bridge
+        ?.getModel(callId, file)
+        .then((bytes) => this.worker.postMessage({ type: "tool-result", callId, result: { code: 0, files: { [file]: bytes }, log: "" } } satisfies ToWorker, [bytes.buffer]))
+        .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
+      return;
+    }
     if (msg.type === "tool-write") {
       const { callId, writeId } = msg;
       bridge

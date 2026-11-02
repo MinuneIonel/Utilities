@@ -28,5 +28,6 @@ contextBridge.exposeInMainWorld("toolbox", {
   writeTool: (id, bytes) => ipcRenderer.invoke("tool-write", id, bytes),
   endTool: (id) => ipcRenderer.invoke("tool-end", id),
   cancelTool: (id) => ipcRenderer.invoke("tool-cancel", id),
+  getModel: (id, file) => ipcRenderer.invoke("model-get", id, file),
   onToolProgress: (handler) => ipcRenderer.on("tool-progress", (_e, id, fraction, label) => handler(id, fraction, label)),
 });

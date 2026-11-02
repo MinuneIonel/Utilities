@@ -17,7 +17,22 @@ export function DitherPanel({ value, onChange }: { value: unknown; onChange: (r:
   const [pixelSize, setPixelSize] = useState(work.current.pixelSize);
   const presets = useRef(builtInRecipes());
 
-  const emit = () => changeRef.current(structuredClone(work.current));
+  // What this panel last sent, so a change from elsewhere (undo, a preset) can be told apart.
+  const sent = useRef(JSON.stringify(work.current));
+  const emit = () => {
+    sent.current = JSON.stringify(work.current);
+    changeRef.current(structuredClone(work.current));
+  };
+
+  useEffect(() => {
+    const next = parseRecipe(value);
+    const key = JSON.stringify(next);
+    if (key === sent.current) return;
+    sent.current = key;
+    work.current = next;
+    setPixelSize(next.pixelSize);
+    refreshRef.current();
+  }, [value]);
 
   useEffect(() => {
     addRef.current!.replaceChildren(new Option("+ Add step", ""));
