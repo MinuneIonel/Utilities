@@ -16,9 +16,10 @@ export function AsciiPanel({ value, onChange }: { value: unknown; onChange: (s: 
   const presets = useRef(builtInPresets());
 
   // What this panel last sent, so a change from elsewhere (undo, a preset) can be told apart.
-  const sent = useRef(JSON.stringify(work.current));
+  const sent = useRef(JSON.stringify(parseSettings(work.current)));
   const emit = (s: Settings) => {
-    sent.current = JSON.stringify(s);
+    // Normalised the same way as incoming values, so the panel's own edits never look like outside ones.
+    sent.current = JSON.stringify(parseSettings(s));
     changeRef.current(structuredClone(s));
   };
 

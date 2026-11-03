@@ -72,6 +72,9 @@ export function installWheelNudge(root: Document | HTMLElement = document): () =
       target = over ?? "scroll";
       acc = 0;
     }
+    // The slider was rebuilt under the pointer (a panel re-rendered it): keep going on the new one,
+    // so a wheel over a slider never turns into scrolling the panel.
+    if (target && target !== "scroll" && !target.isConnected && over) target = over;
     // Pointer left the slider mid-gesture: hand the rest of it back to the panel.
     if (target !== "scroll" && over !== target) target = "scroll";
     if (target === "scroll" || !target) return;
