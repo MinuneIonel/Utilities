@@ -99,6 +99,14 @@ export function parseRecipe(json: unknown): Recipe {
   };
 }
 
+/**
+ * What a recipe means, as a string to compare. parseRecipe gives every step a fresh id, so ids are
+ * left out: comparing them makes two copies of the same recipe look different.
+ */
+export function recipeKey(r: Recipe): string {
+  return JSON.stringify({ ...r, steps: r.steps.map(({ type, enabled, params }) => ({ type, enabled, params })) });
+}
+
 export function encodeRecipe(r: Recipe): string {
   const slim = { ...r, steps: r.steps.map(({ type, enabled, params }) => ({ type, enabled, params })) };
   const bytes = new TextEncoder().encode(JSON.stringify(slim));

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { parseRecipe, type Recipe } from "../../../dither/src/engine/recipe";
+import { parseRecipe, recipeKey, type Recipe } from "../../../dither/src/engine/recipe";
 import { builtInRecipes } from "../../../dither/src/recipes";
 import { mountStack } from "../../../dither/src/ui/stack";
 
@@ -18,15 +18,17 @@ export function DitherPanel({ value, onChange }: { value: unknown; onChange: (r:
   const presets = useRef(builtInRecipes());
 
   // What this panel last sent, so a change from elsewhere (undo, a preset) can be told apart.
-  const sent = useRef(JSON.stringify(work.current));
+  // Compared without step ids: those differ on every parse, and treating the panel's own edit as an
+  // outside one rebuilt the stack mid-drag (sliders stopped dragging, the wheel scrolled the panel).
+  const sent = useRef(recipeKey(work.current));
   const emit = () => {
-    sent.current = JSON.stringify(work.current);
+    sent.current = recipeKey(work.current);
     changeRef.current(structuredClone(work.current));
   };
 
   useEffect(() => {
     const next = parseRecipe(value);
-    const key = JSON.stringify(next);
+    const key = recipeKey(next);
     if (key === sent.current) return;
     sent.current = key;
     work.current = next;

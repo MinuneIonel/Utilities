@@ -39,3 +39,10 @@ test("broken storage reads as no presets", () => {
   assert.deepEqual(readPresets(store('{"x":[{"name":"ok","params":{}},{"name":3},null],"y":"no"}')), { x: [{ name: "ok", params: {} }] });
   assert.deepEqual(readPresets(undefined), {});
 });
+
+test("a dither preset still matches after its steps get new ids (edit, then put the value back)", () => {
+  const step = (id: string, strength: number) => ({ id, type: "dither", enabled: true, params: { strength } });
+  const saved = { name: "Look", params: { recipe: { name: "Look", pixelSize: 2, steps: [step("s1", 0.5)] } } };
+  assert.equal(matchingPreset([saved], { recipe: { name: "Look", pixelSize: 2, steps: [step("s9", 0.5)] } })?.name, "Look");
+  assert.equal(matchingPreset([saved], { recipe: { name: "Look", pixelSize: 2, steps: [step("s9", 0.6)] } }), undefined);
+});

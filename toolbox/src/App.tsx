@@ -140,9 +140,10 @@ function hasContent(nodes: ToolFlowNode[]): boolean {
 /**
  * Whether keys typed now belong to a text field rather than the graph. Sliders, menus and
  * checkboxes keep focus after you use them, but ⌘Z there should undo the change, not do nothing.
+ * Number boxes are text you type, so ⌘A/⌘C/⌘V there stay in the box (not select or paste nodes).
  */
 const typingIn = (el: Element | null) =>
-  !!el?.closest('textarea, [contenteditable]:not([contenteditable="false"]), input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="email"], input[type="password"]');
+  !!el?.closest('textarea, [contenteditable]:not([contenteditable="false"]), input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="email"], input[type="password"], input[type="number"]');
 
 const inputPort = (nodeType: string, key: string | null) => REGISTRY.get(nodeType)?.inputs.find((p) => p.key === key);
 
