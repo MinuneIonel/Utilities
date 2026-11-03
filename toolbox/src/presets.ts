@@ -67,8 +67,11 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 function stableJson(v: unknown): string {
-  return JSON.stringify(v, (_k, x: unknown) =>
-    x && typeof x === "object" && !Array.isArray(x)
+  return JSON.stringify(v, (k, x: unknown) =>
+    // Dither steps get a fresh id whenever a recipe is read back, so a step's id never makes it a different look.
+    k === "steps" && Array.isArray(x)
+      ? x.map((s: unknown) => (s && typeof s === "object" ? Object.fromEntries(Object.entries(s).filter(([key]) => key !== "id")) : s))
+      : x && typeof x === "object" && !Array.isArray(x)
       ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
       : x,
   );
