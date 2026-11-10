@@ -1,6 +1,7 @@
 // Download node: a link from YouTube, Vimeo, SoundCloud and the many other
 // sites yt-dlp supports, fetched by the desktop app.
-import type { FileValue, NodeDef, RunContext, Value } from "../runtime/types";
+import type { FileValue, Graph, NodeDef, RunContext, Value } from "../runtime/types";
+import { DownloadJobs } from "./download-jobs";
 import { lastError, nativeTools } from "./native";
 import { soundOf, videoCodec } from "./video";
 
@@ -22,30 +23,39 @@ function formatFor(quality: string): string[] {
 }
 
 // Downloads are kept for the session, so editing other nodes never fetches again.
-const downloads = new Map<string, Promise<File>>();
+const downloads = new DownloadJobs<File>();
+
+const keyOf = (url: string, quality: string) => `${quality} ${url}`;
+
+/** Stops every download still running (the Stop download button, while a pasted link downloads). */
+export function stopDownloads() {
+  downloads.stop();
+}
+
+/**
+ * A new preview is coming: preview downloads no node asks for any more (the link was changed
+ * or the node deleted) stop now, instead of finishing in the background before the new one starts.
+ */
+export function pruneDownloads(graph: Graph) {
+  downloads.prune(new Set(graph.nodes.filter((n) => n.type === "input.download").map((n) => keyOf(String(n.params.url ?? "").trim(), String(n.params.quality || "1080")))));
+}
 
 function fetchOnce(url: string, quality: string, ctx: RunContext): Promise<File> {
-  const key = `${quality} ${url}`;
-  let p = downloads.get(key);
-  if (!p) {
-    p = (async () => {
-      const tools = nativeTools();
-      if (!tools?.ytdlp) throw new Error("Downloading needs the desktop app");
-      const r = await tools.run(
-        "yt-dlp",
-        ["--no-playlist", "--newline", "--no-mtime", ...formatFor(quality), "-o", "%(title).80B [%(id)s].%(ext)s", "--", url],
-        {},
-        { onProgress: (f, l) => ctx.progress?.(f, l ?? "Downloading"), signal: ctx.signal },
-      );
-      const [name, bytes] = Object.entries(r.files)[0] ?? [];
-      if (r.code !== 0 || !name || !bytes) throw new Error(`yt-dlp: ${lastError(r.log)}`);
-      const ext = name.split(".").pop()!.toLowerCase();
-      return new File([bytes as Uint8Array<ArrayBuffer>], name, { type: MIME[ext] ?? "application/octet-stream" });
-    })();
-    downloads.set(key, p);
-    p.catch(() => downloads.delete(key));
-  }
-  return p;
+  return downloads.get(keyOf(url, quality), ctx.mode, ctx.signal, async (signal) => {
+    const tools = nativeTools();
+    if (!tools?.ytdlp) throw new Error("Downloading needs the desktop app");
+    const r = await tools.run(
+      "yt-dlp",
+      ["--no-playlist", "--newline", "--no-mtime", ...formatFor(quality), "-o", "%(title).80B [%(id)s].%(ext)s", "--", url],
+      {},
+      { onProgress: (f, l) => ctx.progress?.(f, l ?? "Downloading"), signal },
+    );
+    if (signal.aborted) throw new Error("Cancelled");
+    const [name, bytes] = Object.entries(r.files)[0] ?? [];
+    if (r.code !== 0 || !name || !bytes) throw new Error(`yt-dlp: ${lastError(r.log)}`);
+    const ext = name.split(".").pop()!.toLowerCase();
+    return new File([bytes as Uint8Array<ArrayBuffer>], name, { type: MIME[ext] ?? "application/octet-stream" });
+  });
 }
 
 const fileBytes = new WeakMap<Blob, Promise<Uint8Array>>();
@@ -88,6 +98,7 @@ export const download: NodeDef = {
   visible: (key, p) => key !== "at" || p.quality !== "audio",
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
+  previewParams: ["at"],
   async run(_inputs, params, ctx): Promise<Record<string, Value>> {
     const url = String(params.url ?? "").trim();
     if (!url) throw new Error("Paste a link in the inspector");

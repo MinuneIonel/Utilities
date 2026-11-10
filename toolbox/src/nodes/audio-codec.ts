@@ -44,6 +44,32 @@ export async function duration(bytes: Uint8Array): Promise<number | undefined> {
   }
 }
 
+/** The bitrate offered for `format` that is closest to `kbps`. */
+export function nearestBitrate(format: AudioFormat, kbps: number): number {
+  const offered = FORMATS[format].bitrates;
+  if (!offered.length || !(kbps > 0)) return 0;
+  return offered.reduce((best, b) => (Math.abs(b - kbps) < Math.abs(best - kbps) ? b : best), offered[0]);
+}
+
+/**
+ * The bitrate to cut a sound at when it stays in its own format, so a cut file isn't larger
+ * than its source. 0 (the format's default) when the format changes or is lossless.
+ */
+async function sourceBitrate(a: AudioValue, format: AudioFormat, total: number | undefined): Promise<number> {
+  if (!FORMATS[format].lossy || audioFormatOf(a.name) !== format) return 0;
+  let bps = 0;
+  const input = new Input({ source: new BufferSource(a.bytes), formats: ALL_FORMATS });
+  try {
+    bps = (await (await input.getPrimaryAudioTrack())?.computePacketStats(500))?.averageBitrate ?? 0;
+  } catch {
+    /* fall back to the file's size over its length */
+  } finally {
+    input.dispose?.();
+  }
+  if (!(bps > 0) && total) bps = (a.bytes.byteLength * 8) / total;
+  return nearestBitrate(format, bps / 1000);
+}
+
 const clean = (s: unknown) => String(s).replace(/[\\/:*?"<>|]+/g, "-");
 const stem = (name: string) => name.replace(/\.[^./\\]+$/, "") || "audio";
 
@@ -77,7 +103,8 @@ export async function cut(a: AudioValue, params: Params, ctx: RunContext): Promi
   if (!(end > start)) throw new Error("End has to come after Start");
   const range = { start, end };
   const remove = params.mode === "remove";
-  const settings: AudioSettings = { ...defaultSettings(), format, bitrate: 0, trim: remove ? null : range, cut: remove ? range : null };
+  const bitrate = await sourceBitrate(a, format, total);
+  const settings: AudioSettings = { ...defaultSettings(), format, bitrate, trim: remove ? null : range, cut: remove ? range : null };
   const name = params.name ? `${clean(params.name)}.${FORMATS[format].ext}` : `${stem(a.name)}-${remove ? "cut" : "part"}.${FORMATS[format].ext}`;
   return { audio: await encode({ ...a, duration: total }, settings, name, ctx, "Cutting") };
 }
@@ -89,11 +116,12 @@ export async function split(a: AudioValue, ranges: (duration: number) => TimeRan
   const fmt = isAudioFormat(format) ? format : audioFormatOf(a.name);
   const rs = ranges(total);
   const names = clipNames(base || stem(a.name), rs.length, FORMATS[fmt].ext);
+  const bitrate = await sourceBitrate(a, fmt, total);
   const clips: FileValue[] = [];
   for (let i = 0; i < rs.length; i++) {
     if (ctx.signal?.aborted) throw new Error("Cancelled");
     const step = { ...ctx, progress: (f: number) => ctx.progress?.((i + Math.max(0, f)) / rs.length, `Clip ${i + 1} of ${rs.length}`) };
-    const settings: AudioSettings = { ...defaultSettings(), format: fmt, bitrate: 0, trim: rs[i] };
+    const settings: AudioSettings = { ...defaultSettings(), format: fmt, bitrate, trim: rs[i] };
     const out = await encode({ ...a, duration: total }, settings, names[i], step, "Cutting");
     clips.push({ kind: "file", name: out.name, mime: out.mime, bytes: out.bytes });
   }

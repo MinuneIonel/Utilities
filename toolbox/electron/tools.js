@@ -5,7 +5,7 @@ import { app, ipcMain, net } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -183,7 +183,12 @@ async function run(sender, id, tool, args, files, stdin = false) {
     for (const [name, file] of Object.entries(files ?? {})) {
       const to = path.join(dir, path.basename(name));
       // A file already on disk is linked in rather than sent over as bytes (a long video would be copied several times).
-      if (file && typeof file === "object" && "path" in file) await symlink(file.path, to).catch(() => copyFile(file.path, to));
+      // Windows only lets administrators (or Developer Mode) make symlinks, so there a hard link comes next:
+      // it needs no rights on the same drive. Only a file on another drive is copied.
+      if (file && typeof file === "object" && "path" in file)
+        await symlink(file.path, to)
+          .catch(() => link(file.path, to))
+          .catch(() => copyFile(file.path, to));
       else await writeFile(to, file);
     }
     const before = new Set(await readdir(dir));

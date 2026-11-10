@@ -1,3 +1,4 @@
+import { checkGraph, type CheckedGraph } from "./graph-file";
 import { REGISTRY } from "./nodes";
 import type { Graph, GraphNode } from "./runtime/types";
 
@@ -26,21 +27,14 @@ export function starterGraph(): Graph {
   };
 }
 
-/** Validates a saved graph, dropping nodes of unknown types and edges that point nowhere. */
+/** Reads a saved graph, repairing what it can; `notes` says what was repaired. */
+export function readGraph(text: string): CheckedGraph {
+  return checkGraph(text, (type) => REGISTRY.get(type)?.defaults(), newId);
+}
+
+/** A saved graph, repaired where needed (nodes of unknown types, wires that point nowhere or loop). */
 export function parseGraph(text: string): Graph {
-  const g = JSON.parse(text) as Partial<Graph>;
-  if (!g || g.version !== 1 || !Array.isArray(g.nodes) || !Array.isArray(g.edges)) throw new Error("Not a Toolbox graph");
-  const nodes = g.nodes
-    .filter((n) => n && typeof n.id === "string" && REGISTRY.has(n.type))
-    .map((n) => ({
-      id: n.id,
-      type: n.type,
-      params: { ...REGISTRY.get(n.type)!.defaults(), ...n.params },
-      position: { x: Number(n.position?.x) || 0, y: Number(n.position?.y) || 0 },
-    }));
-  const ids = new Set(nodes.map((n) => n.id));
-  const edges = g.edges.filter((e) => e && ids.has(e.source) && ids.has(e.target));
-  return { version: 1, nodes, edges };
+  return readGraph(text).graph;
 }
 
 /** Saved graphs don't carry dropped files, so file inputs come back empty. */

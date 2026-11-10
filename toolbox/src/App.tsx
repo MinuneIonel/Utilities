@@ -13,7 +13,7 @@ import {
 } from "@xyflow/react";
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
-import { newId, newNode, parseGraph, placeWorkflow, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
+import { newId, newNode, parseGraph, placeWorkflow, readGraph, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
 import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile, type UpdateInfo } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
@@ -177,7 +177,8 @@ export function App() {
         old.bitmap?.close();
         return { ...prev, [u.id]: { ...old, bitmap: u.bitmap, size: u.size } };
       }
-      const hasOutput = u.status === "ok" || u.status === "cached";
+      // A stale job node still shows its last render, marked as out of date.
+      const hasOutput = u.status === "ok" || u.status === "cached" || u.status === "stale";
       const bitmap = u.bitmap ?? (hasOutput ? old?.bitmap : undefined);
       if (old?.bitmap && old.bitmap !== bitmap) old.bitmap.close();
       return {
@@ -200,7 +201,7 @@ export function App() {
     // Also for nodes with no status yet, e.g. a Download fetching its link during a preview.
     setRuntime((prev) => ({ ...prev, [p.id]: { ...prev[p.id], status: "running", progress: p.fraction, progressLabel: p.label } }));
   }, []);
-  const flashRef = useRef<(text: string) => void>(() => {});
+  const flashRef = useRef<(text: string, ms?: number) => void>(() => {});
   const client = useMemo(() => new RuntimeClient(onUpdate, onProgress, (error) => flashRef.current(error)), [onUpdate, onProgress]);
 
   // Only params and wiring matter to the runtime; dragging nodes around shouldn't re-run anything.
@@ -238,9 +239,9 @@ export function App() {
     client.preview(graphRef.current);
   }, [runKey, client]);
 
-  const flash = useCallback((text: string) => {
+  const flash = useCallback((text: string, ms = 5000) => {
     setMessage(text);
-    setTimeout(() => setMessage((m) => (m === text ? "" : m)), 5000);
+    setTimeout(() => setMessage((m) => (m === text ? "" : m)), ms);
   }, []);
   flashRef.current = flash;
 
@@ -601,29 +602,36 @@ export function App() {
     [client, flash, flow, rendering, setEdges, setNodes, shapes, webcams],
   );
   const saveNode = useCallback((id: string) => void render(id), [render]);
+  const renderRef = useRef(render);
+  renderRef.current = render;
 
   const loadGraph = useCallback(
     (g: Graph) => {
       const f = toFlow(g);
       setNodes(f.nodes);
       setEdges(f.edges);
+      // Undo can bring the old nodes back with unchanged results, so the worker must send their pictures again.
+      client.resendAll();
       setRuntime({});
       setTimeout(() => flow.fitView({ padding: 0.2 }), 50);
     },
-    [flow, setEdges, setNodes],
+    [client, flow, setEdges, setNodes],
   );
 
   const openGraph = useCallback(async () => {
     const f = await openGraphFile();
     if (!f) return;
     try {
-      const g = parseGraph(f.text);
+      const { graph: g, notes } = readGraph(f.text);
+      if (!g.nodes.length) return flash(`${f.name} has no nodes this Toolbox can open.${notes.length ? ` ${notes.join(" ")}` : ""}`, 12000);
       loadGraph(g);
       const missing = await restoreFiles(g);
       const needsFiles = g.nodes.some((n) => REGISTRY.get(n.type)?.category === "input" && "assetId" in n.params && !n.params.path);
-      flash(missing ? `Opened ${f.name}. ${missing} file${missing === 1 ? " has" : "s have"} moved: drop ${missing === 1 ? "it" : "them"} in again.` : needsFiles ? `Opened ${f.name}. Drop the input files in again.` : `Opened ${f.name}`);
+      const files = missing ? ` ${missing} file${missing === 1 ? " has" : "s have"} moved: drop ${missing === 1 ? "it" : "them"} in again.` : needsFiles ? " Drop the input files in again." : "";
+      // Repairs stay up longer: they're worth reading.
+      flash(`Opened ${f.name}.${files}${notes.length ? ` ${notes.join(" ")}` : ""}`, notes.length ? 15000 : 5000);
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err));
+      flash(`Couldn't open ${f.name}. ${err instanceof Error ? err.message : String(err)}`, 10000);
     }
   }, [flash, loadGraph, restoreFiles]);
 
@@ -636,7 +644,15 @@ export function App() {
 
   const commands = useRef<Record<string, () => void>>({});
   commands.current = {
-    render: () => void render(),
+    render: () => {
+      // The Link box applies what was typed when it loses focus. ⌘R while typing a link would
+      // otherwise render the old one, so let the box apply it first, then render once that's in.
+      const el = document.activeElement;
+      if (el instanceof HTMLElement && typingIn(el)) {
+        el.blur();
+        setTimeout(() => void renderRef.current(), 0);
+      } else void render();
+    },
     open: () => void openGraph(),
     save: () => void saveGraph(),
     new: () => {
@@ -778,11 +794,13 @@ export function App() {
       }
       const first = REGISTRY.get(f.nodes[0].data.type)!;
       const todo =
-        first.type === "input.download" ? "paste a link in the inspector"
-        : first.type === "input.text" ? "type or paste your text"
-        : first.type === "input.images" ? "drop in your photos"
-        : "drop in your file";
-      flash(`${w.title}: ${todo}, then Render.${replace && current.length ? " ⌘Z brings back the old graph." : ""}`);
+        first.type === "input.download" ? "paste a link in the inspector, then Render"
+        : first.type === "input.text" ? "type or paste your text, then Render"
+        : first.type === "input.images" ? "drop in your photos, then Render"
+        : first.type === "input.qr" ? "type your link or text in the inspector, then Render"
+        : first.type === "input.webcam" ? "allow the camera, press Render to record and Stop to finish"
+        : "drop in your file, then Render";
+      flash(`${w.title}: ${todo}.${replace && current.length ? ` ${MOD}Z brings back the old graph.` : ""}`);
       setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
     },
     [flash, flow, menu, setEdges, setNodes],
@@ -799,10 +817,13 @@ export function App() {
       // A file dropped onto an input node goes into that node.
       const onto = (e.target as HTMLElement).closest(".react-flow__node")?.getAttribute("data-id");
       const ontoNode = onto ? flow.getNode(onto) : undefined;
-      // An empty Images node (or the one dropped onto) takes all the dropped images at once.
+      // An empty Images node (or the one dropped onto) takes all the dropped images at once,
+      // unless they were dropped onto an Image file node: then that node gets them.
       const images = all.filter((f) => inputNodeFor(f) === "input.file");
       const imagesNode =
-        ontoNode?.data.type === "input.images" ? ontoNode : flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
+        ontoNode?.data.type === "input.images" ? ontoNode
+        : ontoNode?.data.type === "input.file" ? undefined
+        : flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
       if (imagesNode && images.length) setNodeFiles(imagesNode.id, images);
       // Fill empty inputs of the right kind first, then add new ones.
       const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !n.data.params.assetId);
@@ -828,6 +849,8 @@ export function App() {
   // ---------------------------------------------------------------- layout
 
   const selected = nodes.find((n) => n.selected);
+  // A pasted link downloads during the live preview, where there's no Render to cancel.
+  const downloading = nodes.some((n) => n.data.type === "input.download" && runtime[n.id]?.status === "running");
   // Like TouchDesigner's background view, for the node picked with its eye button.
   const shownId = nodes.some((n) => n.id === view.preview) ? view.preview : undefined;
   const shown = shownId ? runtime[shownId] : undefined;
@@ -916,6 +939,11 @@ export function App() {
                 ?
               </button>
               {rendering && <button onClick={() => client.cancelRender()}>Cancel</button>}
+              {!rendering && downloading && (
+                <button onClick={() => client.stopDownloads()} title="Stop downloading the link. Render downloads it again.">
+                  Stop download
+                </button>
+              )}
               {recording ? (
                 <button
                   className="primary rec"

@@ -28,6 +28,7 @@ export const videoInput: NodeDef = {
   defaults: () => ({ assetId: "", name: "", at: 10, start: 0, end: 0, speed: 1 }),
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
+  previewParams: ["at"],
   async run(_inputs, params, ctx) {
     const blob = ctx.assets.get(String(params.assetId));
     if (!blob) throw new Error("Drop a video here");

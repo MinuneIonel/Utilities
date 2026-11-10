@@ -192,6 +192,11 @@ export interface NodeDef {
    * params and inputs (a file input's asset id, or the run mode).
    */
   cacheKey?(params: Params, ctx: RunContext): string;
+  /**
+   * Params that only pick what the live preview shows (a video's playhead, which image or page
+   * is previewed). Render's result doesn't depend on them, so changing one never re-renders.
+   */
+  previewParams?: string[];
   run(inputs: Record<string, Value | undefined>, params: Params, ctx: RunContext): Promise<Record<string, Value>>;
 }
 
@@ -216,12 +221,18 @@ export interface Graph {
   edges: GraphEdge[];
 }
 
-export type NodeStatus = "ok" | "cached" | "skipped" | "waiting" | "error";
+/** `stale`: a job node's last render, shown although something before it has changed since. */
+export type NodeStatus = "ok" | "cached" | "stale" | "skipped" | "waiting" | "error";
 
 export interface NodeResult {
   status: NodeStatus;
   outputs: Record<string, Value>;
   key?: string;
+  /**
+   * What Render would make here: the same in preview and render, and blind to preview-only
+   * params. Job nodes are cached by it, and a job's last render is stale when it differs.
+   */
+  renderKey?: string;
   ms?: number;
   error?: string;
 }

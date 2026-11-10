@@ -59,6 +59,7 @@ export const imagesInput: NodeDef = {
   defaults: () => ({ assetIds: [], names: [], at: 1 }),
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
+  previewParams: ["at"],
   async run(_inputs, params, ctx) {
     const ids = Array.isArray(params.assetIds) ? params.assetIds.map(String) : [];
     const names = Array.isArray(params.names) ? params.names.map(String) : [];

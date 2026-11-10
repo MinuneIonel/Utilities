@@ -34,6 +34,7 @@ function statusLine(rt: NodeRuntime | undefined): string {
     const pct = rt.progress !== undefined && rt.progress >= 0 ? ` ${Math.round(rt.progress * 100)}%` : "";
     return `${rt.progressLabel ?? "Running…"}${pct}`;
   }
+  if (rt.status === "stale") return rt.error ?? "Out of date";
   if (rt.savedTo) return `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
   if (rt.status === "waiting" || rt.status === "error" || rt.status === "skipped") return rt.error ?? "";
   if (rt.fileInfo) return rt.info ?? `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
@@ -132,7 +133,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
           />
         </div>
       )}
-      <Bitmap bitmap={rt?.bitmap} className="tnode-thumb" />
+      <Bitmap bitmap={rt?.bitmap} className={`tnode-thumb${rt?.status === "stale" ? " stale" : ""}`} />
       {rt?.text !== undefined && !rt.bitmap && <pre className="tnode-text">{rt.text.slice(0, 600)}</pre>}
       {rt?.status === "running" && rt.progress !== undefined && (
         <div className={`tnode-progress${rt.progress < 0 ? " busy" : ""}`}>

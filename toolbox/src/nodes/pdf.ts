@@ -253,6 +253,7 @@ export const pdfToImages: NodeDef = {
   defaults: () => ({ page: 1, dpi: 150 }),
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
+  previewParams: ["page"],
   async run(inputs, params, ctx) {
     const d = inputs.document as DocumentValue;
     const dpi = num(params.dpi, 150);
