@@ -78,6 +78,8 @@ try {
   await win.waitForSelector(".canvas");
   await app.evaluate(({ dialog, BrowserWindow }, f) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] });
+    // Opening a graph that names files asks first: use them.
+    dialog.showMessageBox = async () => ({ response: 0 });
     BrowserWindow.getAllWindows()[0].webContents.send("menu", "open");
   }, file);
   await win.waitForTimeout(2000);

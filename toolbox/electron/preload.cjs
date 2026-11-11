@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("toolbox", {
-  saveFile: (name, bytes, folder) => ipcRenderer.invoke("save-file", name, bytes, folder),
+  saveFile: (name, bytes, folder, opts) => ipcRenderer.invoke("save-file", name, bytes, folder, opts),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
@@ -15,12 +15,17 @@ contextBridge.exposeInMainWorld("toolbox", {
   onUpdateProgress: (handler) => ipcRenderer.on("update-progress", (_e, fraction) => handler(fraction)),
   /** Where a dropped or chosen file is on disk ("" for files that aren't). */
   pathForFile: (file) => {
+    let p = "";
     try {
-      return webUtils.getPathForFile(file);
+      p = webUtils.getPathForFile(file);
     } catch {
       return "";
     }
+    // Only a real drop or file dialog makes a File, so this is the person giving Toolbox the file.
+    if (p) ipcRenderer.send("local-allow", p);
+    return p;
   },
+  adoptAutosave: (text) => ipcRenderer.invoke("adopt-autosave", text),
   onMenu: (handler) => ipcRenderer.on("menu", (_e, command) => handler(command)),
   toolsInfo: () => ipcRenderer.invoke("tools-info"),
   runTool: (id, tool, args, files) => ipcRenderer.invoke("tool-run", id, tool, args, files),

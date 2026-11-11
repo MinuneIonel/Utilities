@@ -185,11 +185,12 @@ async function run(sender, id, tool, args, files, stdin = false) {
       // A file already on disk is linked in rather than sent over as bytes (a long video would be copied several times).
       // Windows only lets administrators (or Developer Mode) make symlinks, so there a hard link comes next:
       // it needs no rights on the same drive. Only a file on another drive is copied.
-      if (file && typeof file === "object" && "path" in file)
+      if (file && typeof file === "object" && "path" in file) {
+        if (!mayRead(file.path)) throw new Error(`Toolbox wasn't given ${path.basename(String(file.path))}: drop it in again`);
         await symlink(file.path, to)
           .catch(() => link(file.path, to))
           .catch(() => copyFile(file.path, to));
-      else await writeFile(to, file);
+      } else await writeFile(to, file);
     }
     const before = new Set(await readdir(dir));
     let log = "";
@@ -252,7 +253,11 @@ async function runTool(sender, id, tool, args, files) {
   }
 }
 
-export function registerTools() {
+/** Whether the window may hand a file on disk to a tool by its path (see local-files.js). */
+let mayRead = () => false;
+
+export function registerTools(isAllowed) {
+  mayRead = isAllowed;
   ipcMain.handle("tools-info", async () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET, sips: !!sipsPath, ...(await ffmpegCaps()) }));
   ipcMain.handle("tool-run", (e, id, tool, args, files) => runTool(e.sender, id, tool, args, files));
   // A job fed through stdin: tool-open starts it and resolves when it exits; tool-write and tool-end feed it.

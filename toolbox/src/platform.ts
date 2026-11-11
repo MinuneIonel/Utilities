@@ -2,7 +2,7 @@
 // missing, and the functions below fall back to downloads and file pickers.
 
 interface ToolboxBridge {
-  saveFile(name: string, bytes: Uint8Array, folder?: string): Promise<string | null>;
+  saveFile(name: string, bytes: Uint8Array, folder?: string, opts?: SaveOptions): Promise<SaveResult | null>;
   chooseFolder(): Promise<string | null>;
   openGraph(): Promise<{ name: string; text: string } | null>;
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
@@ -20,6 +20,8 @@ interface ToolboxBridge {
   onUpdateProgress(handler: (fraction: number) => void): void;
   /** Where a dropped or chosen file is on disk, or "" if it isn't a file on disk. */
   pathForFile(file: File): string;
+  /** Lets the autosaved graph's files come back on the first launch that checks which files may be read. */
+  adoptAutosave(text: string): Promise<void>;
   onMenu(handler: (command: string) => void): void;
   toolsInfo(): Promise<ToolsInfo>;
   runTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;
@@ -39,6 +41,22 @@ export interface UpdateInfo {
   url: string;
   /** Whether this copy can update itself (not when it runs from the .dmg, say). */
   canInstall: boolean;
+}
+
+/** What a Save node does when its file is already in the folder. */
+export type ExistsPolicy = "replace-own" | "number" | "skip";
+
+export interface SaveOptions {
+  exists?: ExistsPolicy;
+  /** Files this Save node wrote before: the only ones it may replace. */
+  own?: string[];
+}
+
+export interface SaveResult {
+  /** Where the file is (a path on desktop, the name in a browser). */
+  path: string;
+  /** The file was already there and was left as it was ("Skip it"). */
+  kept: boolean;
 }
 
 export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
@@ -86,11 +104,11 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-/** Saves a file and returns where it went (a path on desktop, the name in a browser), or null if cancelled. */
-export async function saveFile(name: string, mime: string, bytes: Uint8Array, folder?: string): Promise<string | null> {
-  if (bridge) return bridge.saveFile(name, bytes, folder || undefined);
+/** Saves a file and returns where it went, or null if cancelled. */
+export async function saveFile(name: string, mime: string, bytes: Uint8Array, folder?: string, opts?: SaveOptions): Promise<SaveResult | null> {
+  if (bridge) return bridge.saveFile(name, bytes, folder || undefined, opts);
   download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }), name);
-  return name;
+  return { path: name, kept: false };
 }
 
 export async function saveGraphFile(text: string, suggestedName: string): Promise<string | null> {

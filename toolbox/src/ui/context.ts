@@ -37,9 +37,11 @@ export interface Actions {
   togglePreview(nodeId: string): void;
   /** Renders what feeds a Save node and saves it. */
   saveNode(nodeId: string): void;
+  /** Renders what feeds a job node, without writing files. */
+  runNode(nodeId: string): void;
 }
 
-export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {}, saveNode: () => {} });
+export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {}, saveNode: () => {}, runNode: () => {} });
 
 /** The node whose output fills the background, if any. */
 export const PreviewContext = createContext<string | undefined>(undefined);

@@ -3,7 +3,8 @@
 # are attached to the run). Pushing a tag like toolbox-v0.2.0, or a manual run
 # with a version filled in, also publishes them on a GitHub Release with the
 # install notes from toolbox/INSTALL.md, after toolbox/release-notes/<version>.md
-# when that file exists.
+# when that file exists. Every run also drives the built app through the
+# end-to-end checks in toolbox/test/e2e, and a release is only published when they pass.
 name: Toolbox release
 
 on:
@@ -22,12 +23,28 @@ permissions:
   contents: read
 
 jobs:
+  # The desktop app's end-to-end checks (undo, presets, encoding, splitting, the audit fixes...).
+  # Linux is enough: they test the app's logic, not each system's encoders.
+  e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: xvfb-run -a npm run check:all --workspace toolbox
+
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # macos-14 jobs stopped getting a runner in November 2026 (cancelled at once).
+          - os: macos-15
             script: dist
             files: toolbox/release/*.dmg
           - os: windows-latest
@@ -61,7 +78,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/toolbox-v') || inputs.release
-    needs: build
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write

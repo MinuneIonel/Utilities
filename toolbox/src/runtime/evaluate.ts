@@ -328,7 +328,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
 
       if (def.kind === "job" && ctx.mode === "preview") {
         const last = cache.lastRender.get(node.id);
-        if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Render to see", renderKey });
+        if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
         // A recording can't be "out of date": every camera frame is new.
         else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
         else finish(node.id, { status: "stale", outputs: last.outputs, key: last.key, renderKey, error: "Out of date: Render to update" });

@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Toolbox: wire the Utilities tools together as a node graph",
   "type": "module",
   "main": "electron/main.js",
@@ -22,7 +22,11 @@
     "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",
     "dist:linux": "tsc --noEmit && vite build && electron-builder --linux AppImage --x64 --publish never",
     "check:presets": "npm run build && node test/e2e/presets.mjs",
-    "check:audit": "npm run build && node test/e2e/audit.mjs"
+    "check:audit": "npm run build && node test/e2e/audit.mjs",
+    "check:save": "npm run build && node test/e2e/save.mjs",
+    "check:local": "npm run build && node test/e2e/local-files.mjs",
+    "check:buttons": "npm run build && node test/e2e/buttons.mjs",
+    "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
