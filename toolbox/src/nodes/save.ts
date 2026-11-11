@@ -85,8 +85,22 @@ export const saveFile: NodeDef = {
     "Writes what's wired into it on Render: images as PNG, text, sound, PDFs, or files from Encode image and Encode video. Fed a list (Several images), it writes one file per item. Leave the name empty to keep the file's own. Pick a folder to save without asking each time.",
   inputs: [{ key: "file", label: "File", type: "file", sequence: true }],
   outputs: [{ key: "file", label: "File", type: "file" }],
-  params: [{ key: "name", label: "File name", kind: "text" }],
-  defaults: () => ({ name: "", folder: "" }),
+  params: [
+    { key: "name", label: "File name", kind: "text" },
+    {
+      key: "exists",
+      label: "If the file exists",
+      kind: "select",
+      options: [
+        { value: "replace-own", label: "Replace my last save" },
+        { value: "number", label: "Keep both (add a number)" },
+        { value: "skip", label: "Skip it" },
+      ],
+    },
+  ],
+  defaults: () => ({ name: "", folder: "", exists: "replace-own", lastSaved: [] }),
+  // Where it saved last time (so it can replace that) and what to do with existing files don't change the file.
+  previewParams: ["lastSaved", "exists"],
   kind: "job",
   saves: true,
   async run(inputs, params, ctx) {

@@ -14,7 +14,7 @@ import {
 import { CONVERTERS, inputNodeFor, NODE_DEFS, REGISTRY } from "./nodes";
 import { canConnect, outputShapes } from "./runtime/evaluate";
 import { newId, newNode, parseGraph, placeWorkflow, readGraph, serializeGraph, starterGraph, WORKFLOWS } from "./graphs";
-import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile, type UpdateInfo } from "./platform";
+import { bridge, isDesktop, openGraphFile, reopenFile, saveFile, saveGraphFile, type ExistsPolicy, type UpdateInfo } from "./platform";
 import { RuntimeClient } from "./runtime/client";
 import type { Graph, NodeDef, Params } from "./runtime/types";
 import type { NodeUpdate, ProgressUpdate } from "./runtime/worker";
@@ -127,6 +127,12 @@ function upstreamOf(g: Graph, id: string): Graph {
 }
 
 /** Whether a graph holds anything the user put in: files, links or their own text. */
+/** Params without the files a Save node wrote, for a copy that hasn't saved anything yet. */
+function withoutLastSaved(p: Params): Params {
+  const { lastSaved: _, ...rest } = p;
+  return rest;
+}
+
 function hasContent(nodes: ToolFlowNode[]): boolean {
   const defaultText = REGISTRY.get("input.text")?.defaults().text;
   return nodes.some(({ data: { type, params: p } }) => {
@@ -442,7 +448,8 @@ export function App() {
         id: ids.get(n.id)!,
         type: "tool",
         position: { x: n.position.x + offset.x, y: n.position.y + offset.y },
-        data: { type: n.type, params: structuredClone(n.params) },
+        // A copy hasn't saved anything yet, so it mustn't replace the original's files.
+        data: { type: n.type, params: withoutLastSaved(structuredClone(n.params)) },
         selected: true,
       }));
       setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...added]);
@@ -525,6 +532,20 @@ export function App() {
 
   /** What each Save node last wrote, so an unchanged file isn't saved again. */
   const savedKeys = useRef(new Map<string, string>());
+  /** The files each Save node wrote this session, the ones it may replace on the next Render. */
+  const written = useRef(new Map<string, string[]>());
+  /** Keeps a Save node's files in its settings too, so they're still its own after a restart. Not an undo step. */
+  const rememberSaved = useCallback(
+    (nodeId: string, paths: string[]) => {
+      history.current.quiet = true;
+      setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, params: { ...n.data.params, lastSaved: paths } } } : n)));
+      setTimeout(() => {
+        commitHistory();
+        history.current.quiet = false;
+      }, HISTORY_SETTLE + 100);
+    },
+    [commitHistory, setNodes],
+  );
 
   /**
    * Renders the graph, or just what feeds one Save node (`only`), and writes the files.
@@ -567,6 +588,7 @@ export function App() {
       if (result.error) flash(result.error);
       let unchanged = 0;
       let saved = 0;
+      let kept = 0;
       const byNode = new Map<string, typeof result.files>();
       for (const f of result.files) byNode.set(f.nodeId, [...(byNode.get(f.nodeId) ?? []), f]);
       for (const [nodeId, files] of byNode) {
@@ -582,24 +604,47 @@ export function App() {
           folder = (await bridge.chooseFolder()) ?? undefined;
           if (!folder) continue;
         }
+        // The files this Save node wrote before are the only ones it may replace.
+        const own = [...(written.current.get(nodeId) ?? []), ...(Array.isArray(node?.params.lastSaved) ? (node.params.lastSaved as string[]) : [])];
+        const opts = { exists: (node?.params.exists as ExistsPolicy | undefined) ?? "replace-own", own };
         let last = "";
+        let keptHere = 0;
+        const paths: string[] = [];
         for (const f of files) {
-          const where = await saveFile(f.name, f.mime, f.bytes, folder);
-          if (!where) continue;
+          const r = await saveFile(f.name, f.mime, f.bytes, folder, opts);
+          if (!r) continue;
+          last = r.path;
+          if (r.kept) {
+            kept++;
+            keptHere++;
+            continue;
+          }
           saved++;
-          last = where;
-          setOutputs((o) => [{ id: newId("o"), name: where.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: where }, ...o].slice(0, 30));
+          paths.push(r.path);
+          setOutputs((o) => [{ id: newId("o"), name: r.path.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: r.path }, ...o].slice(0, 30));
         }
         if (!last) continue;
         if (key) savedKeys.current.set(nodeId, key);
-        const savedTo = files.length > 1 ? `${files.length} files in ${last.split(/[\\/]/).slice(-2, -1)[0] ?? "the folder"}` : last;
+        if (paths.length && folder) {
+          written.current.set(nodeId, paths);
+          rememberSaved(nodeId, paths);
+        }
+        const dir = last.split(/[\\/]/).slice(-2, -1)[0] ?? "the folder";
+        const savedTo =
+          keptHere === files.length ? (files.length > 1 ? `Kept the ${files.length} files already in ${dir}` : `Kept ${last.split(/[\\/]/).pop()}, already there`)
+          : files.length > 1 ? `${files.length - keptHere} files in ${dir}${keptHere ? `, kept ${keptHere}` : ""}`
+          : last;
         setRuntime((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
       }
       if (result.error) return;
-      if (unchanged && !saved) flash("Nothing changed since the last save. Press Save on a Save node to write it again.");
-      else if (unchanged) flash(`Saved ${saved} file${saved === 1 ? "" : "s"}; ${unchanged} unchanged since the last save.`);
+      const files = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
+      if (unchanged && !saved && !kept) flash("Nothing changed since the last save. Press Save on a Save node to write it again.");
+      else if (unchanged || kept) {
+        const rest = [kept && `kept ${files(kept)} that ${kept === 1 ? "was" : "were"} already there`, unchanged && `${unchanged} unchanged since the last save`].filter(Boolean).join(", ");
+        flash(saved ? `Saved ${files(saved)}; ${rest}.` : `Nothing saved: ${rest}.`);
+      }
     },
-    [client, flash, flow, rendering, setEdges, setNodes, shapes, webcams],
+    [client, flash, flow, rememberSaved, rendering, setEdges, setNodes, shapes, webcams],
   );
   const saveNode = useCallback((id: string) => void render(id), [render]);
   const renderRef = useRef(render);

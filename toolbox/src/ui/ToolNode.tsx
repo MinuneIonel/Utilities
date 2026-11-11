@@ -35,7 +35,7 @@ function statusLine(rt: NodeRuntime | undefined): string {
     return `${rt.progressLabel ?? "Running…"}${pct}`;
   }
   if (rt.status === "stale") return rt.error ?? "Out of date";
-  if (rt.savedTo) return `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
+  if (rt.savedTo) return rt.savedTo.startsWith("Kept ") ? rt.savedTo : `Saved ${rt.savedTo.split(/[\\/]/).pop()}`;
   if (rt.status === "waiting" || rt.status === "error" || rt.status === "skipped") return rt.error ?? "";
   if (rt.fileInfo) return rt.info ?? `${rt.fileInfo.name} · ${kb(rt.fileInfo.bytes)}`;
   if (rt.info) return rt.status === "cached" ? `${rt.info} · cached` : rt.info;

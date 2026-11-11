@@ -1,10 +1,12 @@
 // Electron main process: one window, native menus, and the file access a
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerModels } from "./models.js";
+import { createPathSet } from "./path-set.js";
+import { numberedOwn, saveAction } from "./save-policy.js";
 import { registerTools } from "./tools.js";
 import { registerUpdater } from "./updater.js";
 
@@ -125,32 +127,65 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-/** `name` in `folder`, or "name (2).ext" and so on when that's taken, so a Render never writes over an earlier file. */
+/** `name` in `folder`, or "name (2).ext" and so on when that's taken. */
 async function freeName(folder, name) {
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
   for (let n = 1; ; n++) {
     const p = path.join(folder, n === 1 ? name : `${stem} (${n})${ext}`);
-    try {
-      await access(p);
-    } catch {
-      return p;
-    }
+    if (!(await exists(p))) return p;
   }
 }
 
-ipcMain.handle("save-file", async (_e, name, bytes, folder) => {
+const exists = (p) => access(p).then(() => true, () => false);
+
+/** Every file Toolbox wrote. A graph file can name any path in `lastSaved`, so a Save node only replaces one that's also here. */
+let written;
+const writtenFiles = () => (written ??= createPathSet(path.join(app.getPath("userData"), "written-files.json")));
+
+/**
+ * Writes a file for a Save node. With a folder, `opts.exists` says what happens when the name is
+ * taken (see save-policy.js); `opts.own` lists the files this Save node wrote before, the only ones
+ * it may replace. Returns where the file is and whether the old one was kept, or null if cancelled.
+ */
+ipcMain.handle("save-file", async (_e, name, bytes, folder, opts = {}) => {
   let target;
   if (folder) {
     await mkdir(folder, { recursive: true });
-    target = await freeName(folder, path.basename(name));
+    target = path.join(folder, path.basename(name));
+    const own = Array.isArray(opts.own) ? opts.own.filter((p) => typeof p === "string" && writtenFiles().has(p)).map((p) => path.resolve(p)) : [];
+    let isOwn = own.includes(path.resolve(target));
+    const taken = await exists(target);
+    // It numbered its file last time because the name was taken: that numbered file is the one to replace.
+    if (taken && !isOwn && saveAction(true, opts.exists, true) === "replace") {
+      const mine = numberedOwn(own, folder, path.basename(name));
+      if (mine && (await exists(mine))) [target, isOwn] = [mine, true];
+    }
+    const action = saveAction(taken, opts.exists, isOwn);
+    if (action === "skip") return { path: target, kept: true };
+    if (action === "number") target = await freeName(folder, path.basename(name));
+    if (action === "replace") {
+      // Written next to it first, so a failed write never loses the earlier file.
+      const part = `${target}.part`;
+      try {
+        await writeFile(part, bytes);
+        await rename(part, target);
+      } catch (e) {
+        await rm(part, { force: true });
+        throw e;
+      }
+      writtenFiles().add(target);
+      return { path: target, kept: false };
+    }
   } else {
+    // The system's save dialog asks about replacing by itself.
     const r = await dialog.showSaveDialog(win, { defaultPath: name });
     if (r.canceled || !r.filePath) return null;
     target = r.filePath;
   }
   await writeFile(target, bytes);
-  return target;
+  writtenFiles().add(target);
+  return { path: target, kept: false };
 });
 
 ipcMain.handle("choose-folder", async () => {
@@ -205,6 +240,8 @@ app.whenReady().then(() => {
     if (!win) createWindow();
   });
 });
+
+app.on("will-quit", () => written?.flush());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

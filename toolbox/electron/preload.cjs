@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("toolbox", {
-  saveFile: (name, bytes, folder) => ipcRenderer.invoke("save-file", name, bytes, folder),
+  saveFile: (name, bytes, folder, opts) => ipcRenderer.invoke("save-file", name, bytes, folder, opts),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
