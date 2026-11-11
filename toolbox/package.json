@@ -26,6 +26,7 @@
     "check:save": "npm run build && node test/e2e/save.mjs",
     "check:local": "npm run build && node test/e2e/local-files.mjs",
     "check:buttons": "npm run build && node test/e2e/buttons.mjs",
+    "check:bigfile": "npm run build && node test/e2e/bigfile.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {

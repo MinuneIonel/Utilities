@@ -113,7 +113,7 @@ export class RuntimeClient {
     if (msg.type === "tool-run") {
       const { callId } = msg;
       bridge
-        ?.runTool(callId, msg.tool, msg.args, msg.files)
+        ?.runTool(callId, msg.tool, msg.args, msg.files, { keep: msg.keep })
         .then((result) => this.send({ type: "tool-result", callId, result }))
         .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
       return;
@@ -121,7 +121,7 @@ export class RuntimeClient {
     if (msg.type === "tool-open") {
       const { callId } = msg;
       bridge
-        ?.openTool(callId, msg.tool, msg.args, msg.files)
+        ?.openTool(callId, msg.tool, msg.args, msg.files, { keep: msg.keep })
         .then((result) => this.send({ type: "tool-result", callId, result }))
         .catch((e: Error) => this.send({ type: "tool-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
       return;
@@ -152,6 +152,18 @@ export class RuntimeClient {
     }
     if (msg.type === "scratch-free") {
       void bridge?.scratchDelete(msg.paths).catch(() => undefined);
+      return;
+    }
+    if (msg.type === "scratch-call") {
+      const { callId } = msg;
+      const call =
+        !bridge ? Promise.reject(new Error("Only the desktop app keeps files on disk"))
+        : msg.op === "open" ? bridge.scratchOpen(msg.id, msg.name)
+        : msg.op === "write" ? bridge.scratchWrite(msg.id, msg.chunk, msg.position)
+        : bridge.scratchClose(msg.id);
+      call
+        .then((result: unknown) => this.send({ type: "scratch-result", callId, result }))
+        .catch((e: Error) => this.send({ type: "scratch-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
       return;
     }
     if (msg.type === "node") {

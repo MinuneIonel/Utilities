@@ -309,7 +309,7 @@ app.whenReady().then(() => {
   allowCamera();
   scratch();
   // Tools read the files the person gave Toolbox, and Toolbox's own results in the scratch folder.
-  registerTools((p) => allowedFiles().has(p) || scratch().inside(p));
+  registerTools((p) => allowedFiles().has(p) || scratch().inside(p), scratch());
   registerModels();
   registerUpdater(() => win);
   protocol.handle("app", (req) => {

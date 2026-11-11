@@ -33,9 +33,10 @@ interface ToolboxBridge {
   adoptAutosave(text: string): Promise<void>;
   onMenu(handler: (command: string) => void): void;
   toolsInfo(): Promise<ToolsInfo>;
-  runTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;
+  /** With `keep`, the new files are moved into the scratch folder and come back as `{ path, size }`. */
+  runTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts?: { keep?: boolean }): Promise<ToolResult>;
   /** Like runTool, but the process reads stdin from writeTool until endTool. */
-  openTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;
+  openTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts?: { keep?: boolean }): Promise<ToolResult>;
   writeTool(id: string, bytes: Uint8Array): Promise<void>;
   endTool(id: string): Promise<void>;
   cancelTool(id: string): Promise<void>;
@@ -84,7 +85,7 @@ export interface ToolsInfo {
 
 export interface ToolResult {
   code: number;
-  files: Record<string, Uint8Array>;
+  files: Record<string, Uint8Array | { path: string; size: number }>;
   log: string;
 }
 

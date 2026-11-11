@@ -18,24 +18,49 @@ import {
   Mp4OutputFormat,
   Output,
   Quality,
+  StreamTarget,
+  UrlSource,
   VideoSample,
   VideoSampleSink,
   VideoSampleSource,
   WebMOutputFormat,
   type OutputFormat,
+  type StreamTargetChunk,
   type VideoCodec,
 } from "mediabunny";
 import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/engine/video";
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
-import type { AudioValue, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, Bytes, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { flattenOnBlack, gifFrame, hasTransparency } from "./alpha";
-import { asBlob, fromBytes } from "./bytes";
+import { asBlob, fromBytes, fromDisk, scratchUrl } from "./bytes";
 import { clipNames } from "./clips";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
 import { audioArgs, encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile, type TimeRange } from "./ffmpeg-video";
-import { lastError, nativeTools, toolFile, type NativeTools, type ToolFile, type ToolStream } from "./native";
+import { lastError, nativeTools, scratchFiles, setLocalPath, toolFile, toolFileOf, type NativeTools, type ToolFile, type ToolStream, type KeptResult } from "./native";
 import { CODEC_LABEL, frameImage } from "./video";
+
+/** Hands a scratch file a node made along the way back, once nothing needs it (unless a cached result holds it). */
+const discard = (d: Bytes) => {
+  if (d.in === "disk") scratchFiles()?.free([d.path]);
+};
+
+/**
+ * In the desktop app, a target that streams an encoder's output into the scratch folder in 4 MB
+ * chunks, instead of holding the whole file in memory. Each write waits for the disk, so a slow
+ * disk slows the encoder rather than filling the memory. None in a browser.
+ */
+async function diskTarget(name: string) {
+  const s = scratchFiles();
+  if (!s) return undefined;
+  const file = await s.create(name);
+  const writable = new WritableStream<StreamTargetChunk>({ write: (c) => file.write(c.data, c.position) });
+  return { target: new StreamTarget(writable, { chunked: true, chunkSize: 4 << 20 }), file };
+}
+
+/** GIFs this long take gigabytes of memory to build and are huge to play. */
+const GIF_MAX_FRAMES = 1500;
+const GIF_MAX_BYTES = 1 << 30;
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const clean = (s: unknown, d: string) => String(s || d).replace(/[\\/:*?"<>|]+/g, "-");
@@ -236,9 +261,13 @@ const PREFERRED: Record<Exclude<VideoContainer, "gif">, VideoCodec[]> = {
   mkv: ["avc", "vp9", "hevc", "av1", "vp8"],
 };
 
-const formatFor = (c: Exclude<VideoContainer, "gif">): OutputFormat =>
-  c === "mp4" ? new Mp4OutputFormat({ fastStart: "in-memory" })
-  : c === "mov" ? new MovOutputFormat({ fastStart: "in-memory" })
+/**
+ * `streamed`: written to disk as it's made. MP4 and MOV then put their index at the end (the
+ * in-memory fast start would hold the whole file); finishMp4 moves it to the front afterwards.
+ */
+const formatFor = (c: Exclude<VideoContainer, "gif">, streamed = false): OutputFormat =>
+  c === "mp4" ? new Mp4OutputFormat({ fastStart: streamed ? false : "in-memory" })
+  : c === "mov" ? new MovOutputFormat({ fastStart: streamed ? false : "in-memory" })
   : c === "webm" ? new WebMOutputFormat()
   : new MkvOutputFormat();
 
@@ -274,9 +303,10 @@ async function encodeStream(
   keepAudio: boolean,
   progress: ((f: number, l?: string) => void) | undefined,
   signal: AbortSignal | undefined,
-): Promise<{ bytes: Uint8Array; codec: string }> {
-  const format = formatFor(container);
-  const output = new Output({ format, target: new BufferTarget() });
+): Promise<{ data: Bytes; codec: string; streamed: boolean }> {
+  const disk = await diskTarget(`video.${VIDEO_CONTAINERS[container].ext}`);
+  const format = formatFor(container, !!disk);
+  const output = new Output({ format, target: disk?.target ?? new BufferTarget() });
   let video: VideoSampleSource | undefined;
   let size: { w: number; h: number } | undefined;
   let audioDone: Promise<void> = Promise.resolve();
@@ -332,11 +362,13 @@ async function encodeStream(
     if (!video) throw new Error("The video has no frames");
     await audioDone;
     await output.finalize();
+    if (disk) return { data: await disk.file.close(), codec, streamed: true };
   } catch (e) {
     await output.cancel().catch(() => undefined);
+    await disk?.file.abort();
     throw e;
   }
-  return { bytes: new Uint8Array((output.target as BufferTarget).buffer!), codec };
+  return { data: fromBytes(new Uint8Array((output.target as BufferTarget).buffer!)), codec, streamed: false };
 }
 
 /** The audio codec for this container: AAC first in MP4 and MOV, since QuickTime doesn't play Opus there. */
@@ -402,6 +434,8 @@ async function encodeGif(v: VideoValue, fps: number, progress: ((f: number, l?: 
   let size: { w: number; h: number } | undefined;
   for await (const f of paced(v.frames(signal), fps || 12)) {
     if (signal?.aborted) throw new Error("Cancelled");
+    // gifenc builds the whole file in memory: stop before it takes gigabytes.
+    if (n >= GIF_MAX_FRAMES || gif.bytesView().byteLength > GIF_MAX_BYTES) throw new Error("GIFs this long don't work well: use MP4 or WebM");
     const img = frameImage(f.value);
     // Every frame takes the first one's size: GIF frames can't be larger than the image.
     size ??= { w: img.width, h: img.height };
@@ -438,7 +472,14 @@ interface NativeJob {
 const extOf = (b: Blob, d: string) => ((b as File).name?.split(".").pop() ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase() || d;
 
 /** Native ffmpeg reads the file itself: no decoding in the window, and VideoToolbox decodes when it can. */
-async function nativeFromFile(tools: NativeTools, origin: Blob, range: TimeRange | undefined, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+/** A kept tool output as a file value's bytes (it stays in the scratch folder). */
+function keptFile(r: KeptResult, name: string): Bytes | undefined {
+  const f = r.files[name];
+  return r.code === 0 && f ? fromDisk(f.path, f.size) : undefined;
+}
+
+/** Native ffmpeg reads the file itself: no decoding in the window, and VideoToolbox decodes when it can. Its output stays on disk. */
+async function nativeFromFile(tools: NativeTools, origin: Blob, range: TimeRange | undefined, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Bytes> {
   const inName = `in.${extOf(origin, "mp4")}`;
   const out = `out.${VIDEO_CONTAINERS[job.container].ext}`;
   const label = `Encoding with ${e.name}`;
@@ -447,16 +488,19 @@ async function nativeFromFile(tools: NativeTools, origin: Blob, range: TimeRange
     "ffmpeg",
     fileEncodeArgs(inName, tools.hwaccels, e, job.codec, job.container, job.level, job.prores, job.fps, job.audio, out, range),
     { [inName]: await toolFile(origin) },
-    { onProgress: (f) => ctx.progress?.(f, label), signal: ctx.signal },
+    { onProgress: (f) => ctx.progress?.(f, label), signal: ctx.signal, keep: true },
   );
-  if (ctx.signal?.aborted) throw new Error("Cancelled");
-  const bytes = r.files[out];
-  if (r.code !== 0 || !bytes) throw new EncoderFailed(lastError(r.log));
-  return bytes;
+  const data = keptFile(r, out);
+  if (ctx.signal?.aborted) {
+    if (data) discard(data);
+    throw new Error("Cancelled");
+  }
+  if (!data) throw new EncoderFailed(lastError(r.log));
+  return data;
 }
 
-/** Frames after image nodes go to native ffmpeg as raw RGBA on its stdin. */
-async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+/** Frames after image nodes go to native ffmpeg as raw RGBA on its stdin; its output stays on disk. */
+async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Bytes> {
   const out = `out.${VIDEO_CONTAINERS[job.container].ext}`;
   const rate = job.fps > 0 ? job.fps : v.fps > 0 ? v.fps : 30;
   const files: Record<string, ToolFile> = {};
@@ -465,7 +509,7 @@ async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, j
     audioName = `sound.${extOf(v.audioSource, "mp4")}`;
     files[audioName] = await toolFile(v.audioSource);
   }
-  let stream: ToolStream | undefined;
+  let stream: ToolStream<KeptResult> | undefined;
   let size: { w: number; h: number } | undefined;
   // One frame in flight while the next is made, so producing and encoding overlap.
   let pending: Promise<void> = Promise.resolve();
@@ -476,7 +520,7 @@ async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, j
     const img = frameImage(f.value);
     if (!stream || !size) {
       size = { w: Math.max(2, img.width - (img.width % 2)), h: Math.max(2, img.height - (img.height % 2)) };
-      stream = tools.open("ffmpeg", rawEncodeArgs({ width: size.w, height: size.h, fps: rate }, e, job.codec, job.container, job.level, job.prores, audioName, out, v.range), files, { signal: ctx.signal });
+      stream = tools.open("ffmpeg", rawEncodeArgs({ width: size.w, height: size.h, fps: rate }, e, job.codec, job.container, job.level, job.prores, audioName, out, v.range), files, { signal: ctx.signal, keep: true });
       stream.done.catch(() => undefined);
     }
     // ProRes 4444 keeps alpha; the rest drop it, so transparent pixels go black instead of showing what's under them.
@@ -497,25 +541,31 @@ async function nativeFromFrames(tools: NativeTools, v: VideoValue, e: Encoder, j
   if (!stopped) await pending.catch(() => undefined);
   stream.end();
   const r = await stream.done;
-  if (ctx.signal?.aborted) throw new Error("Cancelled");
-  const bytes = r.files[out];
-  if (r.code !== 0 || !bytes) throw new EncoderFailed(lastError(r.log));
+  const video = keptFile(r, out);
+  if (ctx.signal?.aborted) {
+    if (video) discard(video);
+    throw new Error("Cancelled");
+  }
+  if (!video) throw new EncoderFailed(lastError(r.log));
   const sound = job.audio && !audioName && v.soundLater ? await v.soundLater() : undefined;
-  return sound ? await addSound(tools, bytes, out, sound, job, ctx) : bytes;
+  return sound ? await addSound(tools, video, out, sound, job, ctx) : video;
 }
 
 /** Puts sound that arrived after the frames (a webcam's microphone) into an encoded video, copying the picture. */
-async function addSound(tools: NativeTools, video: Uint8Array, name: string, sound: Blob, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+async function addSound(tools: NativeTools, video: Bytes, name: string, sound: Blob, job: NativeJob, ctx: RunContext): Promise<Bytes> {
   const soundName = `sound.${extOf(sound, "webm")}`;
   const out = `with-sound.${VIDEO_CONTAINERS[job.container].ext}`;
   const args = ["-hide_banner", "-y", "-i", name, "-i", soundName, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", ...audioArgs(job.codec, job.container), "-shortest", out];
-  const r = await tools.run("ffmpeg", args, { [name]: video, [soundName]: new Uint8Array(await sound.arrayBuffer()) }, { signal: ctx.signal });
+  const r = await tools.run("ffmpeg", args, { [name]: toolFileOf(video), [soundName]: await toolFile(sound) }, { signal: ctx.signal, keep: true });
+  const withSound = keptFile(r, out);
   // A video without its sound beats no video.
-  return r.code === 0 && r.files[out] ? r.files[out] : video;
+  if (!withSound) return video;
+  discard(video);
+  return withSound;
 }
 
 /** Tries each encoder for the codec in turn: hardware first where it's faster, software if that fails. */
-async function encodeNative(tools: NativeTools, v: VideoValue, job: NativeJob, ctx: RunContext): Promise<Uint8Array> {
+async function encodeNative(tools: NativeTools, v: VideoValue, job: NativeJob, ctx: RunContext): Promise<Bytes> {
   const chain = encodersFor(job.codec, tools.encoders);
   if (!chain.length) throw new Error(`This ffmpeg has no ${job.codec === "prores" ? "ProRes" : CODEC_LABEL[job.codec]} encoder`);
   let error = "";
@@ -530,36 +580,53 @@ async function encodeNative(tools: NativeTools, v: VideoValue, job: NativeJob, c
   throw new Error(`ffmpeg couldn't encode this video: ${error}`);
 }
 
+/** The codec of a file's sound: null without sound, undefined when it can't be read. */
+async function soundCodecOf(d: Bytes): Promise<string | null | undefined> {
+  // A file on disk is read through the desktop app with range requests: only its header and index.
+  const input = new Input({ source: d.in === "memory" ? new BufferSource(d.bytes) : new UrlSource(scratchUrl(d.path)), formats: ALL_FORMATS });
+  try {
+    return (await input.getPrimaryAudioTrack())?.codec ?? null;
+  } catch {
+    return undefined;
+  } finally {
+    input.dispose?.();
+  }
+}
+
 /**
  * MP4 and MOV get AAC sound: QuickTime and iPhones play Opus there as silence. WebCodecs
  * has no AAC encoder on Linux (and some Windows setups), so Mediabunny falls back to Opus;
  * the desktop app's ffmpeg then re-encodes just the sound, copying the picture.
+ * A file that was `streamed` to disk has its index at the end; the same ffmpeg pass (a copy,
+ * when the sound is fine) moves it to the front so the file starts playing at once.
  */
-async function aacSound(bytes: Uint8Array, container: VideoContainer, ctx: RunContext): Promise<Uint8Array> {
-  if (container !== "mp4" && container !== "mov") return bytes;
+async function finishMp4(d: Bytes, container: VideoContainer, ctx: RunContext, streamed: boolean): Promise<Bytes> {
+  if (container !== "mp4" && container !== "mov") return d;
   const tools = nativeTools();
-  if (!tools?.ffmpeg) return bytes;
-  const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
-  let codec: string | null | undefined;
-  try {
-    codec = (await input.getPrimaryAudioTrack())?.codec;
-  } catch {
-    return bytes;
-  } finally {
-    input.dispose?.();
-  }
-  if (codec !== "opus" && codec !== "vorbis") return bytes;
+  if (!tools?.ffmpeg) return d;
+  const codec = await soundCodecOf(d);
+  const aac = codec === "opus" || codec === "vorbis";
+  if (!aac && !streamed) return d;
   const ext = VIDEO_CONTAINERS[container].ext;
-  ctx.progress?.(-1, "Converting the sound to AAC");
-  const r = await tools.run(
-    "ffmpeg",
-    ["-hide_banner", "-y", "-i", `in.${ext}`, "-map", "0:v", "-map", "0:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", `out.${ext}`],
-    { [`in.${ext}`]: bytes },
-    { signal: ctx.signal },
-  );
-  if (ctx.signal?.aborted) throw new Error("Cancelled");
-  // Opus sound still beats no file.
-  return r.code === 0 && r.files[`out.${ext}`] ? r.files[`out.${ext}`] : bytes;
+  ctx.progress?.(-1, aac ? "Converting the sound to AAC" : "Finishing the file");
+  const args = ["-hide_banner", "-y", "-i", `in.${ext}`, "-map", "0:v", "-map", "0:a?", "-c", "copy", ...(aac ? ["-c:a", "aac", "-b:a", "160k"] : []), "-movflags", "+faststart", `out.${ext}`];
+  const files = { [`in.${ext}`]: toolFileOf(d) };
+  if (d.in === "memory") {
+    const r = await tools.run("ffmpeg", args, files, { signal: ctx.signal });
+    if (ctx.signal?.aborted) throw new Error("Cancelled");
+    // Opus sound still beats no file.
+    return r.code === 0 && r.files[`out.${ext}`] ? fromBytes(r.files[`out.${ext}`]) : d;
+  }
+  const r = await tools.run("ffmpeg", args, files, { signal: ctx.signal, keep: true });
+  const done = keptFile(r, `out.${ext}`);
+  if (ctx.signal?.aborted) {
+    discard(d);
+    if (done) discard(done);
+    throw new Error("Cancelled");
+  }
+  if (!done) return d;
+  discard(d);
+  return done;
 }
 
 /** Encode video's Render: Media Lab's converter for untouched files, frame streaming otherwise. */
@@ -570,8 +637,8 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
   const fps = num(params.fps, 0);
   const level = String(params.quality || "high") as QualityLevel;
   const picked = String(params.codec || "auto");
-  const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, data: fromBytes(bytes) } });
-  if (container === "gif") return file(await encodeGif(v, fps, ctx.progress, ctx.signal));
+  const file = (data: Bytes) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, data } });
+  if (container === "gif") return file(fromBytes(await encodeGif(v, fps, ctx.progress, ctx.signal)));
 
   // Native ffmpeg takes ProRes (browsers can't write it), and HEVC only where WebCodecs can't encode it.
   // On a Mac, Chromium's WebCodecs HEVC already runs on VideoToolbox and measured as fast as ffmpeg's.
@@ -601,11 +668,22 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
       container, codec: choice, rate: { mode: "quality", level }, fps, audio: params.audio === false ? "remove" : "keep", audioKbps: 160,
       trim: v.range,
     };
-    const r = await processVideo(v.origin, i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label) });
-    return file(await aacSound(r.bytes, container, ctx));
+    // In the desktop app the file streams to disk as it's made.
+    const disk = await diskTarget(`${base}.${meta.ext}`);
+    let r;
+    try {
+      r = await processVideo(v.origin, i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label), target: disk && (() => disk.target) });
+    } catch (e) {
+      await disk?.file.abort();
+      throw e;
+    }
+    // The ffmpeg.wasm fallback ignores the target and returns bytes.
+    const streamed = !!(disk && r.streamed);
+    if (disk && !streamed) await disk.file.abort();
+    return file(await finishMp4(streamed ? await disk!.file.close() : fromBytes(r.bytes), container, ctx, streamed));
   }
   const r = await encodeStream(v, container, choice, level, fps, params.audio !== false, ctx.progress, ctx.signal);
-  return file(await aacSound(r.bytes, container, ctx));
+  return file(await finishMp4(r.data, container, ctx, r.streamed));
 }
 
 /**
@@ -617,27 +695,59 @@ export async function splitVideo(v: VideoValue, ranges: (duration: number) => Ti
   let source: Blob;
   let span: TimeRange;
   let sound: Blob | undefined;
+  /** The whole video encoded first, when it isn't needed after the cut. */
+  let whole: FileValue | undefined;
   if (v.origin && v.of === "image") {
     source = v.origin;
     span = v.range ?? { start: 0, end: (await info(source)).duration };
     sound = v.audioSource;
   } else {
-    const whole = { ...ctx, progress: (f: number) => ctx.progress?.(Math.max(0, f) * 0.5, "Encoding the whole video first") };
-    const r = await encodeVideo(v, { container: "mp4", quality: "very-high", audio: true, name: "whole" }, whole);
-    const f = r.file as FileValue;
+    const first = { ...ctx, progress: (f: number) => ctx.progress?.(Math.max(0, f) * 0.5, "Encoding the whole video first") };
+    const r = await encodeVideo(v, { container: "mp4", quality: "very-high", audio: true, name: "whole" }, first);
+    const f = (whole = r.file as FileValue);
     source = new File([await asBlob(f.data)], f.name, { type: f.mime });
+    // ffmpeg cuts it where it is on disk, rather than being sent its bytes.
+    if (f.data.in === "disk") setLocalPath(source, f.data.path);
     const i = await info(source);
     span = { start: 0, end: i.duration };
     sound = i.hasAudio ? source : undefined;
   }
+  try {
+    return await cutClips(v, source, span, sound, sourceName, ranges, params, ctx);
+  } finally {
+    if (whole) discard(whole.data);
+  }
+}
+
+async function cutClips(
+  v: VideoValue,
+  source: Blob,
+  span: TimeRange,
+  sound: Blob | undefined,
+  sourceName: string | undefined,
+  ranges: (duration: number) => TimeRange[],
+  params: Params,
+  ctx: RunContext,
+): Promise<FileValue[]> {
   const rs = ranges(span.end - span.start);
   const container = (String(params.container) in VIDEO_CONTAINERS ? params.container : "mp4") as VideoContainer;
   const base = clean(params.name, (sourceName ?? "video").replace(/\.[^.]+$/, "") || "video");
   const names = clipNames(base, rs.length, VIDEO_CONTAINERS[container].ext);
   const done = v.origin ? 0 : 0.5;
   const clips: FileValue[] = [];
-  for (let n = 0; n < rs.length; n++) {
-    if (ctx.signal?.aborted) throw new Error("Cancelled");
+  try {
+    for (let n = 0; n < rs.length; n++) {
+      if (ctx.signal?.aborted) throw new Error("Cancelled");
+      clips.push(await cutClip(n));
+    }
+  } catch (e) {
+    // The clips made so far are no one's now.
+    for (const c of clips) discard(c.data);
+    throw e;
+  }
+  return clips;
+
+  async function cutClip(n: number): Promise<FileValue> {
     const range = { start: span.start + rs[n].start, end: span.start + rs[n].end };
     const clip: VideoValue = {
       ...v,
@@ -651,9 +761,8 @@ export async function splitVideo(v: VideoValue, ranges: (duration: number) => Ti
     };
     const step = { ...ctx, progress: (f: number) => ctx.progress?.(done + ((1 - done) * (n + Math.max(0, f))) / rs.length, `Clip ${n + 1} of ${rs.length}`) };
     const r = await encodeVideo(clip, { ...params, container, name: names[n].replace(/\.[^.]+$/, "") }, step);
-    clips.push(r.file as FileValue);
+    return r.file as FileValue;
   }
-  return clips;
 }
 
 /**

@@ -147,9 +147,13 @@ const stopped = new Set();
 
 /**
  * Runs `tool` with `args` in a fresh temp folder holding `files`, and returns
- * the exit code, every new file it wrote, and the end of its log.
+ * the exit code, every new file it wrote, and the end of its log. With `opts.keep`
+ * the new files aren't read: they're moved into the scratch folder and come back as
+ * `{ path, size }` (a video can be bigger than Node can read at once, and the window
+ * doesn't need its bytes). A failed run keeps nothing.
  */
-async function run(sender, id, tool, args, files, stdin = false) {
+async function run(sender, id, tool, args, files, stdin = false, opts = {}) {
+  const keep = !!opts?.keep && !!scratch;
   let stream;
   if (stdin) {
     // Registered before the first await, so writes sent right after the open find it.
@@ -220,7 +224,9 @@ async function run(sender, id, tool, args, files, stdin = false) {
     const out = {};
     for (const name of await readdir(dir)) {
       // yt-dlp leaves .part and .ytdl files behind when stopped; only finished files come back.
-      if (!before.has(name) && !/\.(part|ytdl|temp)$/.test(name)) out[name] = await readFile(path.join(dir, name));
+      if (before.has(name) || /\.(part|ytdl|temp)$/.test(name)) continue;
+      if (!keep) out[name] = await readFile(path.join(dir, name));
+      else if (code === 0) out[name] = await scratch.adopt(path.join(dir, name), name);
     }
     return { code, files: out, log };
   } catch (e) {
@@ -242,12 +248,12 @@ async function write(id, bytes) {
 }
 
 /** Runs a tool; a yt-dlp download that fails gets one more try with a newer yt-dlp. */
-async function runTool(sender, id, tool, args, files) {
+async function runTool(sender, id, tool, args, files, opts) {
   try {
-    const r = await run(sender, id, tool, args, files);
+    const r = await run(sender, id, tool, args, files, false, opts);
     if (tool !== "yt-dlp" || r.code === 0 || stopped.has(id)) return r;
     const report = (fraction, label) => !sender.isDestroyed() && sender.send("tool-progress", id, fraction, label);
-    return (await updateYtdlpAfterFailure(report)) && !stopped.has(id) ? await run(sender, id, tool, args, files) : r;
+    return (await updateYtdlpAfterFailure(report)) && !stopped.has(id) ? await run(sender, id, tool, args, files, false, opts) : r;
   } finally {
     stopped.delete(id);
   }
@@ -255,13 +261,16 @@ async function runTool(sender, id, tool, args, files) {
 
 /** Whether the window may hand a file on disk to a tool by its path (see local-files.js). */
 let mayRead = () => false;
+/** The scratch folder (scratch.js), where kept results go. */
+let scratch = null;
 
-export function registerTools(isAllowed) {
+export function registerTools(isAllowed, scratchFolder) {
   mayRead = isAllowed;
+  scratch = scratchFolder ?? null;
   ipcMain.handle("tools-info", async () => ({ ffmpeg: !!ffmpegPath, ytdlp: !!YTDLP_ASSET, sips: !!sipsPath, ...(await ffmpegCaps()) }));
-  ipcMain.handle("tool-run", (e, id, tool, args, files) => runTool(e.sender, id, tool, args, files));
+  ipcMain.handle("tool-run", (e, id, tool, args, files, opts) => runTool(e.sender, id, tool, args, files, opts));
   // A job fed through stdin: tool-open starts it and resolves when it exits; tool-write and tool-end feed it.
-  ipcMain.handle("tool-open", (e, id, tool, args, files) => run(e.sender, id, tool, args, files, true).finally(() => stopped.delete(id)));
+  ipcMain.handle("tool-open", (e, id, tool, args, files, opts) => run(e.sender, id, tool, args, files, true, opts).finally(() => stopped.delete(id)));
   ipcMain.handle("tool-write", (_e, id, bytes) => write(id, bytes));
   ipcMain.handle("tool-end", async (_e, id) => {
     const stdin = await streams.get(id)?.ready.catch(() => undefined);
