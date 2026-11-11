@@ -43,7 +43,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # macos-14 jobs stopped getting a runner in November 2026 (cancelled at once).
+          - os: macos-15
             script: dist
             files: toolbox/release/*.dmg
           - os: windows-latest
