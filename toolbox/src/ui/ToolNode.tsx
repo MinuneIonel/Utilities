@@ -62,12 +62,15 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   // An input waiting for its file or link is a normal state, not an error.
   const waitingForInput = def.category === "input" && (empty || (def.type === "input.download" && !String(data.params.url ?? "").trim()));
   const status = waitingForInput ? (accept ? "" : "Paste a link in the inspector") : statusLine(rt);
+  // Job nodes only run on Render. A Save node offers to save again once it has saved; others can be run on their own.
+  const job = def.kind === "job";
+  const savedOnce = !!rt?.savedTo || (Array.isArray(data.params.lastSaved) && data.params.lastSaved.length > 0);
 
   return (
-    <div className={`tnode${selected ? " selected" : ""}`}>
+    <div className={`tnode${job ? " job" : ""}${selected ? " selected" : ""}`}>
       <div className="tnode-head">
         <span className="tnode-title">{def.title}</span>
-        {def.saves && (
+        {def.saves && savedOnce && (
           <button
             className="nodrag save-now"
             onClick={(e) => {
@@ -76,7 +79,19 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
             }}
             title="Render just what feeds this node and save it, even if it hasn't changed"
           >
-            Save
+            Save again
+          </button>
+        )}
+        {job && !def.saves && (
+          <button
+            className={`nodrag save-now run-now${rt?.status === "stale" ? " stale" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              actions.runNode(id);
+            }}
+            title="Render just what feeds this node to see its result, without writing files"
+          >
+            Run
           </button>
         )}
         <button

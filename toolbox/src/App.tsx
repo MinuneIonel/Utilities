@@ -533,6 +533,12 @@ export function App() {
 
   // ---------------------------------------------------------------- render
 
+  // The Render button says "Render & save" when something will be saved, and carries a dot when a result is out of date.
+  const hasSave = nodes.some((n) => REGISTRY.get(n.data.type)?.saves);
+  const hasSaveRef = useRef(hasSave);
+  hasSaveRef.current = hasSave;
+  const stale = Object.values(runtime).some((r) => r?.status === "stale");
+
   /** What each Save node last wrote, so an unchanged file isn't saved again. */
   const savedKeys = useRef(new Map<string, string>());
   /** The files each Save node wrote this session, the ones it may replace on the next Render. */
@@ -555,11 +561,11 @@ export function App() {
    * A Save node whose file hasn't changed since it last saved is skipped, unless it's `only`.
    */
   const render = useCallback(
-    async (only?: string) => {
+    async (only?: string, { save = true } = {}) => {
       if (rendering) return;
       let full = graphRef.current;
       // Nothing to save to: save the selected node's output, if a Save node can take it.
-      if (!only && !full.nodes.some((n) => REGISTRY.get(n.type)?.saves)) {
+      if (save && !only && !full.nodes.some((n) => REGISTRY.get(n.type)?.saves)) {
         const sel = flow.getNodes().find((n) => n.selected);
         const def = sel && REGISTRY.get(sel.data.type);
         const save = REGISTRY.get("output.save-file")!;
@@ -589,6 +595,10 @@ export function App() {
       setRecording(false);
       setRendering(false);
       if (result.error) flash(result.error);
+      if (!save) {
+        if (!result.error) flash(`Rendered. Press ${hasSaveRef.current ? "Render & save" : "Render"} to write files.`);
+        return;
+      }
       let unchanged = 0;
       let saved = 0;
       let kept = 0;
@@ -650,6 +660,7 @@ export function App() {
     [client, flash, flow, rememberSaved, rendering, setEdges, setNodes, shapes, webcams],
   );
   const saveNode = useCallback((id: string) => void render(id), [render]);
+  const runNode = useCallback((id: string) => void render(id, { save: false }), [render]);
   const renderRef = useRef(render);
   renderRef.current = render;
 
@@ -950,7 +961,7 @@ export function App() {
     [edges, nodes, shapes],
   );
 
-  const actions = useMemo(() => ({ setNodeFile, setNodeFiles, togglePreview, saveNode }), [saveNode, setNodeFile, setNodeFiles, togglePreview]);
+  const actions = useMemo(() => ({ setNodeFile, setNodeFiles, togglePreview, saveNode, runNode }), [runNode, saveNode, setNodeFile, setNodeFiles, togglePreview]);
   const inspectorWidth = view.inspectorHidden ? 0 : view.inspectorWidth;
 
   return (
@@ -964,15 +975,15 @@ export function App() {
               <img className="logo" src={logoUrl} alt="" /> TOOLBOX
             </div>
             <div className="group">
-              <button onClick={() => commands.current.new()}>New</button>
+              <button onClick={() => commands.current.new()}>New graph</button>
               <button className="add-node" onClick={() => commands.current.addNode()} title="Add a node (Tab, or right-click the canvas)">
                 Add node <kbd>Tab</kbd>
               </button>
               <button className="workflows" onClick={() => commands.current.workflows()} title="Drop in a ready-made chain, like downloading a video">
                 Workflows
               </button>
-              <button onClick={openGraph}>Open</button>
-              <button onClick={saveGraph}>Save</button>
+              <button onClick={openGraph}>Open graph</button>
+              <button onClick={saveGraph}>Save graph</button>
               <button className="undo" onClick={undo} disabled={!canUndo} title={`Undo (${MOD}Z)`} aria-label="Undo">
                 ↶
               </button>
@@ -1004,8 +1015,9 @@ export function App() {
                   Stop
                 </button>
               ) : (
-                <button className="primary" onClick={() => void render()} disabled={rendering} title="Render and save what changed (⌘R)">
-                  {rendering ? "Rendering…" : "Render"}
+                <button className="primary" onClick={() => void render()} disabled={rendering} title={`Render and save what changed (${MOD}R)${stale ? ". Some results are out of date." : ""}`}>
+                  {rendering ? "Rendering…" : hasSave ? "Render & save" : "Render"}
+                  {stale && !rendering && <span className="stale-dot" aria-label="out of date" />}
                 </button>
               )}
             </div>

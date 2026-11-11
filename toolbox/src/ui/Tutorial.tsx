@@ -29,7 +29,7 @@ const STEPS: Step[] = [
   },
   {
     title: "Render",
-    body: "Render runs everything at full size and the Save nodes write what changed; the files show up at the bottom. ⌘Z undoes, and the ? button brings this tour back.",
+    body: "Nodes with a dashed top edge only run on Render. Render & save runs everything at full size and the Save nodes write what changed; the files show up at the bottom. Run on one of those nodes shows its result without saving. ⌘Z undoes, and the ? button brings this tour back.",
     target: [".topbar .primary"],
   },
 ];
