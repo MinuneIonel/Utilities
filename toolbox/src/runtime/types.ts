@@ -80,6 +80,11 @@ export interface VideoValue {
   origin?: Blob;
   /** Full-size frames in order. Each call starts from the beginning. */
   frames(signal?: AbortSignal): AsyncIterable<FrameItem>;
+  /**
+   * Set on a reader's share of frames that other job nodes read at the same time: says this
+   * reader won't read them (a cache hit, a missing input, an error), so the others don't wait for it.
+   */
+  release?(): void;
 }
 
 /** Encoded audio (any container ffmpeg reads, including a video file's sound). */

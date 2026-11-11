@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ResultCache, evaluate, hash, topoSort } from "../src/runtime/evaluate.ts";
+import { ResultCache, evaluate, fanout, hash, topoSort } from "../src/runtime/evaluate.ts";
 import type { FrameItem, Graph, NodeDef, RunContext, Value, VideoValue } from "../src/runtime/types.ts";
 
 // Text nodes keep the tests free of canvases: "src" emits params.text, "upper" upper-cases, "save" is a job.
@@ -310,4 +310,182 @@ test("during a recording, two consumers of a live video both get every frame", a
   // The mapped node keeps the trim and the late sound of the video it runs on.
   assert.equal(textOf(r, "n1"), "3 1-2 true");
   assert.equal(textOf(r, "n2"), "3 1-2 true");
+});
+
+// Sharing work between branches: a video source that counts how often its frames are started.
+function sharingDefs(frames = 10) {
+  const counts = { starts: 0, split: 0 };
+  const video = (origin?: Blob): VideoValue => ({
+    kind: "video", of: "text", width: 1, height: 1, duration: frames / 10, fps: 10,
+    poster: { kind: "text", text: "poster" },
+    origin,
+    async *frames() {
+      counts.starts++;
+      for (let i = 0; i < frames; i++) {
+        await new Promise((r) => setTimeout(r, 1));
+        yield { value: { kind: "text", text: `f${i}` }, timestamp: i / 10, duration: 0.1 };
+      }
+    },
+  });
+  // Reads every frame of its video on Render, like Encode video; `tag` only tells two apart.
+  const reader = (type: string, extra: NodeDef["inputs"] = []): NodeDef => ({
+    type, title: type, category: "output", description: "", params: [],
+    inputs: [{ key: "video", label: "Video", type: "text", sequence: true }, ...extra],
+    outputs: [{ key: "text", label: "Text", type: "text" }], defaults: () => ({ tag: "" }), kind: "job",
+    async run(i) {
+      if (type === "fails") throw new Error("broken");
+      const seen: string[] = [];
+      for await (const f of (i.video as VideoValue).frames()) seen.push((f.value as { text: string }).text);
+      return { text: { kind: "text", text: seen.join(",") } };
+    },
+  });
+  const sdefs: NodeDef[] = [
+    {
+      type: "vid", title: "Video", category: "input", description: "", inputs: [], params: [],
+      outputs: [{ key: "video", label: "Video", type: "video" }], defaults: () => ({ origin: false }), kind: "frame",
+      run: async (_i, p) => ({ video: video(p.origin ? new Blob(["x"]) : undefined) }),
+    },
+    defs0("upper"),
+    {
+      // Two outputs, like Remove background's image and mask.
+      type: "two", title: "Two", category: "image", description: "", params: [],
+      inputs: [{ key: "text", label: "Text", type: "text" }],
+      outputs: [{ key: "a", label: "A", type: "text" }, { key: "b", label: "B", type: "text" }],
+      defaults: () => ({}), kind: "frame",
+      async run(i) {
+        counts.split++;
+        const t = (i.text as { text: string }).text;
+        return { a: { kind: "text", text: `${t}a` }, b: { kind: "text", text: `${t}b` } };
+      },
+    },
+    {
+      type: "join", title: "Join", category: "image", description: "", params: [],
+      inputs: [{ key: "x", label: "X", type: "text" }, { key: "y", label: "Y", type: "text" }],
+      outputs: [{ key: "text", label: "Text", type: "text" }], defaults: () => ({}), kind: "frame",
+      async run(i) {
+        return { text: { kind: "text", text: `${(i.x as { text: string }).text}+${(i.y as { text: string }).text}` } };
+      },
+    },
+    reader("read"),
+    reader("fails"),
+    reader("needs-two", [{ key: "other", label: "Other", type: "text" }]),
+    defs0("save"),
+  ];
+  return { counts, registry: new Map(sdefs.map((d) => [d.type, d])) };
+}
+
+const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, params, position: { x: 0, y: 0 } });
+const wire = (source: string, sourceHandle: string, target: string, targetHandle: string) => ({ id: `${source}-${target}-${targetHandle}`, source, sourceHandle, target, targetHandle });
+/** Fails instead of hanging when a reader is left waiting for another. */
+const inTime = <T>(p: Promise<T>, ms = 3000) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_r, reject) => (timer = setTimeout(() => reject(new Error("timed out: a reader is stuck waiting")), ms)));
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+};
+const frameList = (n: number, f: (i: number) => string) => Array.from({ length: n }, (_x, i) => f(i)).join(",");
+
+test("a frame node with two outputs read side by side runs once per frame", async () => {
+  const s = sharingDefs(10);
+  const g: Graph = {
+    version: 1,
+    nodes: [node("v", "vid"), node("t", "two"), node("j", "join"), node("r", "read")],
+    edges: [wire("v", "video", "t", "text"), wire("t", "a", "j", "x"), wire("t", "b", "j", "y"), wire("j", "text", "r", "video")],
+  };
+  const r = await inTime(evaluate(g, { registry: s.registry, ctx: renderCtx, cache: new ResultCache() }));
+  assert.equal(textOf(r, "r"), frameList(10, (i) => `f${i}a+f${i}b`));
+  // 10 frames + the poster, not 10 per output.
+  assert.equal(s.counts.split, 11);
+  assert.equal(s.counts.starts, 1);
+});
+
+test("two job nodes reading the same video decode it once", async () => {
+  const s = sharingDefs(10);
+  const g: Graph = {
+    version: 1,
+    nodes: [node("v", "vid"), node("u", "upper"), node("r1", "read"), node("r2", "read", { tag: "2" })],
+    edges: [wire("v", "video", "u", "text"), wire("u", "text", "r1", "video"), wire("u", "text", "r2", "video")],
+  };
+  const r = await inTime(evaluate(g, { registry: s.registry, ctx: renderCtx, cache: new ResultCache() }));
+  const want = frameList(10, (i) => `F${i}`);
+  assert.equal(textOf(r, "r1"), want);
+  assert.equal(textOf(r, "r2"), want);
+  assert.equal(s.counts.starts, 1);
+});
+
+test("a job after one sharing reader doesn't hold up the other reader", async () => {
+  // Listed so that the order is v, r1, s, r2: running one node at a time in that order
+  // would wait on r1, which waits for r2 to start reading.
+  const s = sharingDefs(20);
+  const g: Graph = {
+    version: 1,
+    nodes: [node("s", "save"), node("r1", "read"), node("r2", "read", { tag: "2" }), node("v", "vid")],
+    edges: [wire("v", "video", "r1", "video"), wire("v", "video", "r2", "video"), wire("r1", "text", "s", "text")],
+  };
+  assert.deepEqual(topoSort(g).map((n) => n.id), ["v", "r1", "s", "r2"]);
+  const r = await inTime(evaluate(g, { registry: s.registry, ctx: renderCtx, cache: new ResultCache() }));
+  assert.equal(textOf(r, "s"), frameList(20, (i) => `f${i}`));
+  assert.equal(textOf(r, "r2"), frameList(20, (i) => `f${i}`));
+  assert.equal(s.counts.starts, 1);
+});
+
+test("a sharing reader that is a cache hit lets the other finish", async () => {
+  const s = sharingDefs(20);
+  const cache = new ResultCache();
+  const one: Graph = { version: 1, nodes: [node("v", "vid"), node("r1", "read")], edges: [wire("v", "video", "r1", "video")] };
+  await evaluate(one, { registry: s.registry, ctx: renderCtx, cache });
+  const both: Graph = { ...one, nodes: [...one.nodes, node("r2", "read", { tag: "2" })], edges: [...one.edges, wire("v", "video", "r2", "video")] };
+  const r = await inTime(evaluate(both, { registry: s.registry, ctx: renderCtx, cache }));
+  assert.equal(r.get("r1")!.status, "cached");
+  assert.equal(r.get("r2")!.status, "ok");
+  assert.equal(textOf(r, "r2"), frameList(20, (i) => `f${i}`));
+});
+
+test("a sharing reader missing another input, or failing, lets the other finish", async () => {
+  for (const type of ["needs-two", "fails"]) {
+    const s = sharingDefs(20);
+    const g: Graph = {
+      version: 1,
+      nodes: [node("v", "vid"), node("r1", type), node("r2", "read")],
+      edges: [wire("v", "video", "r1", "video"), wire("v", "video", "r2", "video")],
+    };
+    const r = await inTime(evaluate(g, { registry: s.registry, ctx: renderCtx, cache: new ResultCache() }));
+    assert.equal(r.get("r1")!.status, type === "fails" ? "error" : "waiting");
+    assert.equal(textOf(r, "r2"), frameList(20, (i) => `f${i}`), type);
+  }
+});
+
+test("an untouched file isn't shared: an encoder may read the file itself", async () => {
+  const s = sharingDefs(10);
+  const g: Graph = {
+    version: 1,
+    nodes: [node("v", "vid", { origin: true }), node("r1", "read"), node("r2", "read", { tag: "2" })],
+    edges: [wire("v", "video", "r1", "video"), wire("v", "video", "r2", "video")],
+  };
+  const r = await inTime(evaluate(g, { registry: s.registry, ctx: renderCtx, cache: new ResultCache() }));
+  assert.equal(textOf(r, "r2"), frameList(10, (i) => `f${i}`));
+  assert.equal(s.counts.starts, 2);
+});
+
+test("fanout leaves out live values, mapped jobs and readers fed by another reader", () => {
+  const s = sharingDefs();
+  const g: Graph = {
+    version: 1,
+    nodes: [node("v", "vid"), node("r1", "read"), node("r2", "read"), node("r3", "read"), node("t", "two"), node("s", "save")],
+    edges: [
+      wire("v", "video", "r1", "video"),
+      wire("v", "video", "r2", "video"),
+      wire("v", "video", "t", "text"),
+      wire("t", "a", "r3", "video"),
+      wire("t", "a", "s", "text"),
+    ],
+  };
+  // Save takes one value, so it runs once per frame, later (it isn't a reader); r3 reads alone.
+  assert.deepEqual([...fanout(g, s.registry)], [["v:video", ["r1", "r2"]]]);
+  assert.deepEqual([...fanout(g, s.registry, new Set(["v", "r1", "r2", "t", "r3", "s"]))], []);
+  // r2 now waits for r1's result: it couldn't start while r1 waits for it.
+  const reg = new Map(s.registry);
+  const read = s.registry.get("read")!;
+  reg.set("read", { ...read, inputs: [...read.inputs, { key: "other", label: "Other", type: "text", optional: true }] });
+  const chained: Graph = { ...g, edges: [...g.edges, wire("r1", "text", "r2", "other")] };
+  assert.deepEqual([...fanout(chained, reg)], []);
 });
