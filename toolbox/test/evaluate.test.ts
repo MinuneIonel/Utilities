@@ -79,6 +79,40 @@ test("preview skips job nodes until they have been rendered", async () => {
   assert.equal(textOf(r, "c"), "HI");
 });
 
+test("a rendered job node is marked stale once something before it changes", async () => {
+  const cache = new ResultCache();
+  await evaluate(chain("hi"), { registry, ctx: renderCtx, cache });
+  let r = await evaluate(chain("hi"), { registry, ctx: preview, cache });
+  assert.equal(r.get("c")!.status, "cached");
+  r = await evaluate(chain("yo"), { registry, ctx: preview, cache });
+  assert.equal(r.get("c")!.status, "stale");
+  // Still shows the last render, so the card isn't empty.
+  assert.equal(textOf(r, "c"), "HI");
+  // Going back to what was rendered makes it current again.
+  r = await evaluate(chain("hi"), { registry, ctx: preview, cache });
+  assert.equal(r.get("c")!.status, "cached");
+});
+
+test("preview-only params never make Render run a job again", async () => {
+  const withAt: NodeDef = { ...defs[0], type: "src-at", previewParams: ["at"], cacheKey: (_p, c) => c.mode };
+  const reg = new Map([...registry, ["src-at", withAt]]);
+  const g = (at: number): Graph => {
+    const x = chain("hi");
+    x.nodes[2] = { ...x.nodes[2], type: "src-at", params: { text: "hi", at } };
+    return x;
+  };
+  const cache = new ResultCache();
+  const first = await evaluate(g(10), { registry: reg, ctx: renderCtx, cache });
+  let r = await evaluate(g(50), { registry: reg, ctx: preview, cache });
+  assert.equal(r.get("c")!.status, "cached");
+  runs = [];
+  r = await evaluate(g(50), { registry: reg, ctx: renderCtx, cache });
+  assert.equal(r.get("c")!.status, "cached");
+  assert.ok(!runs.includes("save"));
+  // Same key, so the window knows the saved file hasn't changed.
+  assert.equal(r.get("c")!.key, first.get("c")!.key);
+});
+
 test("unchanged nodes come from the cache; a param change re-runs only downstream", async () => {
   const cache = new ResultCache();
   await evaluate(chain("hi"), { registry, ctx: preview, cache });

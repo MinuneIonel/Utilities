@@ -2,6 +2,7 @@
 // Runs graphs off the main thread. Holds the dropped files and the result cache.
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
+import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
 import { setLocalPath, setModelFetcher, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
@@ -13,6 +14,10 @@ export type ToWorker =
   | { type: "asset"; id: string; blob: Blob; path?: string }
   | { type: "run"; reqId: number; mode: "preview" | "render"; graph: Graph }
   | { type: "cancel" }
+  /** Stops downloads started by pasting a link (they run during preview, where there's no Render to cancel). */
+  | { type: "stop-downloads" }
+  /** The window dropped what it was showing (New, Open): send every picture again, even unchanged ones. */
+  | { type: "resend" }
   /** A webcam frame. `t` is in seconds. */
   | { type: "cam-frame"; id: string; bitmap: ImageBitmap; t: number }
   /** Ends every webcam recording, so Render can finish the files. */
@@ -171,6 +176,13 @@ let renderCancelled = false;
 let renderAbort = new AbortController();
 let queue = Promise.resolve();
 
+// Stopping an encode leaves Mediabunny's internal promises failing with "Output has been canceled"
+// (or "Conversion was canceled"): expected after Cancel, so they don't belong in the log as errors.
+self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+  const m = e.reason instanceof Error ? e.reason.message : String(e.reason);
+  if (/\b(has been|was) cancell?ed\b/i.test(m)) e.preventDefault();
+});
+
 const post = (msg: FromWorker, transfer: Transferable[] = []) => (self as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
@@ -179,6 +191,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     assets.set(msg.id, msg.blob);
     if (msg.path) setLocalPath(msg.blob, msg.path);
   }
+  else if (msg.type === "resend") sentKey.clear();
+  else if (msg.type === "stop-downloads") stopDownloads();
   else if (msg.type === "cancel") {
     renderCancelled = true;
     renderAbort.abort();
@@ -246,7 +260,11 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   } else if (msg.type === "tool-progress") {
     toolCalls.get(msg.callId)?.onProgress?.(msg.fraction, msg.label);
   } else {
-    if (msg.mode === "preview") latestPreview = msg.reqId;
+    if (msg.mode === "preview") {
+      latestPreview = msg.reqId;
+      // The preview in progress may be waiting on a download of a link that has since changed.
+      pruneDownloads(msg.graph);
+    }
     else {
       renderCancelled = false;
       renderAbort = new AbortController();

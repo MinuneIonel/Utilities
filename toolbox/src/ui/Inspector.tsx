@@ -133,6 +133,42 @@ function PresetBar({ def, params, apply }: { def: NodeDef; params: Params; apply
   );
 }
 
+/**
+ * The box beside a slider. What you type applies as you type when it's in range; anything else
+ * (150 in a 0–100 box, half-typed "1" in a 36–600 box) is pulled into range on Enter or blur.
+ */
+function NumberBox({ def, value, set }: { def: Extract<ParamDef, { kind: "number" }>; value: number; set: (v: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    const v = Number(draft);
+    if (draft.trim() !== "" && Number.isFinite(v)) {
+      const c = Math.min(def.max, Math.max(def.min, v));
+      if (c !== value) set(c);
+    }
+    setDraft(null);
+  };
+  return (
+    <input
+      type="number"
+      className="num"
+      min={def.min}
+      max={def.max}
+      step={def.step}
+      value={draft ?? value}
+      onChange={(e) => {
+        const v = e.target.valueAsNumber;
+        const ok = Number.isFinite(v) && v >= def.min && v <= def.max;
+        // Only an out-of-range or half-typed value is held back until Enter or blur.
+        setDraft(ok ? null : e.target.value);
+        if (ok) set(v);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+    />
+  );
+}
+
 function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
   switch (def.kind) {
     case "number":
@@ -140,15 +176,7 @@ function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: un
         <div className="field">
           <label>{def.label}</label>
           <input type="range" min={def.min} max={def.max} step={def.step} value={Number(value)} onChange={(e) => set(e.target.valueAsNumber)} />
-          <input
-            type="number"
-            className="num"
-            min={def.min}
-            max={def.max}
-            step={def.step}
-            value={Number(value)}
-            onChange={(e) => Number.isFinite(e.target.valueAsNumber) && set(e.target.valueAsNumber)}
-          />
+          <NumberBox def={def} value={Number(value)} set={set} />
         </div>
       );
     case "select":

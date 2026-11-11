@@ -152,7 +152,7 @@ async function mediabunnyVideo(file: Blob, info: VideoInfo, job: VideoJob, opts:
     const why = conversion.discardedTracks.map((d) => `${d.track.type}: ${d.reason}`).join(", ");
     throw new Error(`Mediabunny can't do this conversion (${why}).`);
   }
-  const onAbort = () => void conversion.cancel();
+  const onAbort = () => void conversion.cancel().catch(() => undefined);
   opts.signal?.addEventListener("abort", onAbort);
   conversion.onProgress = (p) => opts.onProgress?.({ fraction: p, label: "Encoding (WebCodecs)" });
   try {

@@ -7,6 +7,7 @@ import {
   AudioSampleSink,
   AudioSampleSource,
   BlobSource,
+  BufferSource,
   BufferTarget,
   Conversion,
   getFirstEncodableAudioCodec,
@@ -302,7 +303,11 @@ async function encodeStream(
             ? await audioTrackFor(v.audioSource, format, output, v.range)
             : v.soundLater && (await laterAudioTrack(v.soundLater, format, output));
         await output.start();
-        if (audio) audioDone = audio();
+        if (audio) {
+          audioDone = audio();
+          // Cancelling mid-way makes the sound feed fail with "Output has been canceled"; nobody awaits it then.
+          audioDone.catch(() => undefined);
+        }
       }
       const even = evenFrame(img, size.w, size.h);
       const sample = new VideoSample(alpha ? even : flattenOnBlack(even), {
@@ -524,6 +529,38 @@ async function encodeNative(tools: NativeTools, v: VideoValue, job: NativeJob, c
   throw new Error(`ffmpeg couldn't encode this video: ${error}`);
 }
 
+/**
+ * MP4 and MOV get AAC sound: QuickTime and iPhones play Opus there as silence. WebCodecs
+ * has no AAC encoder on Linux (and some Windows setups), so Mediabunny falls back to Opus;
+ * the desktop app's ffmpeg then re-encodes just the sound, copying the picture.
+ */
+async function aacSound(bytes: Uint8Array, container: VideoContainer, ctx: RunContext): Promise<Uint8Array> {
+  if (container !== "mp4" && container !== "mov") return bytes;
+  const tools = nativeTools();
+  if (!tools?.ffmpeg) return bytes;
+  const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+  let codec: string | null | undefined;
+  try {
+    codec = (await input.getPrimaryAudioTrack())?.codec;
+  } catch {
+    return bytes;
+  } finally {
+    input.dispose?.();
+  }
+  if (codec !== "opus" && codec !== "vorbis") return bytes;
+  const ext = VIDEO_CONTAINERS[container].ext;
+  ctx.progress?.(-1, "Converting the sound to AAC");
+  const r = await tools.run(
+    "ffmpeg",
+    ["-hide_banner", "-y", "-i", `in.${ext}`, "-map", "0:v", "-map", "0:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", `out.${ext}`],
+    { [`in.${ext}`]: bytes },
+    { signal: ctx.signal },
+  );
+  if (ctx.signal?.aborted) throw new Error("Cancelled");
+  // Opus sound still beats no file.
+  return r.code === 0 && r.files[`out.${ext}`] ? r.files[`out.${ext}`] : bytes;
+}
+
 /** Encode video's Render: Media Lab's converter for untouched files, frame streaming otherwise. */
 export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext): Promise<Record<string, Value>> {
   const container = (String(params.container) in VIDEO_CONTAINERS ? params.container : "mp4") as VideoContainer;
@@ -564,10 +601,10 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
       trim: v.range,
     };
     const r = await processVideo(v.origin, i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label) });
-    return file(r.bytes);
+    return file(await aacSound(r.bytes, container, ctx));
   }
   const r = await encodeStream(v, container, choice, level, fps, params.audio !== false, ctx.progress, ctx.signal);
-  return file(r.bytes);
+  return file(await aacSound(r.bytes, container, ctx));
 }
 
 /**

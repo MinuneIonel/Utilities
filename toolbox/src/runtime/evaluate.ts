@@ -273,6 +273,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
 
       const inputs: Record<string, Value | undefined> = {};
       const inputKeys: string[] = [];
+      const renderInputKeys: string[] = [];
       const toConvert: [string, Converter, Value][] = [];
       const seqKeys: string[] = [];
       const frameConvs: Record<string, Converter | undefined> = {};
@@ -307,26 +308,38 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
           // Converted only if the node actually runs (not on a cache hit).
           toConvert.push([port.key, conv, value]);
         } else inputs[port.key] = value;
-        inputKeys.push(`${port.key}=${upstream.key}:${edge.sourceHandle}${conv ? `>${port.type}` : ""}`);
+        const via = `:${edge.sourceHandle}${conv ? `>${port.type}` : ""}`;
+        inputKeys.push(`${port.key}=${upstream.key}${via}`);
+        renderInputKeys.push(`${port.key}=${upstream.renderKey ?? upstream.key}${via}`);
       }
       if (missing) {
         finish(node.id, { status: "waiting", outputs: {}, error: missing });
         return;
       }
 
-      const key = hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, { ...ctx, nodeId: node.id }) ?? "", ...inputKeys].join("|"));
+      const nodeCtxKey = { ...ctx, nodeId: node.id };
+      const previewOnly = def.previewParams ?? [];
+      const renderParams = previewOnly.length ? Object.fromEntries(Object.entries(node.params).filter(([k]) => !previewOnly.includes(k))) : node.params;
+      const renderKey = hash([node.type, JSON.stringify(renderParams), def.cacheKey?.(node.params, { ...nodeCtxKey, mode: "render" }) ?? "", ...renderInputKeys].join("|"));
+      // Job nodes only ever run on Render, so they are cached by what Render would make:
+      // moving a playhead or picking another preview page doesn't encode the video again.
+      const key =
+        def.kind === "job" ? renderKey : hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, nodeCtxKey) ?? "", ...inputKeys].join("|"));
 
       if (def.kind === "job" && ctx.mode === "preview") {
         const last = cache.lastRender.get(node.id);
-        if (last) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key });
-        else finish(node.id, { status: "skipped", outputs: {}, error: "Render to see" });
+        if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Render to see", renderKey });
+        // A recording can't be "out of date": every camera frame is new.
+        else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
+        else finish(node.id, { status: "stale", outputs: last.outputs, key: last.key, renderKey, error: "Out of date: Render to update" });
         return;
       }
 
-      const hit = cache.get(key);
+      const last = def.kind === "job" ? cache.lastRender.get(node.id) : undefined;
+      const hit = cache.get(key) ?? (last?.key === key ? last.outputs : undefined);
       if (hit) {
         if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs: hit });
-        finish(node.id, { status: "cached", outputs: hit, key });
+        finish(node.id, { status: "cached", outputs: hit, key, renderKey });
         return;
       }
 
@@ -344,7 +357,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
           : await def.run(inputs, node.params, nodeCtx);
         if (!live.has(node.id)) cache.set(key, outputs);
         if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
-        finish(node.id, { status: "ok", outputs, key, ms: Date.now() - t0 });
+        finish(node.id, { status: "ok", outputs, key, renderKey, ms: Date.now() - t0 });
       } catch (err) {
         if (ctx.signal?.aborted) {
           finish(node.id, { status: "error", outputs: {}, error: "Cancelled" });

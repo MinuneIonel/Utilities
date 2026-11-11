@@ -78,6 +78,16 @@ export class RuntimeClient {
     });
   }
 
+  /** The window cleared its pictures: the next updates carry every node's picture again. */
+  resendAll() {
+    this.send({ type: "resend" });
+  }
+
+  /** Stops downloads a pasted link started; they stay stopped until Render or a new link. */
+  stopDownloads() {
+    this.send({ type: "stop-downloads" });
+  }
+
   cancelRender() {
     this.send({ type: "cancel" });
   }
