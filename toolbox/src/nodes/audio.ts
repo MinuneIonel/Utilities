@@ -3,6 +3,7 @@
 // on first use.
 import { FORMAT_LIST, FORMATS, isAudioFormat } from "../../../audio/src/engine";
 import type { AudioValue, Converter, FileValue, NodeDef } from "../runtime/types";
+import { fromBytes } from "./bytes";
 
 /** ffmpeg.wasm, Mediabunny and Audio Lab's job builder, loaded on first use. */
 export const audioCodec = () => import("./audio-codec");
@@ -116,7 +117,7 @@ export const AUDIO_CONVERTERS: Converter[] = [
     label: "file",
     async convert(v) {
       const a = v as AudioValue;
-      const f: FileValue = { kind: "file", name: a.name, mime: a.mime || "application/octet-stream", bytes: a.bytes };
+      const f: FileValue = { kind: "file", name: a.name, mime: a.mime || "application/octet-stream", data: fromBytes(a.bytes) };
       return f;
     },
   },

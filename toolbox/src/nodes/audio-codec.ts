@@ -7,6 +7,7 @@ import wasmURL from "@ffmpeg/core/wasm?url";
 import { ALL_FORMATS, AudioSampleSink, BufferSource, Input } from "mediabunny";
 import { convertAudio, defaultSettings, FORMATS, isAudioFormat, type AudioFormat, type AudioSettings } from "../../../audio/src/engine";
 import type { AudioValue, FileValue, ImageValue, Params, RunContext, Value } from "../runtime/types";
+import { fromBytes } from "./bytes";
 import { audioFormatOf, clipNames } from "./clips";
 import type { TimeRange } from "./ffmpeg-video";
 import { NativeFfmpeg, nativeTools } from "./native";
@@ -123,7 +124,7 @@ export async function split(a: AudioValue, ranges: (duration: number) => TimeRan
     const step = { ...ctx, progress: (f: number) => ctx.progress?.((i + Math.max(0, f)) / rs.length, `Clip ${i + 1} of ${rs.length}`) };
     const settings: AudioSettings = { ...defaultSettings(), format: fmt, bitrate, trim: rs[i] };
     const out = await encode({ ...a, duration: total }, settings, names[i], step, "Cutting");
-    clips.push({ kind: "file", name: out.name, mime: out.mime, bytes: out.bytes });
+    clips.push({ kind: "file", name: out.name, mime: out.mime, data: fromBytes(out.bytes) });
   }
   return clips;
 }

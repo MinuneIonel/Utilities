@@ -4,6 +4,7 @@ import { restoreText } from "../../../diacritics/src/engine/restore";
 import modelUrl from "../../../diacritics/public/model.dat?url";
 import neuralUrl from "../../../diacritics/public/neural.dat?url";
 import type { NodeDef, TextValue } from "../runtime/types";
+import { fromBytes } from "./bytes";
 import { TEXT_FILE } from "./save";
 
 export const textInput: NodeDef = {
@@ -81,6 +82,6 @@ export const saveText: NodeDef = {
     const t = inputs.text as TextValue;
     const f = TEXT_FILE[t.format ?? "plain"] ?? TEXT_FILE.plain;
     const base = String(params.name || "toolbox-text").replace(/[\\/:*?"<>|]+/g, "-");
-    return { file: { kind: "file", name: `${base}.${f.ext}`, mime: f.mime, bytes: new TextEncoder().encode(t.text) } };
+    return { file: { kind: "file", name: `${base}.${f.ext}`, mime: f.mime, data: fromBytes(new TextEncoder().encode(t.text)) } };
   },
 };

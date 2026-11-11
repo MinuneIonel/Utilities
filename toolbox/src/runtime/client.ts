@@ -1,13 +1,22 @@
 import { bridge } from "../platform";
-import type { Graph } from "./types";
-import type { FromWorker, NodeUpdate, ProgressUpdate, ToWorker } from "./worker";
+import type { Bytes, Graph } from "./types";
+import type { FromWorker, NodeUpdate, ProgressUpdate, SavedFile, ToWorker } from "./worker";
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
-  /** `key` identifies what the file was made from: the same key means the same file. */
-  files: { nodeId: string; name: string; mime: string; bytes: Uint8Array; key?: string }[];
+  /**
+   * `key` identifies what the file was made from: the same key means the same file. `data` is in
+   * memory or, in the desktop app, a path in the scratch folder; `size` is its length in bytes.
+   */
+  files: { nodeId: string; name: string; mime: string; data: Bytes; size: number; key?: string }[];
   error?: string;
 }
+
+const outcomeFile = (nodeId: string, f: SavedFile): RenderOutcome["files"][number] => ({
+  nodeId,
+  ...f,
+  size: f.data.in === "memory" ? f.data.bytes.byteLength : f.data.size,
+});
 
 /**
  * The window's handle on the graph worker. Previews are coalesced so only
@@ -141,10 +150,14 @@ export class RuntimeClient {
       void bridge?.cancelTool(msg.callId);
       return;
     }
+    if (msg.type === "scratch-free") {
+      void bridge?.scratchDelete(msg.paths).catch(() => undefined);
+      return;
+    }
     if (msg.type === "node") {
       const r = this.renders.get(msg.reqId);
-      if (r && msg.file) r.files.push({ nodeId: msg.id, ...msg.file });
-      if (r && msg.files) for (const f of msg.files) r.files.push({ nodeId: msg.id, ...f });
+      if (r && msg.file) r.files.push(outcomeFile(msg.id, msg.file));
+      if (r && msg.files) for (const f of msg.files) r.files.push(outcomeFile(msg.id, f));
       this.onUpdate(msg);
       return;
     }

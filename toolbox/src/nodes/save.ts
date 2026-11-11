@@ -3,6 +3,7 @@ import type { Converter, FileValue, ImageValue, NodeDef, TextValue, VideoValue }
 /** A Save node fed a list writes at most this many files. */
 const MAX_BATCH = 2000;
 const extOf = (name: string) => (name.includes(".") ? name.slice(name.lastIndexOf(".")) : "");
+import { fromBytes } from "./bytes";
 import { encodeImage } from "./image";
 
 /** The extension for each kind of text. */
@@ -48,7 +49,7 @@ export const saveImage: NodeDef = {
     const fmt = FORMATS[String(params.format)] ?? FORMATS.png;
     const bytes = await encodeImage(inputs.image as ImageValue, fmt.mime, Number(params.quality) / 100);
     const base = String(params.name || "toolbox-output").replace(/[\\/:*?"<>|]+/g, "-");
-    return { file: { kind: "file", name: `${base}.${fmt.ext}`, mime: fmt.mime, bytes } };
+    return { file: { kind: "file", name: `${base}.${fmt.ext}`, mime: fmt.mime, data: fromBytes(bytes) } };
   },
 };
 
@@ -60,7 +61,7 @@ export const SAVE_CONVERTERS: Converter[] = [
     label: "png",
     async convert(v) {
       const bytes = await encodeImage(v as ImageValue, "image/png", 1);
-      const f: FileValue = { kind: "file", name: "image.png", mime: "image/png", bytes };
+      const f: FileValue = { kind: "file", name: "image.png", mime: "image/png", data: fromBytes(bytes) };
       return f;
     },
   },
@@ -71,7 +72,7 @@ export const SAVE_CONVERTERS: Converter[] = [
     async convert(v) {
       const t = v as TextValue;
       const f = TEXT_FILE[t.format ?? "plain"] ?? TEXT_FILE.plain;
-      const file: FileValue = { kind: "file", name: `text.${f.ext}`, mime: f.mime, bytes: new TextEncoder().encode(t.text) };
+      const file: FileValue = { kind: "file", name: `text.${f.ext}`, mime: f.mime, data: fromBytes(new TextEncoder().encode(t.text)) };
       return file;
     },
   },

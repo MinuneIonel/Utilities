@@ -2,7 +2,11 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("toolbox", {
-  saveFile: (name, bytes, folder, opts) => ipcRenderer.invoke("save-file", name, bytes, folder, opts),
+  saveFile: (name, data, folder, opts) => ipcRenderer.invoke("save-file", name, data, folder, opts),
+  scratchOpen: (id, name) => ipcRenderer.invoke("scratch-open", id, name),
+  scratchWrite: (id, chunk, position) => ipcRenderer.invoke("scratch-write", id, chunk, position),
+  scratchClose: (id) => ipcRenderer.invoke("scratch-close", id),
+  scratchDelete: (paths) => ipcRenderer.invoke("scratch-delete", paths),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),

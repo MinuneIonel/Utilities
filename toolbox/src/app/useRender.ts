@@ -119,7 +119,7 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         let keptHere = 0;
         const paths: string[] = [];
         for (const f of files) {
-          const r = await saveFile(f.name, f.mime, f.bytes, folder, opts);
+          const r = await saveFile(f.name, f.mime, f.data, folder, opts);
           if (!r) continue;
           last = r.path;
           if (r.kept) {
@@ -129,7 +129,7 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
           }
           saved++;
           paths.push(r.path);
-          setOutputs((o) => [{ id: newId("o"), name: r.path.split(/[\\/]/).pop() ?? f.name, bytes: f.bytes.byteLength, savedTo: r.path }, ...o].slice(0, 30));
+          setOutputs((o) => [{ id: newId("o"), name: r.path.split(/[\\/]/).pop() ?? f.name, bytes: f.size, savedTo: r.path }, ...o].slice(0, 30));
         }
         if (!last) continue;
         if (key) savedKeys.current.set(nodeId, key);

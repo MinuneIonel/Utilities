@@ -32,11 +32,17 @@ export interface GridValue {
   glyphs: string[];
 }
 
+/**
+ * Where a file's bytes are: in memory, or in Toolbox's scratch folder on disk (desktop app only,
+ * for big results such as encoded videos). Helpers in nodes/bytes.ts work with either.
+ */
+export type Bytes = { in: "memory"; bytes: Uint8Array } | { in: "disk"; path: string; size: number };
+
 export interface FileValue {
   kind: "file";
   name: string;
   mime: string;
-  bytes: Uint8Array;
+  data: Bytes;
   /** Every file a Save node writes when it was fed a list (this file is the first of them). */
   batch?: FileValue[];
 }

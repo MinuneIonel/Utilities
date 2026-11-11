@@ -4,6 +4,7 @@ import { FONTS, parseSettings, type Settings } from "../../../ascii/src/engine/s
 import { builtInPresets } from "../../../ascii/src/presets";
 import { Renderer, inkIsDark } from "../../../ascii/src/render";
 import type { Converter, GridValue, ImageValue, NodeDef, TextValue } from "../runtime/types";
+import { fromBytes } from "./bytes";
 import { scaleImage } from "./image";
 
 /** Same cap as ASCII Lab. */
@@ -109,6 +110,6 @@ export const ASCII_CONVERTERS: Converter[] = [
     from: "grid",
     to: "file",
     label: "txt",
-    convert: async (v) => ({ kind: "file", name: "ascii.txt", mime: "text/plain", bytes: new TextEncoder().encode(gridToText(v as GridValue, "plain").text) }),
+    convert: async (v) => ({ kind: "file", name: "ascii.txt", mime: "text/plain", data: fromBytes(new TextEncoder().encode(gridToText(v as GridValue, "plain").text)) }),
   },
 ];

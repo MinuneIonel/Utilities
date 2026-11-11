@@ -2,13 +2,15 @@
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { consentText, pathsInGraph } from "./local-files.js";
 import { registerModels } from "./models.js";
 import { createPathSet } from "./path-set.js";
+import { serveRange } from "./range.js";
 import { numberedOwn, saveAction } from "./save-policy.js";
+import { createScratch } from "./scratch.js";
 import { registerTools } from "./tools.js";
 import { registerUpdater } from "./updater.js";
 
@@ -145,12 +147,22 @@ const exists = (p) => access(p).then(() => true, () => false);
 let written;
 const writtenFiles = () => (written ??= createPathSet(path.join(app.getPath("userData"), "written-files.json")));
 
+/** Where big results wait on disk (see scratch.js); made when the app starts. */
+let scratchFolder;
+const scratch = () => (scratchFolder ??= createScratch(app.getPath("temp")));
+
 /**
- * Writes a file for a Save node. With a folder, `opts.exists` says what happens when the name is
- * taken (see save-policy.js); `opts.own` lists the files this Save node wrote before, the only ones
- * it may replace. Returns where the file is and whether the old one was kept, or null if cancelled.
+ * Writes a file for a Save node: `data` is its bytes, or `{ fromPath }` for a result waiting in the
+ * scratch folder, which is copied (not moved: the same result can feed another Save node, and stays
+ * cached). With a folder, `opts.exists` says what happens when the name is taken (see save-policy.js);
+ * `opts.own` lists the files this Save node wrote before, the only ones it may replace. Returns where
+ * the file is and whether the old one was kept, or null if cancelled.
  */
-ipcMain.handle("save-file", async (_e, name, bytes, folder, opts = {}) => {
+ipcMain.handle("save-file", async (_e, name, data, folder, opts = {}) => {
+  const from = data && typeof data === "object" && !ArrayBuffer.isView(data) && "fromPath" in data ? data.fromPath : undefined;
+  // Only Toolbox's own results are copied by path: the window never names any other file.
+  if (from !== undefined && !scratch().inside(from)) throw new Error("Toolbox can only save its own results by path");
+  const put = (to) => (from !== undefined ? copyFile(from, to) : writeFile(to, data));
   let target;
   if (folder) {
     await mkdir(folder, { recursive: true });
@@ -170,7 +182,7 @@ ipcMain.handle("save-file", async (_e, name, bytes, folder, opts = {}) => {
       // Written next to it first, so a failed write never loses the earlier file.
       const part = `${target}.part`;
       try {
-        await writeFile(part, bytes);
+        await put(part);
         await rename(part, target);
       } catch (e) {
         await rm(part, { force: true });
@@ -185,10 +197,17 @@ ipcMain.handle("save-file", async (_e, name, bytes, folder, opts = {}) => {
     if (r.canceled || !r.filePath) return null;
     target = r.filePath;
   }
-  await writeFile(target, bytes);
+  await put(target);
   writtenFiles().add(target);
   return { path: target, kept: false };
 });
+
+// Results the graph worker streams to disk (an encoded video), written chunk by chunk.
+ipcMain.handle("scratch-open", (_e, id, name) => scratch().open(String(id), String(name)));
+ipcMain.handle("scratch-write", (_e, id, chunk, position) => scratch().write(String(id), chunk, position));
+ipcMain.handle("scratch-close", (_e, id) => scratch().close(String(id)));
+// Results the worker no longer holds; paths outside the scratch folder are ignored.
+ipcMain.handle("scratch-delete", (_e, paths) => scratch().remove(paths));
 
 ipcMain.handle("choose-folder", async () => {
   const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
@@ -269,22 +288,37 @@ ipcMain.handle("edit-text", (e, command) => {
   if (TEXT_EDITS.has(command)) e.sender[command]();
 });
 
-/** A file the window was given, read again from disk; anything else is refused. */
-async function readLocal(p) {
+/**
+ * A file the window was given, read again from disk; anything else is refused. With a Range
+ * header only that part is sent, so a long video is read as it's needed rather than whole.
+ */
+async function readLocal(p, range) {
   if (!allowedFiles().has(p)) return new Response("Toolbox wasn't given this file", { status: 403 });
   if (!(await isFile(p))) return new Response("Not found", { status: 404 });
-  return net.fetch(pathToFileURL(p).toString());
+  return range ? serveRange(p, range) : net.fetch(pathToFileURL(p).toString());
+}
+
+/** A result in the scratch folder, by its file name; nothing outside that folder. */
+async function readScratch(name, range) {
+  const p = path.join(scratch().dir, name);
+  if (!name || name !== path.basename(name) || !scratch().inside(p) || !(await isFile(p))) return new Response("Not found", { status: 404 });
+  return serveRange(p, range);
 }
 
 app.whenReady().then(() => {
   allowCamera();
-  registerTools((p) => allowedFiles().has(p));
+  scratch();
+  // Tools read the files the person gave Toolbox, and Toolbox's own results in the scratch folder.
+  registerTools((p) => allowedFiles().has(p) || scratch().inside(p));
   registerModels();
   registerUpdater(() => win);
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
     // Files dropped into a graph earlier, read again from where they are on disk.
-    if (pathname.startsWith("/@local/")) return readLocal(decodeURIComponent(pathname.slice("/@local/".length)));
+    const range = req.headers.get("range");
+    if (pathname.startsWith("/@local/")) return readLocal(decodeURIComponent(pathname.slice("/@local/".length)), range);
+    // Big results waiting on disk (an encoded video, a download), read a piece at a time.
+    if (pathname.startsWith("/@scratch/")) return readScratch(decodeURIComponent(pathname.slice("/@scratch/".length)), range);
     const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));
     if (!file.startsWith(dist + path.sep)) return new Response("Not found", { status: 404 });
     return net.fetch(pathToFileURL(file).toString());
@@ -299,6 +333,7 @@ app.whenReady().then(() => {
 app.on("will-quit", () => {
   written?.flush();
   allowed?.flush();
+  scratchFolder?.clear();
 });
 
 app.on("window-all-closed", () => {

@@ -1,16 +1,55 @@
 import { share, tee, type TeeSlot } from "./tee.ts";
+import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
 import type { Converter, FrameItem, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
+
+type Rendered = { key: string; outputs: Record<string, Value> };
+
+/** Every scratch file a node's outputs hold. */
+const pathsOf = (outputs: Record<string, Value>) => {
+  const s = new Set<string>();
+  for (const v of Object.values(outputs)) diskPaths(v, s);
+  return s;
+};
+
+/** A map whose values hold scratch files: setting, replacing or deleting an entry counts them. */
+class HoldingMap extends Map<string, Rendered> {
+  refs?: ScratchRefs;
+  set(key: string, value: Rendered) {
+    const old = this.get(key);
+    super.set(key, value);
+    this.refs?.retain(pathsOf(value.outputs));
+    if (old) this.refs?.release(pathsOf(old.outputs));
+    return this;
+  }
+  delete(key: string) {
+    const old = this.get(key);
+    const had = super.delete(key);
+    if (old) this.refs?.release(pathsOf(old.outputs));
+    return had;
+  }
+}
 
 /** Results kept between runs, keyed by node type + params + input keys. */
 export class ResultCache {
   private map = new Map<string, Record<string, Value>>();
   private bytes = 0;
   private maxBytes: number;
+  /**
+   * Who holds each result kept on disk (desktop app). Disk files take no memory, so they don't
+   * count towards the cache's size; once no cached result holds one, it's handed to `onFree`.
+   */
+  readonly refs = new ScratchRefs();
   /** The last full-size result of each job node, shown during live preview. */
-  readonly lastRender = new Map<string, { key: string; outputs: Record<string, Value> }>();
+  readonly lastRender: Map<string, Rendered> = new HoldingMap();
 
   constructor(maxBytes = 1 << 30) {
     this.maxBytes = maxBytes;
+    (this.lastRender as HoldingMap).refs = this.refs;
+  }
+
+  /** Called with scratch files no cached result holds any more, so they can be deleted. */
+  set onFree(free: (paths: string[]) => void) {
+    this.refs.setFree(free);
   }
 
   get(key: string): Record<string, Value> | undefined {
@@ -27,10 +66,12 @@ export class ResultCache {
     if (this.map.has(key)) return;
     this.map.set(key, outputs);
     this.bytes += sizeOf(outputs);
+    this.refs.retain(pathsOf(outputs));
     for (const [k, v] of this.map) {
       if (this.bytes <= this.maxBytes || k === key) break;
       this.map.delete(k);
       this.bytes -= sizeOf(v);
+      this.refs.release(pathsOf(v));
     }
   }
 
@@ -44,6 +85,8 @@ function sizeOfValue(v: Value): number {
     case "image":
       return v.data.byteLength;
     case "file":
+      // A file on disk takes no memory; a batch holds every file it writes.
+      return (v.batch ?? [v]).reduce((n, f) => n + (f.data.in === "memory" ? bytesSize(f.data) : 0), 0);
     case "audio":
     case "document":
       return v.bytes.byteLength;

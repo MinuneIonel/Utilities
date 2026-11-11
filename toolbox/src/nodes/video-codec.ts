@@ -29,6 +29,7 @@ import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/eng
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
 import type { AudioValue, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { flattenOnBlack, gifFrame, hasTransparency } from "./alpha";
+import { asBlob, fromBytes } from "./bytes";
 import { clipNames } from "./clips";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
@@ -569,7 +570,7 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
   const fps = num(params.fps, 0);
   const level = String(params.quality || "high") as QualityLevel;
   const picked = String(params.codec || "auto");
-  const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, bytes } });
+  const file = (bytes: Uint8Array) => ({ file: { kind: "file" as const, name: `${base}.${meta.ext}`, mime: meta.mime, data: fromBytes(bytes) } });
   if (container === "gif") return file(await encodeGif(v, fps, ctx.progress, ctx.signal));
 
   // Native ffmpeg takes ProRes (browsers can't write it), and HEVC only where WebCodecs can't encode it.
@@ -624,7 +625,7 @@ export async function splitVideo(v: VideoValue, ranges: (duration: number) => Ti
     const whole = { ...ctx, progress: (f: number) => ctx.progress?.(Math.max(0, f) * 0.5, "Encoding the whole video first") };
     const r = await encodeVideo(v, { container: "mp4", quality: "very-high", audio: true, name: "whole" }, whole);
     const f = r.file as FileValue;
-    source = new File([f.bytes as Uint8Array<ArrayBuffer>], f.name, { type: f.mime });
+    source = new File([await asBlob(f.data)], f.name, { type: f.mime });
     const i = await info(source);
     span = { start: 0, end: i.duration };
     sound = i.hasAudio ? source : undefined;

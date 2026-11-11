@@ -1,8 +1,17 @@
 // What the Electron preload script exposes. In a plain browser tab it's
 // missing, and the functions below fall back to downloads and file pickers.
+import type { Bytes } from "./runtime/types";
 
 interface ToolboxBridge {
-  saveFile(name: string, bytes: Uint8Array, folder?: string, opts?: SaveOptions): Promise<SaveResult | null>;
+  /** `{ fromPath }` copies a result from Toolbox's scratch folder instead of sending its bytes. */
+  saveFile(name: string, data: Uint8Array | { fromPath: string }, folder?: string, opts?: SaveOptions): Promise<SaveResult | null>;
+  /** Starts a file in the scratch folder, written chunk by chunk; resolves with its path. */
+  scratchOpen(id: string, name: string): Promise<string>;
+  /** Writes a chunk at `position`; chunks may come out of order. */
+  scratchWrite(id: string, chunk: Uint8Array, position: number): Promise<void>;
+  scratchClose(id: string): Promise<{ path: string; size: number }>;
+  /** Deletes scratch files nothing holds any more (paths outside the scratch folder are ignored). */
+  scratchDelete(paths: string[]): Promise<void>;
   chooseFolder(): Promise<string | null>;
   openGraph(): Promise<{ name: string; text: string } | null>;
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
@@ -104,10 +113,15 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-/** Saves a file and returns where it went, or null if cancelled. */
-export async function saveFile(name: string, mime: string, bytes: Uint8Array, folder?: string, opts?: SaveOptions): Promise<SaveResult | null> {
-  if (bridge) return bridge.saveFile(name, bytes, folder || undefined, opts);
-  download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }), name);
+/**
+ * Saves a file and returns where it went, or null if cancelled. A result on disk (desktop app) is
+ * copied there by the main process, so its bytes never pass through the window.
+ */
+export async function saveFile(name: string, mime: string, data: Bytes, folder?: string, opts?: SaveOptions): Promise<SaveResult | null> {
+  if (bridge) return bridge.saveFile(name, data.in === "disk" ? { fromPath: data.path } : data.bytes, folder || undefined, opts);
+  // A browser tab never makes files on disk.
+  if (data.in === "disk") throw new Error("This file is on disk, which only the desktop app can save");
+  download(new Blob([data.bytes as Uint8Array<ArrayBuffer>], { type: mime }), name);
   return { path: name, kept: false };
 }
 

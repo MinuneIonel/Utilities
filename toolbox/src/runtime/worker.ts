@@ -4,10 +4,11 @@ import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
+import { asBlob, fromBytes, READ_LIMIT, sizeOf } from "../nodes/bytes";
 import { setLocalPath, setModelFetcher, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
-import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
+import type { Bytes, CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
 
 export type ToWorker =
   /** A dropped file, and where it is on disk in the desktop app. */
@@ -35,7 +36,8 @@ export type ToWorker =
 export interface SavedFile {
   name: string;
   mime: string;
-  bytes: Uint8Array;
+  /** In memory (its buffer is handed to the window), or a path in the scratch folder the main process copies from. */
+  data: Bytes;
   key?: string;
 }
 
@@ -82,7 +84,13 @@ export type ToolRequest =
   /** A model file from the desktop app's folder (downloaded there the first time). */
   | { type: "model-get"; callId: string; file: string };
 
-export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
+export type FromWorker =
+  | NodeUpdate
+  | ProgressUpdate
+  | ToolRequest
+  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string }
+  /** Scratch files no cached result holds any more: the desktop app deletes them. */
+  | { type: "scratch-free"; paths: string[] };
 
 /** The worker's end of a webcam: the newest frame, and recordings that stream frames as they arrive. */
 class Feed implements CameraFeed {
@@ -170,6 +178,8 @@ function bitmapToImage(bmp: ImageBitmap): ImageValue {
 
 const assets = new Map<string, Blob>();
 const cache = new ResultCache();
+// A result on disk that no cached value holds any more (replaced by a newer render, or evicted) is deleted.
+cache.onFree = (paths) => post({ type: "scratch-free", paths });
 const sentKey = new Map<string, string>();
 let latestPreview = 0;
 let renderCancelled = false;
@@ -364,20 +374,21 @@ async function report(
     const a = first;
     if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
-      transfer.push(msg.file.bytes.buffer);
+      const bytes = first.bytes.slice();
+      msg.file = { name: first.name, mime: first.mime, data: fromBytes(bytes), key };
+      transfer.push(bytes.buffer);
     }
   } else if (first?.kind === "document") {
     msg.info = `${first.pageCount} page${first.pageCount === 1 ? "" : "s"} · ${kb(first.bytes.byteLength)}`;
     const d = first;
     if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {
-    msg.fileInfo = { name: first.name, bytes: first.bytes.byteLength };
-    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + f.bytes.byteLength, 0))}`;
+    msg.fileInfo = { name: first.name, bytes: sizeOf(first.data) };
+    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + sizeOf(f.data), 0))}`;
     // Show encoded images as they decode, so compression artefacts are visible.
-    if (changed && first.mime.startsWith("image/")) {
+    if (changed && first.mime.startsWith("image/") && sizeOf(first.data) <= READ_LIMIT) {
       try {
-        msg.bitmap = await createImageBitmap(new Blob([first.bytes as Uint8Array<ArrayBuffer>], { type: first.mime }));
+        msg.bitmap = await createImageBitmap(await asBlob(first.data, first.mime));
         msg.size = { width: msg.bitmap.width, height: msg.bitmap.height };
         transfer.push(msg.bitmap);
       } catch {
@@ -385,8 +396,9 @@ async function report(
       }
     }
     if (mode === "render" && saves) {
-      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, bytes: f.bytes.slice(), key }));
-      for (const f of msg.files) transfer.push(f.bytes.buffer);
+      // Bytes in memory are copied and handed over; a file on disk goes as its path, and the main process copies it.
+      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, data: f.data.in === "memory" ? fromBytes(f.data.bytes.slice()) : f.data, key }));
+      for (const f of msg.files) if (f.data.in === "memory") transfer.push(f.data.bytes.buffer);
     }
   }
   post(msg, transfer);
