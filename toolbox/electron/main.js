@@ -1,9 +1,11 @@
 // Electron main process: one window, native menus, and the file access a
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { consentText, pathsInGraph } from "./local-files.js";
 import { registerModels } from "./models.js";
 import { createPathSet } from "./path-set.js";
 import { numberedOwn, saveAction } from "./save-policy.js";
@@ -193,13 +195,56 @@ ipcMain.handle("choose-folder", async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
+/**
+ * The files the window may read back by path: ones the person dropped or chose, or agreed to when a
+ * graph named them. Kept across restarts, so the autosaved graph's files come back.
+ */
+const allowedFile = () => path.join(app.getPath("userData"), "allowed-files.json");
+let allowed;
+/** True on the first launch with an allow-list, when the autosaved graph's files are adopted once. */
+let adoptAutosave;
+const allowedFiles = () => {
+  if (!allowed) {
+    adoptAutosave = !existsSync(allowedFile());
+    allowed = createPathSet(allowedFile());
+  }
+  return allowed;
+};
+const isFile = (p) => stat(p).then((s) => s.isFile(), () => false);
+
+// A file dropped or chosen in the window (the preload's pathForFile; only a real drop or dialog makes a File).
+ipcMain.on("local-allow", (_e, p) => allowedFiles().add(p));
+// Graphs autosaved before Toolbox kept this list: their files were the person's own drops.
+ipcMain.handle("adopt-autosave", (_e, text) => {
+  allowedFiles();
+  if (!adoptAutosave || typeof text !== "string") return;
+  adoptAutosave = false;
+  allowed.add(...pathsInGraph(text));
+  // Written even when empty: this happens once, so a graph opened later without its files isn't adopted next launch.
+  allowed.save();
+});
+
 ipcMain.handle("open-graph", async () => {
   const r = await dialog.showOpenDialog(win, {
     properties: ["openFile"],
     filters: [{ name: "Toolbox graph", extensions: ["toolbox", "json"] }],
   });
   if (r.canceled || !r.filePaths[0]) return null;
-  return { name: path.basename(r.filePaths[0]), text: await readFile(r.filePaths[0], "utf8") };
+  const text = await readFile(r.filePaths[0], "utf8");
+  // A graph from someone else can name any file: ask before the window may read the ones it doesn't know.
+  const named = pathsInGraph(text).filter((p) => !allowedFiles().has(p));
+  const wanted = (await Promise.all(named.map(async (p) => ((await isFile(p)) ? p : null)))).filter(Boolean);
+  if (wanted.length) {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "question",
+      ...consentText(wanted),
+      buttons: ["Use them", "Open without files"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) allowedFiles().add(...wanted);
+  }
+  return { name: path.basename(r.filePaths[0]), text };
 });
 
 ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
@@ -212,8 +257,11 @@ ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
   return r.filePath;
 });
 
-ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
-ipcMain.handle("open-path", (_e, p) => shell.openPath(p));
+// shell.openPath runs whatever it's given, so only files Toolbox wrote.
+ipcMain.handle("reveal", (_e, p) => {
+  if (writtenFiles().has(p)) shell.showItemInFolder(p);
+});
+ipcMain.handle("open-path", async (_e, p) => (writtenFiles().has(p) ? shell.openPath(p) : "Toolbox didn't write that file"));
 
 /** Edit menu commands for text fields, which the window hands back when one has focus. */
 const TEXT_EDITS = new Set(["undo", "redo", "cut", "copy", "paste", "selectAll"]);
@@ -221,15 +269,22 @@ ipcMain.handle("edit-text", (e, command) => {
   if (TEXT_EDITS.has(command)) e.sender[command]();
 });
 
+/** A file the window was given, read again from disk; anything else is refused. */
+async function readLocal(p) {
+  if (!allowedFiles().has(p)) return new Response("Toolbox wasn't given this file", { status: 403 });
+  if (!(await isFile(p))) return new Response("Not found", { status: 404 });
+  return net.fetch(pathToFileURL(p).toString());
+}
+
 app.whenReady().then(() => {
   allowCamera();
-  registerTools();
+  registerTools((p) => allowedFiles().has(p));
   registerModels();
   registerUpdater(() => win);
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
     // Files dropped into a graph earlier, read again from where they are on disk.
-    if (pathname.startsWith("/@local/")) return net.fetch(pathToFileURL(decodeURIComponent(pathname.slice("/@local/".length))).toString());
+    if (pathname.startsWith("/@local/")) return readLocal(decodeURIComponent(pathname.slice("/@local/".length)));
     const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));
     if (!file.startsWith(dist + path.sep)) return new Response("Not found", { status: 404 });
     return net.fetch(pathToFileURL(file).toString());
@@ -241,7 +296,10 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("will-quit", () => written?.flush());
+app.on("will-quit", () => {
+  written?.flush();
+  allowed?.flush();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

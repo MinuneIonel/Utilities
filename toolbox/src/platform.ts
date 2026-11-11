@@ -20,6 +20,8 @@ interface ToolboxBridge {
   onUpdateProgress(handler: (fraction: number) => void): void;
   /** Where a dropped or chosen file is on disk, or "" if it isn't a file on disk. */
   pathForFile(file: File): string;
+  /** Lets the autosaved graph's files come back on the first launch that checks which files may be read. */
+  adoptAutosave(text: string): Promise<void>;
   onMenu(handler: (command: string) => void): void;
   toolsInfo(): Promise<ToolsInfo>;
   runTool(id: string, tool: NativeTool, args: string[], files: Record<string, ToolFile>): Promise<ToolResult>;

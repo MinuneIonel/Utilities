@@ -24,6 +24,7 @@
     "check:presets": "npm run build && node test/e2e/presets.mjs",
     "check:audit": "npm run build && node test/e2e/audit.mjs",
     "check:save": "npm run build && node test/e2e/save.mjs",
+    "check:local": "npm run build && node test/e2e/local-files.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {

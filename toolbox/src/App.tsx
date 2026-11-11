@@ -408,7 +408,10 @@ export function App() {
 
   // The last session's files, and (once a day) whether there's a newer Toolbox.
   useEffect(() => {
-    void restoreFiles(graphRef.current);
+    void (async () => {
+      await bridge?.adoptAutosave(serializeGraph(graphRef.current));
+      await restoreFiles(graphRef.current);
+    })();
     if (!bridge) return;
     const last = readStore<{ at: number }>(UPDATE_STORE, { at: 0 }).at;
     if (Date.now() - last < 24 * 3600 * 1000) return;

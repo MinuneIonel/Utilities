@@ -73,7 +73,11 @@ try {
   const open = async (g) => {
     const f = path.join(tmp, `g${n++}.toolbox`);
     writeFileSync(f, JSON.stringify(g));
-    await app.evaluate(({ dialog }, f) => (dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] })), f);
+    await app.evaluate(({ dialog }, f) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] });
+      // Opening a graph that names files asks first: use them.
+      dialog.showMessageBox = async () => ({ response: 0 });
+    }, f);
     await menu("open");
     await win.waitForTimeout(2500);
   };

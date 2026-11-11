@@ -51,9 +51,15 @@ export function createPathSet(file, cap = 2000) {
     get size() {
       return paths.size;
     },
-    /** Saves now (tests, and before quitting). */
-    flush() {
+    /** Saves now, even when nothing changed, so the file exists. */
+    save() {
       if (timer) clearTimeout(timer);
+      persist();
+    },
+    /** Saves now what hasn't been saved yet (before quitting). */
+    flush() {
+      if (!timer) return;
+      clearTimeout(timer);
       persist();
     },
   };
