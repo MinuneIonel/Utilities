@@ -8,12 +8,14 @@ npm install
 npm run toolbox        # builds the UI and opens the Electron window
 npm run toolbox:web    # the UI in a browser tab, for development (no ffmpeg, yt-dlp or file memory)
 npm test -w toolbox    # graph runtime tests
+npm run check:all -w toolbox      # every end-to-end check below except Remove background (CI runs this; Linux: xvfb-run -a)
 npm run check:gpu -w toolbox      # WebGPU against CPU output (add -- --bench for timings)
 npm run check:encode -w toolbox   # Encode video through the app: ProRes, HEVC, H.264 (add -- --bench for 1080p)
 npm run check:split -w toolbox    # Split into clips and Cut audio through the app
 npm run check:qr -w toolbox       # QR code through the app, scanning what Save wrote
 npm run check:alpha -w toolbox    # transparent PNGs through Dither into a PNG sequence, GIF, WebM and MP4
 npm run check:removebg -w toolbox # Remove background through the app (downloads the models once)
+npm run check:audit -w toolbox    # the fixes from the November 2026 audit
 npm run toolbox:dmg       # on a Mac: release/Toolbox-<version>-mac-arm64.dmg
 npm run toolbox:exe       # on Windows: release/Toolbox-<version>-win-x64.exe
 npm run toolbox:appimage  # on Linux: release/Toolbox-<version>-linux-x86_64.AppImage
