@@ -1,6 +1,7 @@
 import { checkGraph, type CheckedGraph } from "./graph-file";
 import { REGISTRY } from "./nodes";
 import type { Graph, GraphNode } from "./runtime/types";
+import type { WorkflowForm } from "./simple-form";
 
 let counter = 0;
 export const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${(counter++).toString(36)}`;
@@ -74,6 +75,8 @@ export interface Workflow {
   title: string;
   description: string;
   build(): Graph;
+  /** How Simple view shows it (see simple-form.ts). */
+  form: WorkflowForm;
 }
 
 /** Ready-made graphs for common jobs; the user fills in the input and presses Render. */
@@ -87,6 +90,7 @@ export const WORKFLOWS: Workflow[] = [
         ["input.download", {}, undefined, "file"],
         ["output.save-file", {}],
       ]),
+    form: { input: { node: 0, kind: "link", label: "Link to the video" }, fields: [{ node: 0, param: "quality", label: "Quality" }], action: "Download", topic: "link" },
   },
   {
     id: "download-mp3",
@@ -98,6 +102,7 @@ export const WORKFLOWS: Workflow[] = [
         ["audio.convert", { format: "mp3" }],
         ["output.save-file", {}, "file"],
       ]),
+    form: { input: { node: 0, kind: "link", label: "Link to the video or song" }, fields: [], action: "Download", topic: "sound" },
   },
   {
     id: "extract-audio",
@@ -110,6 +115,13 @@ export const WORKFLOWS: Workflow[] = [
         ["audio.convert", { format: "mp3" }],
         ["output.save-file", {}, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
+      fields: [{ node: 2, param: "format", label: "Format" }],
+      preview: 0,
+      action: "Extract the sound",
+      topic: "sound",
+    },
   },
   {
     id: "shrink-video",
@@ -122,6 +134,15 @@ export const WORKFLOWS: Workflow[] = [
         ["video.encode", { container: "mp4", quality: "medium", name: "small" }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
+      fields: [
+        { node: 1, param: "size", label: "Longest side (pixels)" },
+        { node: 2, param: "quality", label: "Quality" },
+      ],
+      action: "Shrink",
+      topic: "video",
+    },
   },
   {
     id: "split-video",
@@ -133,6 +154,17 @@ export const WORKFLOWS: Workflow[] = [
         ["media.split", { mode: "every", every: 30 }, "video", "clips"],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
+      fields: [
+        { node: 1, param: "mode", label: "Split" },
+        { node: 1, param: "every", label: "Clip length (seconds)" },
+        { node: 1, param: "count", label: "Number of clips" },
+        { node: 1, param: "at", label: "Cut at" },
+      ],
+      action: "Split",
+      topic: "video",
+    },
   },
   {
     id: "cut-audio",
@@ -144,6 +176,16 @@ export const WORKFLOWS: Workflow[] = [
         ["audio.cut", { mode: "remove" }],
         ["output.save-file", {}, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your sound", accept: "audio/*" },
+      fields: [
+        { node: 1, param: "mode", label: "This part" },
+        { node: 1, param: "start", label: "From (seconds)" },
+        { node: 1, param: "end", label: "To (seconds, 0 = the end)" },
+      ],
+      action: "Cut",
+      topic: "sound",
+    },
   },
   {
     id: "video-gif",
@@ -156,6 +198,15 @@ export const WORKFLOWS: Workflow[] = [
         ["video.encode", { container: "gif", fps: 12, name: "clip" }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
+      fields: [
+        { node: 1, param: "size", label: "Longest side (pixels)" },
+        { node: 2, param: "fps", label: "Frames per second" },
+      ],
+      action: "Make GIF",
+      topic: "video",
+    },
   },
   {
     id: "download-gif",
@@ -168,6 +219,15 @@ export const WORKFLOWS: Workflow[] = [
         ["video.encode", { container: "gif", fps: 12, name: "clip" }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "link", label: "Link to the video" },
+      fields: [
+        { node: 1, param: "size", label: "Longest side (pixels)" },
+        { node: 2, param: "fps", label: "Frames per second" },
+      ],
+      action: "Make GIF",
+      topic: "link",
+    },
   },
   {
     id: "compress-image",
@@ -179,6 +239,16 @@ export const WORKFLOWS: Workflow[] = [
         ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your photo", accept: "image/*" },
+      fields: [
+        { node: 1, param: "format", label: "Format" },
+        { node: 1, param: "quality", label: "Quality" },
+        { node: 1, param: "maxKB", label: "Largest size (KB, 0 = no limit)" },
+      ],
+      action: "Compress",
+      topic: "image",
+    },
   },
   {
     id: "compress-photos",
@@ -190,6 +260,16 @@ export const WORKFLOWS: Workflow[] = [
         ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "files", label: "Your photos", accept: "image/*" },
+      fields: [
+        { node: 1, param: "format", label: "Format" },
+        { node: 1, param: "quality", label: "Quality" },
+        { node: 1, param: "maxKB", label: "Largest size (KB, 0 = no limit)" },
+      ],
+      action: "Compress",
+      topic: "image",
+    },
   },
   {
     id: "watermark-photos",
@@ -202,6 +282,18 @@ export const WORKFLOWS: Workflow[] = [
         ["media.encode", { format: "jpeg", quality: 88 }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "files", label: "Your photos", accept: "image/*" },
+      fields: [
+        { node: 1, param: "text", label: "Your text" },
+        { node: 1, param: "position", label: "Where" },
+        { node: 1, param: "size", label: "Text size (%)" },
+        { node: 1, param: "color", label: "Colour" },
+      ],
+      preview: 1,
+      action: "Watermark",
+      topic: "image",
+    },
   },
   {
     id: "remove-background",
@@ -213,6 +305,16 @@ export const WORKFLOWS: Workflow[] = [
         ["image.removebg", {}],
         ["output.save-file", { name: "no-background" }, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your photo", accept: "image/*" },
+      fields: [
+        { node: 1, param: "model", label: "Quality" },
+        { node: 1, param: "fill", label: "Background" },
+        { node: 1, param: "color", label: "Colour" },
+      ],
+      action: "Remove the background",
+      topic: "image",
+    },
   },
   {
     id: "remove-background-photos",
@@ -224,8 +326,32 @@ export const WORKFLOWS: Workflow[] = [
         ["image.removebg", {}],
         ["output.save-file", {}, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "files", label: "Your photos", accept: "image/*" },
+      fields: [
+        { node: 1, param: "model", label: "Quality" },
+        { node: 1, param: "fill", label: "Background" },
+        { node: 1, param: "color", label: "Colour" },
+      ],
+      action: "Remove the backgrounds",
+      topic: "image",
+    },
   },
-  { id: "dither", title: "Dither an image", description: "Drop in an image, pick a look, save a PNG.", build: starterGraph },
+  {
+    id: "dither",
+    title: "Dither an image",
+    description: "Drop in an image, pick a look, save a PNG.",
+    build: starterGraph,
+    form: {
+      input: { node: 0, kind: "file", label: "Your image", accept: "image/*" },
+      fields: [
+        { node: 1, param: "recipe", label: "Look" },
+        { node: 1, param: "size", label: "Size" },
+      ],
+      action: "Dither",
+      topic: "image",
+    },
+  },
   {
     id: "video-ascii",
     title: "Video to ASCII MP4",
@@ -238,6 +364,15 @@ export const WORKFLOWS: Workflow[] = [
         ["video.encode", { container: "mp4", name: "ascii" }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
+      fields: [
+        { node: 1, param: "size", label: "Longest side (pixels)" },
+        { node: 3, param: "quality", label: "Quality" },
+      ],
+      action: "Convert",
+      topic: "video",
+    },
   },
   {
     id: "photos-pdf",
@@ -249,6 +384,12 @@ export const WORKFLOWS: Workflow[] = [
         ["pdf.from-images", { name: "photos" }],
         ["output.save-file", {}, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "files", label: "Your photos", accept: "image/*" },
+      fields: [{ node: 1, param: "quality", label: "Photo quality" }],
+      action: "Make PDF",
+      topic: "pdf",
+    },
   },
   {
     id: "pdf-watermark",
@@ -261,6 +402,16 @@ export const WORKFLOWS: Workflow[] = [
         ["pdf.protect", {}],
         ["output.save-file", {}, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "file", label: "Your PDF", accept: "application/pdf,.pdf" },
+      fields: [
+        { node: 1, param: "watermark", label: "Watermark text" },
+        { node: 1, param: "numbers", label: "Number the pages" },
+        { node: 2, param: "password", label: "Password to open it" },
+      ],
+      action: "Protect",
+      topic: "pdf",
+    },
   },
   {
     id: "qr-code",
@@ -271,6 +422,13 @@ export const WORKFLOWS: Workflow[] = [
         ["input.qr", {}],
         ["output.save-file", { name: "qr-code" }, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "text", label: "Link or text" },
+      blurb: "Type a link or some text and save a QR code as a PNG.",
+      fields: [{ node: 0, param: "size", label: "Size (pixels)" }],
+      action: "Make QR code",
+      topic: "link",
+    },
   },
   {
     id: "romanian",
@@ -282,6 +440,12 @@ export const WORKFLOWS: Workflow[] = [
         ["text.diacritics", {}],
         ["output.save-file", { name: "text-cu-diacritice" }, "file"],
       ]),
+    form: {
+      input: { node: 0, kind: "text", label: "Your text" },
+      fields: [{ node: 1, param: "keepExisting", label: "Keep diacritics already there" }],
+      action: "Add diacritics",
+      topic: "text",
+    },
   },
   {
     id: "webcam",
@@ -294,6 +458,16 @@ export const WORKFLOWS: Workflow[] = [
         ["video.encode", { container: "mp4", name: "webcam" }],
         ["output.save-file", {}],
       ]),
+    form: {
+      input: { node: 0, kind: "camera", label: "Your camera" },
+      blurb: "Record yourself through a dither effect and save an MP4. Record starts, Stop ends.",
+      fields: [
+        { node: 1, param: "recipe", label: "Look" },
+        { node: 0, param: "sound", label: "Record sound" },
+      ],
+      action: "Record",
+      topic: "camera",
+    },
   },
 ];
 
