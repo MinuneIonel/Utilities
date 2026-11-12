@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { asBytes, diskPaths, fromBytes, fromDisk, READ_LIMIT, ScratchRefs, scratchUrl, sizeOf } from "../src/nodes/bytes.ts";
+import { bytesOfDisk, diskMedia, isDisk, MediaCache, mediaName } from "../src/nodes/source.ts";
 import { ResultCache } from "../src/runtime/evaluate.ts";
 import type { FileValue, Value } from "../src/runtime/types.ts";
 
@@ -67,6 +68,28 @@ test("the cache frees a job's file when a newer render replaces it, but not whil
   cache.lastRender.delete("encode");
   assert.equal(cache.refs.count("/s/1-out.mp4"), 2, "the cached results still hold it");
   assert.equal(cache.refs.count("/s/2-out.mp4"), 1);
+});
+
+test("a scratch file is read by URL and handed over by its path", () => {
+  const d = diskMedia("/tmp/toolbox-scratch-1/4-Clip [x].mp4", 1234, "Clip [x].mp4", "video/mp4");
+  assert.equal(isDisk(d), true);
+  assert.equal(isDisk(new Blob(["x"])), false);
+  assert.equal(d.url, "app://toolbox/@scratch/4-Clip%20%5Bx%5D.mp4");
+  assert.equal(mediaName(d), "Clip [x].mp4");
+  assert.equal(mediaName(new Blob(["x"])), "");
+  assert.deepEqual(bytesOfDisk(d), { in: "disk", path: d.path, size: 1234 });
+});
+
+test("per-file caches key Blobs by identity and disk files by path", () => {
+  const c = new MediaCache<number>();
+  const blob = new Blob(["x"]);
+  c.set(blob, 1);
+  c.set(diskMedia("/s/1-a.mp4", 1, "a.mp4", "video/mp4"), 2);
+  assert.equal(c.get(blob), 1);
+  assert.equal(c.get(new Blob(["x"])), undefined, "another Blob with the same bytes is another file");
+  assert.equal(c.get(diskMedia("/s/1-a.mp4", 1, "a.mp4", "video/mp4")), 2, "the same path is the same file");
+  c.delete(blob);
+  assert.equal(c.get(blob), undefined);
 });
 
 test("disk files take no room in the cache, and an evicted result frees its file", () => {

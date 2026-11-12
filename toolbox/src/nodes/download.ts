@@ -1,9 +1,9 @@
 // Download node: a link from YouTube, Vimeo, SoundCloud and the many other
 // sites yt-dlp supports, fetched by the desktop app.
-import type { FileValue, Graph, NodeDef, RunContext, Value } from "../runtime/types";
-import { fromBytes } from "./bytes";
+import type { DiskMedia, FileValue, Graph, NodeDef, RunContext, Value } from "../runtime/types";
 import { DownloadJobs } from "./download-jobs";
-import { lastError, nativeTools } from "./native";
+import { lastError, nativeTools, scratchFiles } from "./native";
+import { bytesOfDisk, diskMedia } from "./source";
 import { soundOf, videoCodec } from "./video";
 
 const MIME: Record<string, string> = {
@@ -23,8 +23,8 @@ function formatFor(quality: string): string[] {
   return ["-f", `bv*${h}[vcodec^=avc1]+ba[ext=m4a]/bv*${h}+ba/b${h}/b`, "--merge-output-format", "mp4"];
 }
 
-// Downloads are kept for the session, so editing other nodes never fetches again.
-const downloads = new DownloadJobs<File>();
+// Downloads are kept for the session (in the scratch folder), so editing other nodes never fetches again.
+const downloads = new DownloadJobs<DiskMedia>();
 
 const keyOf = (url: string, quality: string) => `${quality} ${url}`;
 
@@ -41,7 +41,11 @@ export function pruneDownloads(graph: Graph) {
   downloads.prune(new Set(graph.nodes.filter((n) => n.type === "input.download").map((n) => keyOf(String(n.params.url ?? "").trim(), String(n.params.quality || "1080")))));
 }
 
-function fetchOnce(url: string, quality: string, ctx: RunContext): Promise<File> {
+/**
+ * Downloads a link once. The file stays in the scratch folder, where yt-dlp wrote it, for the rest
+ * of the session: the video is read from there a range at a time, and Save copies it from there.
+ */
+function fetchOnce(url: string, quality: string, ctx: RunContext): Promise<DiskMedia> {
   return downloads.get(keyOf(url, quality), ctx.mode, ctx.signal, async (signal) => {
     const tools = nativeTools();
     if (!tools?.ytdlp) throw new Error("Downloading needs the desktop app");
@@ -49,22 +53,18 @@ function fetchOnce(url: string, quality: string, ctx: RunContext): Promise<File>
       "yt-dlp",
       ["--no-playlist", "--newline", "--no-mtime", ...formatFor(quality), "-o", "%(title).80B [%(id)s].%(ext)s", "--", url],
       {},
-      { onProgress: (f, l) => ctx.progress?.(f, l ?? "Downloading"), signal },
+      { onProgress: (f, l) => ctx.progress?.(f, l ?? "Downloading"), signal, keep: true },
     );
-    if (signal.aborted) throw new Error("Cancelled");
-    const [name, bytes] = Object.entries(r.files)[0] ?? [];
-    if (r.code !== 0 || !name || !bytes) throw new Error(`yt-dlp: ${lastError(r.log)}`);
+    const [name, kept] = Object.entries(r.files)[0] ?? [];
+    if (signal.aborted) {
+      if (kept) scratchFiles()?.free([kept.path]);
+      throw new Error("Cancelled");
+    }
+    if (r.code !== 0 || !name || !kept) throw new Error(`yt-dlp: ${lastError(r.log)}`);
+    scratchFiles()?.hold(kept.path);
     const ext = name.split(".").pop()!.toLowerCase();
-    return new File([bytes as Uint8Array<ArrayBuffer>], name, { type: MIME[ext] ?? "application/octet-stream" });
+    return diskMedia(kept.path, kept.size, name, MIME[ext] ?? "application/octet-stream");
   });
-}
-
-const fileBytes = new WeakMap<Blob, Promise<Uint8Array>>();
-/** A download's bytes, read once, for the File output. */
-function bytesOf(file: Blob): Promise<Uint8Array> {
-  let p = fileBytes.get(file);
-  if (!p) fileBytes.set(file, (p = file.arrayBuffer().then((b) => new Uint8Array(b))));
-  return p;
 }
 
 export const download: NodeDef = {
@@ -106,9 +106,10 @@ export const download: NodeDef = {
     if (!/^https?:\/\//i.test(url)) throw new Error("Links start with http:// or https://");
     const quality = String(params.quality || "1080");
     const file = await fetchOnce(url, quality, ctx);
-    const asFile = async (): Promise<FileValue> => ({ kind: "file", name: file.name, mime: file.type || "application/octet-stream", data: fromBytes(await bytesOf(file)) });
+    // The download as it came, still on disk: Save copies it from there.
+    const asFile = async (): Promise<FileValue> => ({ kind: "file", name: file.name, mime: file.type || "application/octet-stream", data: bytesOfDisk(file) });
     if (quality === "audio") return { audio: await soundOf(file), file: await asFile() };
-    const video = await (await videoCodec()).videoFromBlob(file, params, ctx);
+    const video = await (await videoCodec()).videoFromFile(file, params, ctx);
     if (!video.audioSource) return { video, file: await asFile() };
     return { video, audio: await soundOf(file, video.duration), file: await asFile() };
   },

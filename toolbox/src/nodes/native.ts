@@ -2,7 +2,7 @@
 // them in its main process; the worker reaches them through the window. In a
 // browser tab there are none, and nodes fall back to ffmpeg.wasm or explain why.
 import type { FfmpegLike } from "../../../audio/src/engine";
-import type { Bytes } from "../runtime/types";
+import type { Bytes, MediaFile } from "../runtime/types";
 
 export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
 
@@ -35,10 +35,11 @@ export function setLocalPath(blob: Blob, path: string) {
   paths.set(blob, path);
 }
 
-/** A file for a tool: its path on disk when known, otherwise its bytes. */
-export async function toolFile(blob: Blob): Promise<ToolFile> {
-  const p = paths.get(blob);
-  return p ? { path: p } : new Uint8Array(await blob.arrayBuffer());
+/** A file for a tool: its path on disk when known (always, for a scratch file), otherwise its bytes. */
+export async function toolFile(f: MediaFile): Promise<ToolFile> {
+  if (!(f instanceof Blob)) return { path: f.path };
+  const p = paths.get(f);
+  return p ? { path: p } : new Uint8Array(await f.arrayBuffer());
 }
 
 /** A file value's bytes for a tool: a scratch file goes by its path, with no copy. */

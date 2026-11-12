@@ -19,7 +19,8 @@ npm run check:audit -w toolbox    # the fixes from the November 2026 audit
 npm run check:save -w toolbox     # Save replacing its own file, keeping both, skipping
 npm run check:local -w toolbox    # graph files asking before they read files on this computer
 npm run check:buttons -w toolbox  # Render & save, Run on job nodes, Save again, the out-of-date dot
-npm run check:bigfile -w toolbox  # big results stay on disk: Save copies from the scratch folder (TOOLBOX_E2E_BIG=1 adds a 3 GB video)
+npm run check:bigfile -w toolbox  # big results stay on disk: encodes, downloads, converted inputs (TOOLBOX_E2E_BIG=1 adds a 3 GB video)
+npm run check:web -w toolbox      # the browser build (no desktop app) renders the starter graph and downloads its file; needs Google Chrome
 npm run toolbox:dmg       # on a Mac: release/Toolbox-<version>-mac-arm64.dmg
 npm run toolbox:exe       # on Windows: release/Toolbox-<version>-win-x64.exe
 npm run toolbox:appimage  # on Linux: release/Toolbox-<version>-linux-x86_64.AppImage

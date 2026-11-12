@@ -38,6 +38,23 @@ export interface GridValue {
  */
 export type Bytes = { in: "memory"; bytes: Uint8Array } | { in: "disk"; path: string; size: number };
 
+/**
+ * A video or sound file in the scratch folder (a download, a converted copy, an encoded video),
+ * read through the desktop app's `url` a range at a time instead of whole.
+ */
+export interface DiskMedia {
+  kind: "disk";
+  path: string;
+  size: number;
+  name: string;
+  /** MIME type. */
+  type: string;
+  url: string;
+}
+
+/** A media file a node reads: a Blob (a dropped file) or a file on disk (see nodes/source.ts). */
+export type MediaFile = Blob | DiskMedia;
+
 export interface FileValue {
   kind: "file";
   name: string;
@@ -74,7 +91,7 @@ export interface VideoValue {
   /** The frame at the playhead: preview size during live preview. */
   poster: Value;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
-  audioSource?: Blob;
+  audioSource?: MediaFile;
   /**
    * The part of `origin` and `audioSource` the frames come from (a trimmed Video file), in the file's seconds.
    * Frame timestamps still start at 0.
@@ -83,7 +100,7 @@ export interface VideoValue {
   /** Sound recorded alongside live frames (a webcam's microphone), ready once the frames end. */
   soundLater?: () => Promise<Blob | undefined>;
   /** Set only by input nodes, when frames are still the file's own (lets encoders skip decoding). */
-  origin?: Blob;
+  origin?: MediaFile;
   /** Full-size frames in order. Each call starts from the beginning. */
   frames(signal?: AbortSignal): AsyncIterable<FrameItem>;
   /**

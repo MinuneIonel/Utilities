@@ -25,19 +25,21 @@ import {
   VideoSampleSource,
   WebMOutputFormat,
   type OutputFormat,
+  type Source,
   type StreamTargetChunk,
   type VideoCodec,
 } from "mediabunny";
 import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/engine/video";
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
-import type { AudioValue, Bytes, FileValue, FrameItem, ImageValue, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, Bytes, DiskMedia, FileValue, FrameItem, ImageValue, MediaFile, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { flattenOnBlack, gifFrame, hasTransparency } from "./alpha";
 import { asBlob, fromBytes, fromDisk, scratchUrl } from "./bytes";
 import { clipNames } from "./clips";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
 import { audioArgs, encodersFor, fileEncodeArgs, rawEncodeArgs, type Encoder, type NativeCodec, type ProresProfile, type TimeRange } from "./ffmpeg-video";
-import { lastError, nativeTools, scratchFiles, setLocalPath, toolFile, toolFileOf, type NativeTools, type ToolFile, type ToolStream, type KeptResult } from "./native";
+import { lastError, nativeTools, scratchFiles, toolFile, toolFileOf, type NativeTools, type ToolFile, type ToolStream, type KeptResult } from "./native";
+import { diskMedia, isDisk, MediaCache, mediaName } from "./source";
 import { CODEC_LABEL, frameImage } from "./video";
 
 /** Hands a scratch file a node made along the way back, once nothing needs it (unless a cached result holds it). */
@@ -65,16 +67,41 @@ const GIF_MAX_BYTES = 1 << 30;
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const clean = (s: unknown, d: string) => String(s || d).replace(/[\\/:*?"<>|]+/g, "-");
 
-const infos = new WeakMap<Blob, Promise<VideoInfo>>();
+/** Mediabunny's input for a file: a Blob read in place, or a scratch file read by URL a range at a time. */
+export const inputSourceFor = (f: MediaFile): Source => (isDisk(f) ? new UrlSource(f.url) : new BlobSource(f));
+
+/** What processVideo takes: a Blob, or how to make a disk file's source. */
+const processable = (f: MediaFile) => (isDisk(f) ? () => inputSourceFor(f) : f);
+
+const infos = new MediaCache<Promise<VideoInfo>>();
 /** Probing reads the container header; cached per file since every preview needs it. */
-function info(blob: Blob): Promise<VideoInfo> {
-  let p = infos.get(blob);
+function info(f: MediaFile): Promise<VideoInfo> {
+  let p = infos.get(f);
   if (!p) {
-    p = probeVideo(blob);
-    infos.set(blob, p);
-    p.catch(() => infos.delete(blob));
+    p = isDisk(f) ? probeDisk(f) : probeVideo(f);
+    infos.set(f, p);
+    p.catch(() => infos.delete(f));
   }
   return p;
+}
+
+/** probeVideo for a file on disk: Mediabunny only (ffmpeg.wasm would need it in memory). */
+async function probeDisk(f: DiskMedia): Promise<VideoInfo> {
+  const input = new Input({ source: inputSourceFor(f), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error("This file has no video track");
+    return {
+      width: track.displayWidth,
+      height: track.displayHeight,
+      duration: await input.computeDuration(),
+      hasAudio: !!(await input.getPrimaryAudioTrack()),
+      reader: (await track.canDecode()) ? "mediabunny" : "ffmpeg",
+      codec: track.codec ?? undefined,
+    };
+  } finally {
+    input.dispose?.();
+  }
 }
 
 /** Draws a decoded frame, rotation applied, no larger than maxSide. */
@@ -88,8 +115,8 @@ function sampleToImage(sample: VideoSample, maxSide = Infinity): ImageValue {
   return { kind: "image", width: w, height: h, data: g.getImageData(0, 0, w, h).data, scale: s };
 }
 
-async function openTrack(blob: Blob) {
-  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+async function openTrack(f: MediaFile) {
+  const input = new Input({ source: inputSourceFor(f), formats: ALL_FORMATS });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("This file has no video track");
   if (!(await track.canDecode())) throw new Error(`This system can't decode ${track.codec ?? "this"} video here. Convert it in Media Lab first.`);
@@ -97,8 +124,8 @@ async function openTrack(blob: Blob) {
 }
 
 /** Every frame of a video file (or of `range` in it), full size, `speed` times as fast. */
-async function* fileFrames(blob: Blob, signal?: AbortSignal, range?: TimeRange, speed = 1): AsyncGenerator<FrameItem> {
-  const { input, track } = await openTrack(blob);
+async function* fileFrames(f: MediaFile, signal?: AbortSignal, range?: TimeRange, speed = 1): AsyncGenerator<FrameItem> {
+  const { input, track } = await openTrack(f);
   try {
     for await (const sample of new VideoSampleSink(track).samples(range?.start, range?.end)) {
       try {
@@ -116,8 +143,8 @@ async function* fileFrames(blob: Blob, signal?: AbortSignal, range?: TimeRange, 
   }
 }
 
-async function frameAt(blob: Blob, t: number, maxSide: number): Promise<ImageValue> {
-  const { input, track } = await openTrack(blob);
+async function frameAt(f: MediaFile, t: number, maxSide: number): Promise<ImageValue> {
+  const { input, track } = await openTrack(f);
   try {
     const first = await track.getFirstTimestamp();
     const sample = await new VideoSampleSink(track).getSample(Math.max(first, t));
@@ -133,8 +160,8 @@ async function frameAt(blob: Blob, t: number, maxSide: number): Promise<ImageVal
 }
 
 /** Whether WebCodecs can decode this file's video here. */
-async function decodable(blob: Blob): Promise<boolean> {
-  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+async function decodable(f: MediaFile): Promise<boolean> {
+  const input = new Input({ source: inputSourceFor(f), formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryVideoTrack();
     return !!track && (await track.canDecode());
@@ -145,18 +172,19 @@ async function decodable(blob: Blob): Promise<boolean> {
   }
 }
 
-const readable = new WeakMap<Blob, Promise<Blob>>();
+const readable = new MediaCache<Promise<MediaFile>>();
 /**
- * Files WebCodecs can't read (AVI, WMV, old codecs) are converted once to an
- * H.264 MP4 with the desktop app's native ffmpeg.
+ * Files WebCodecs can't read (AVI, WMV, old codecs) are converted once to an H.264 MP4 with the
+ * desktop app's native ffmpeg. The copy stays in the scratch folder for the session and is read
+ * from there a range at a time.
  */
-function readableCopy(blob: Blob, ctx: RunContext): Promise<Blob> {
-  let p = readable.get(blob);
+function readableCopy(source: MediaFile, ctx: RunContext): Promise<MediaFile> {
+  let p = readable.get(source);
   if (!p) {
     p = (async () => {
       const tools = nativeTools();
-      if (!tools?.ffmpeg || (await decodable(blob))) return blob;
-      const name = (blob as File).name || "input.bin";
+      if (!tools?.ffmpeg || (await decodable(source))) return source;
+      const name = mediaName(source) || "input.bin";
       const ext = name.includes(".") ? name.split(".").pop()!.replace(/[^a-z0-9]/gi, "") : "bin";
       const inName = `in.${ext || "bin"}`;
       ctx.progress?.(-1, "Converting with ffmpeg");
@@ -164,23 +192,25 @@ function readableCopy(blob: Blob, ctx: RunContext): Promise<Blob> {
         "ffmpeg",
         // VideoToolbox decodes ProRes and the like in hardware; H.264 encodes faster in software (libx264) on Apple Silicon.
         ["-hide_banner", "-y", ...(tools.hwaccels.has("videotoolbox") ? ["-hwaccel", "videotoolbox"] : []), "-i", inName, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "out.mp4"],
-        { [inName]: await toolFile(blob) },
-        { onProgress: (f) => ctx.progress?.(f, "Converting with ffmpeg") },
+        { [inName]: await toolFile(source) },
+        { onProgress: (f) => ctx.progress?.(f, "Converting with ffmpeg"), keep: true },
       );
       const out = r.files["out.mp4"];
       if (r.code !== 0 || !out) throw new Error(`ffmpeg couldn't read this video: ${lastError(r.log)}`);
-      return new File([out as Uint8Array<ArrayBuffer>], name.replace(/\.[^.]+$/, "") + ".mp4", { type: "video/mp4" });
+      // Kept for the session, like the conversion itself.
+      scratchFiles()?.hold(out.path);
+      return diskMedia(out.path, out.size, name.replace(/\.[^.]+$/, "") + ".mp4", "video/mp4");
     })();
-    readable.set(blob, p);
-    p.catch(() => readable.delete(blob));
+    readable.set(source, p);
+    p.catch(() => readable.delete(source));
   }
   return p;
 }
 
 /** A video value for a file: the frame at the playhead now, every frame on demand. */
-export async function videoFromBlob(source: Blob, params: Params, ctx: RunContext): Promise<VideoValue> {
-  const blob = await readableCopy(source, ctx);
-  const i = await info(blob);
+export async function videoFromFile(source: MediaFile, params: Params, ctx: RunContext): Promise<VideoValue> {
+  const file = await readableCopy(source, ctx);
+  const i = await info(file);
   if (i.reader !== "mediabunny") throw new Error(`Toolbox can't decode ${i.codec ?? "this video"} in a browser. Open it in the desktop app, which converts it with ffmpeg.`);
   // Trim: Start and End in seconds (End 0 = to the end); the playhead moves within the kept part.
   const start = Math.min(Math.max(0, num(params.start, 0)), Math.max(0, i.duration - 0.05));
@@ -189,8 +219,8 @@ export async function videoFromBlob(source: Blob, params: Params, ctx: RunContex
   const range = start > 0.001 || end < i.duration - 0.001 ? { start, end } : undefined;
   const speed = Math.min(16, Math.max(0.1, num(params.speed, 1)));
   const t = start + ((end - start) * Math.min(100, Math.max(0, num(params.at, 0)))) / 100;
-  const poster = await frameAt(blob, Math.min(t, Math.max(start, end - 0.05)), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
-  const fps = await estimateFps(blob);
+  const poster = await frameAt(file, Math.min(t, Math.max(start, end - 0.05)), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
+  const fps = await estimateFps(file);
   // At another speed the frames are retimed and the sound would no longer match, so it's left out.
   const sameSpeed = Math.abs(speed - 1) < 1e-6;
   return {
@@ -201,19 +231,19 @@ export async function videoFromBlob(source: Blob, params: Params, ctx: RunContex
     duration: (end - start) / speed,
     fps: fps * speed,
     poster,
-    origin: sameSpeed ? blob : undefined,
+    origin: sameSpeed ? file : undefined,
     range,
-    audioSource: i.hasAudio && sameSpeed ? blob : undefined,
-    frames: (signal) => fileFrames(blob, signal, range, speed),
+    audioSource: i.hasAudio && sameSpeed ? file : undefined,
+    frames: (signal) => fileFrames(file, signal, range, speed),
   };
 }
 
-const fpsCache = new WeakMap<Blob, Promise<number>>();
-function estimateFps(blob: Blob): Promise<number> {
-  let p = fpsCache.get(blob);
+const fpsCache = new MediaCache<Promise<number>>();
+function estimateFps(f: MediaFile): Promise<number> {
+  let p = fpsCache.get(f);
   if (!p) {
     p = (async () => {
-      const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+      const input = new Input({ source: inputSourceFor(f), formats: ALL_FORMATS });
       try {
         const track = await input.getPrimaryVideoTrack();
         const stats = await track?.computePacketStats(60);
@@ -224,7 +254,7 @@ function estimateFps(blob: Blob): Promise<number> {
         input.dispose?.();
       }
     })();
-    fpsCache.set(blob, p);
+    fpsCache.set(f, p);
   }
   return p;
 }
@@ -379,8 +409,8 @@ async function audioCodecFor(format: OutputFormat, numberOfChannels: number, sam
 }
 
 /** Decodes a file's sound (or the `range` of it) into an encoding track. */
-async function feedSound(source: Blob, src: AudioSampleSource, range?: TimeRange) {
-  const input = new Input({ source: new BlobSource(source), formats: ALL_FORMATS });
+async function feedSound(source: MediaFile, src: AudioSampleSource, range?: TimeRange) {
+  const input = new Input({ source: inputSourceFor(source), formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryAudioTrack();
     if (!track || !(await track.canDecode())) return;
@@ -401,8 +431,8 @@ async function feedSound(source: Blob, src: AudioSampleSource, range?: TimeRange
 }
 
 /** Adds the source's sound as a track and returns the function that feeds it. */
-async function audioTrackFor(source: Blob, format: OutputFormat, output: Output, range?: TimeRange): Promise<(() => Promise<void>) | undefined> {
-  const input = new Input({ source: new BlobSource(source), formats: ALL_FORMATS });
+async function audioTrackFor(source: MediaFile, format: OutputFormat, output: Output, range?: TimeRange): Promise<(() => Promise<void>) | undefined> {
+  const input = new Input({ source: inputSourceFor(source), formats: ALL_FORMATS });
   const track = await input.getPrimaryAudioTrack();
   const ok = !!track && (await track.canDecode());
   const codec = ok ? await audioCodecFor(format, track.numberOfChannels, track.sampleRate) : null;
@@ -469,7 +499,7 @@ interface NativeJob {
   audio: boolean;
 }
 
-const extOf = (b: Blob, d: string) => ((b as File).name?.split(".").pop() ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase() || d;
+const extOf = (f: MediaFile, d: string) => (mediaName(f).split(".").pop() ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase() || d;
 
 /** Native ffmpeg reads the file itself: no decoding in the window, and VideoToolbox decodes when it can. */
 /** A kept tool output as a file value's bytes (it stays in the scratch folder). */
@@ -479,7 +509,7 @@ function keptFile(r: KeptResult, name: string): Bytes | undefined {
 }
 
 /** Native ffmpeg reads the file itself: no decoding in the window, and VideoToolbox decodes when it can. Its output stays on disk. */
-async function nativeFromFile(tools: NativeTools, origin: Blob, range: TimeRange | undefined, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Bytes> {
+async function nativeFromFile(tools: NativeTools, origin: MediaFile, range: TimeRange | undefined, e: Encoder, job: NativeJob, ctx: RunContext): Promise<Bytes> {
   const inName = `in.${extOf(origin, "mp4")}`;
   const out = `out.${VIDEO_CONTAINERS[job.container].ext}`;
   const label = `Encoding with ${e.name}`;
@@ -672,7 +702,7 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
     const disk = await diskTarget(`${base}.${meta.ext}`);
     let r;
     try {
-      r = await processVideo(v.origin, i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label), target: disk && (() => disk.target) });
+      r = await processVideo(processable(v.origin), i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label), target: disk && (() => disk.target) });
     } catch (e) {
       await disk?.file.abort();
       throw e;
@@ -691,10 +721,10 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
  * straight from the file; frames after image nodes are encoded once first, then cut.
  */
 export async function splitVideo(v: VideoValue, ranges: (duration: number) => TimeRange[], params: Params, ctx: RunContext): Promise<FileValue[]> {
-  const sourceName = ((v.origin ?? v.audioSource) as File | undefined)?.name;
-  let source: Blob;
+  const sourceName = mediaName(v.origin ?? v.audioSource) || undefined;
+  let source: MediaFile;
   let span: TimeRange;
-  let sound: Blob | undefined;
+  let sound: MediaFile | undefined;
   /** The whole video encoded first, when it isn't needed after the cut. */
   let whole: FileValue | undefined;
   if (v.origin && v.of === "image") {
@@ -705,9 +735,8 @@ export async function splitVideo(v: VideoValue, ranges: (duration: number) => Ti
     const first = { ...ctx, progress: (f: number) => ctx.progress?.(Math.max(0, f) * 0.5, "Encoding the whole video first") };
     const r = await encodeVideo(v, { container: "mp4", quality: "very-high", audio: true, name: "whole" }, first);
     const f = (whole = r.file as FileValue);
-    source = new File([await asBlob(f.data)], f.name, { type: f.mime });
-    // ffmpeg cuts it where it is on disk, rather than being sent its bytes.
-    if (f.data.in === "disk") setLocalPath(source, f.data.path);
+    // On disk it's read where it is, a range at a time, and ffmpeg cuts it by its path.
+    source = f.data.in === "disk" ? diskMedia(f.data.path, f.data.size, f.name, f.mime) : new File([await asBlob(f.data)], f.name, { type: f.mime });
     const i = await info(source);
     span = { start: 0, end: i.duration };
     sound = i.hasAudio ? source : undefined;
@@ -721,9 +750,9 @@ export async function splitVideo(v: VideoValue, ranges: (duration: number) => Ti
 
 async function cutClips(
   v: VideoValue,
-  source: Blob,
+  source: MediaFile,
   span: TimeRange,
-  sound: Blob | undefined,
+  sound: MediaFile | undefined,
   sourceName: string | undefined,
   ranges: (duration: number) => TimeRange[],
   params: Params,
@@ -769,9 +798,9 @@ async function cutClips(
  * A file's sound on its own (or the `range` of it), copied out without re-encoding where the
  * codec allows: a long video's sound is a few MB, where reading the whole file would be GBs.
  */
-export async function soundTrack(blob: Blob, range?: TimeRange): Promise<AudioValue> {
-  const base = ((blob as File).name || "sound").replace(/\.[^.]+$/, "");
-  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+export async function soundTrack(file: MediaFile, range?: TimeRange): Promise<AudioValue> {
+  const base = (mediaName(file) || "sound").replace(/\.[^.]+$/, "");
+  const input = new Input({ source: inputSourceFor(file), formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryAudioTrack();
     if (!track) throw new Error("This video has no sound");

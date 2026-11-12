@@ -2,7 +2,8 @@
 // into Toolbox's scratch folder as it's made, and Save copies it from there: its bytes never pass
 // through the window. Checks that the Save IPC got a path, that two Save nodes on one Encode video
 // both get the file, that it plays and starts with its index (fast start), that the scratch folder
-// serves ranges and nothing outside itself, and that it's gone after quitting.
+// serves ranges and nothing outside itself, and that it's gone after quitting. Then a download (from
+// a stand-in yt-dlp) and an AVI ffmpeg converts first: both stay on disk and are read from there.
 //   TOOLBOX_E2E_BIG=1            also encodes a 10-minute 1080p video (about 3 GB) to ProRes and
 //                                checks the window stays under 1.5 GB of memory (slow; not in CI)
 //   TOOLBOX_E2E_BIG_SECONDS=60   a shorter big case, for a quicker look at the memory
@@ -225,6 +226,66 @@ async function renderInto(t, folders, seconds) {
     await t.app.close();
   }
   check("The scratch folder is gone after quitting", !existsSync(scratchDir), scratchDir);
+}
+
+// ---------------------------------------------------------------- downloads and converted inputs
+// yt-dlp is stood in for by a script that "downloads" a clip (no internet needed): Toolbox uses the
+// copy in its own folder while it's less than a week old. An AVI with MPEG-4 Part 2 video, which
+// WebCodecs can't read, is converted by ffmpeg first; both then stay on disk and are read from there.
+if (process.platform !== "win32") {
+  const clip = path.join(tmp, "dl.mp4");
+  execFileSync(ffmpeg, ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-f", "lavfi", "-i", "sine=frequency=660", "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip]);
+  const avi = path.join(tmp, "old.avi");
+  execFileSync(ffmpeg, ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-t", "2", "-c:v", "mpeg4", "-q:v", "5", avi]);
+  const bin = path.join(tmp, "profile", "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, "yt-dlp"), `#!/bin/sh\ncp '${clip}' 'Fake clip [abc123].mp4'\n`, { mode: 0o755 });
+  const [asIs, encoded, converted] = [folder("dl-file"), folder("dl-encoded"), folder("converted")];
+  const graph = {
+    version: 1,
+    nodes: [
+      { id: "d", type: "input.download", params: { url: "https://example.com/watch?v=abc123", quality: "1080" }, position: { x: 40, y: 40 } },
+      { id: "s1", type: "output.save-file", params: { folder: asIs }, position: { x: 640, y: 0 } },
+      { id: "e", type: "video.encode", params: { container: "mp4", codec: "avc", quality: "medium", name: "from-download" }, position: { x: 340, y: 160 } },
+      { id: "s2", type: "output.save-file", params: { folder: encoded }, position: { x: 640, y: 160 } },
+      { id: "v", type: "input.video", params: { path: avi, name: "old.avi" }, position: { x: 40, y: 360 } },
+      { id: "e2", type: "video.encode", params: { container: "mp4", codec: "avc", quality: "medium", name: "from-avi" }, position: { x: 340, y: 360 } },
+      { id: "s3", type: "output.save-file", params: { folder: converted }, position: { x: 640, y: 360 } },
+    ],
+    edges: [
+      { id: "e1", source: "d", sourceHandle: "file", target: "s1", targetHandle: "file" },
+      { id: "e2", source: "d", sourceHandle: "video", target: "e", targetHandle: "video" },
+      { id: "e3", source: "e", sourceHandle: "file", target: "s2", targetHandle: "file" },
+      { id: "e4", source: "v", sourceHandle: "video", target: "e2", targetHandle: "video" },
+      { id: "e5", source: "e2", sourceHandle: "file", target: "s3", targetHandle: "file" },
+    ],
+  };
+  const t = await launch();
+  const scratchDir = t.scratchDir;
+  try {
+    await t.open(graph);
+    const wrote = await renderInto(t, [asIs, encoded, converted], 90);
+    check("A download and a converted AVI render and save", wrote, `${readdirSync(asIs).join(", ")} | ${readdirSync(encoded).join(", ")} | ${readdirSync(converted).join(", ")} | ${await t.status("d")} | ${await t.status("v")} | ${t.errors.join(" | ")}`);
+    const saved = path.join(asIs, "Fake clip [abc123].mp4");
+    check("The download's File output saves the file as it came", existsSync(saved) && readFileSync(saved).equals(readFileSync(clip)));
+    if (t.spying) {
+      const sent = await t.saves();
+      check("…copied from the scratch folder, like every video here", sent.length === 3 && sent.every((s) => typeof s.fromPath === "string" && path.dirname(s.fromPath) === scratchDir), JSON.stringify(sent));
+    }
+    const a = path.join(encoded, "from-download.mp4");
+    const pa = existsSync(a) ? probe(a) : { plays: false, seconds: 0, errors: "missing", info: "" };
+    check("The downloaded video, read from disk, encodes and plays", pa.plays && Math.abs(pa.seconds - 3) < 0.5 && /Audio: aac/.test(pa.info), `${pa.seconds} s ${pa.errors}`);
+    const b = path.join(converted, "from-avi.mp4");
+    const pb = existsSync(b) ? probe(b) : { plays: false, seconds: 0, errors: "missing" };
+    check("The converted AVI, read from disk, encodes and plays", pb.plays && Math.abs(pb.seconds - 2) < 0.5, `${pb.seconds} s ${pb.errors}`);
+    const kept = readdirSync(scratchDir);
+    // The download, the AVI's converted copy (ffmpeg's out.mp4) and the two encoded videos; the files
+    // made along the way (before the fast-start pass) are gone already.
+    check("The download and the converted copy wait in the scratch folder", kept.some((f) => f.endsWith("Fake clip [abc123].mp4")) && kept.length === 4, kept.join(", "));
+  } finally {
+    await t.app.close();
+  }
+  check("…and are gone after quitting", !existsSync(scratchDir), scratchDir);
 }
 
 // ---------------------------------------------------------------- the big case (TOOLBOX_E2E_BIG=1)
