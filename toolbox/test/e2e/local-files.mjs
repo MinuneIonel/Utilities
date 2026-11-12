@@ -104,11 +104,13 @@ const old = path.join(tmp, "old-profile");
 t = await launch(old);
 try {
   await t.win.evaluate((g) => {
+    // An older Toolbox kept one graph, under toolbox.graph, and no tabs (toolbox.docs).
     localStorage.setItem("toolbox.graph", JSON.stringify(g));
-    // The window autosaves its own graph as it closes; keep the planted one.
+    localStorage.removeItem("toolbox.docs");
+    // The window autosaves its own graphs as it closes; keep the planted one.
     const set = Storage.prototype.setItem;
     Storage.prototype.setItem = function (k, v) {
-      if (k !== "toolbox.graph") set.call(this, k, v);
+      if (k !== "toolbox.graph" && k !== "toolbox.docs") set.call(this, k, v);
     };
   }, graph);
   await t.win.waitForTimeout(1500); // localStorage reaches the disk
