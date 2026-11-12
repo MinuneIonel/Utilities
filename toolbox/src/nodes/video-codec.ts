@@ -31,7 +31,7 @@ import {
 } from "mediabunny";
 import { probeVideo, processVideo, type VideoInfo } from "../../../media/src/engine/video";
 import { VIDEO_CONTAINERS, type QualityLevel, type VideoCodecChoice, type VideoContainer, type VideoJob } from "../../../media/src/engine/types";
-import type { AudioValue, Bytes, DiskMedia, FileValue, FrameItem, ImageValue, MediaFile, Params, RunContext, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, Bytes, DiskMedia, FileValue, FrameItem, FrameOptions, ImageValue, MediaFile, Params, RunContext, Value, VideoValue } from "../runtime/types";
 import { flattenOnBlack, gifFrame, hasTransparency } from "./alpha";
 import { asBlob, fromBytes, fromDisk, scratchUrl } from "./bytes";
 import { clipNames } from "./clips";
@@ -123,17 +123,25 @@ async function openTrack(f: MediaFile) {
   return { input, track };
 }
 
-/** Every frame of a video file (or of `range` in it), full size, `speed` times as fast. */
-async function* fileFrames(f: MediaFile, signal?: AbortSignal, range?: TimeRange, speed = 1): AsyncGenerator<FrameItem> {
+/**
+ * Every frame of a video file (or of `range` in it), `speed` times as fast: full size, or for
+ * playback (`opts`) smaller, from a later point, and leaving out frames the player is already past.
+ */
+async function* fileFrames(f: MediaFile, signal?: AbortSignal, range?: TimeRange, speed = 1, opts: FrameOptions = {}): AsyncGenerator<FrameItem> {
   const { input, track } = await openTrack(f);
+  const start = range?.start ?? 0;
+  const from = start + Math.max(0, opts.from ?? 0) * speed;
   try {
-    for await (const sample of new VideoSampleSink(track).samples(range?.start, range?.end)) {
+    for await (const sample of new VideoSampleSink(track).samples(from, range?.end)) {
       try {
         if (signal?.aborted) return;
-        const t = sample.timestamp - (range?.start ?? 0);
+        const t = sample.timestamp - start;
         // A frame that starts just before the cut only shows from the cut on.
         if (t + sample.duration <= 0) continue;
-        yield { value: sampleToImage(sample), timestamp: Math.max(0, t) / speed, duration: sample.duration / speed };
+        const at = Math.max(0, t) / speed;
+        // Decoded anyway (later frames need it), but not drawn or handed on.
+        if (opts.skipTo && at < opts.skipTo()) continue;
+        yield { value: sampleToImage(sample, opts.maxSide), timestamp: at, duration: sample.duration / speed };
       } finally {
         sample.close();
       }
@@ -234,7 +242,7 @@ export async function videoFromFile(source: MediaFile, params: Params, ctx: RunC
     origin: sameSpeed ? file : undefined,
     range,
     audioSource: i.hasAudio && sameSpeed ? file : undefined,
-    frames: (signal) => fileFrames(file, signal, range, speed),
+    frames: (signal, opts) => fileFrames(file, signal, range, speed, opts),
   };
 }
 
@@ -786,7 +794,7 @@ async function cutClips(
       range,
       audioSource: sound,
       soundLater: undefined,
-      frames: (signal) => fileFrames(source, signal, range),
+      frames: (signal, opts) => fileFrames(source, signal, range, 1, opts),
     };
     const step = { ...ctx, progress: (f: number) => ctx.progress?.(done + ((1 - done) * (n + Math.max(0, f))) / rs.length, `Clip ${n + 1} of ${rs.length}`) };
     const r = await encodeVideo(clip, { ...params, container, name: names[n].replace(/\.[^.]+$/, "") }, step);

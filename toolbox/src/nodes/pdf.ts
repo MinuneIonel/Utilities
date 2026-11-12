@@ -280,12 +280,22 @@ export const pdfToImages: NodeDef = {
       duration: d.pageCount,
       fps: 1,
       poster,
-      async *frames(signal) {
+      async *frames(signal, opts = {}) {
         const doc = await openForRender(d.bytes);
+        const maxSide = opts.maxSide;
         try {
-          for (let i = 0; i < d.pageCount; i++) {
+          for (let i = Math.max(0, Math.floor(opts.from ?? 0)); i < d.pageCount; i++) {
             if (signal?.aborted) return;
-            const value = await renderPage(doc, i, full);
+            if (opts.skipTo && i < opts.skipTo()) continue;
+            // For playback, pages fit in maxSide, with `scale` saying how much smaller than on Render.
+            let ratio = 1;
+            const value = await renderPage(doc, i, (w, h) => {
+              if (!maxSide) return full(w);
+              const s = Math.min(full(w), maxSide / Math.max(w, h));
+              ratio = s / full(w);
+              return s;
+            });
+            if (ratio < 1) value.scale = ratio;
             yield { value, timestamp: i, duration: 1 } satisfies FrameItem;
           }
         } finally {

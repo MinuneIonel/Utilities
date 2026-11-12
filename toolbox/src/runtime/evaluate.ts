@@ -1,6 +1,6 @@
 import { share, tee, type TeeSlot } from "./tee.ts";
 import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
-import type { Converter, FrameItem, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
+import type { Converter, FrameItem, FrameOptions, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
 
 type Rendered = { key: string; outputs: Record<string, Value> };
 
@@ -177,8 +177,8 @@ function convertVideo(v: VideoValue, conv: Converter, poster: Value): VideoValue
     ...v,
     of: conv.to as VideoValue["of"],
     poster,
-    async *frames(signal) {
-      for await (const f of v.frames(signal)) yield { ...f, value: await conv.convert(f.value) };
+    async *frames(signal, opts) {
+      for await (const f of v.frames(signal, opts)) yield { ...f, value: await conv.convert(f.value) };
     },
   };
 }
@@ -208,9 +208,11 @@ async function mapNode(
   const posters = await runOn(seqKeys.map((k) => (inputs[k] as VideoValue).poster), ctx);
   const frameCtx: RunContext = { ...ctx, mode: "render", progress: undefined };
   // One run per frame for every output: the outputs read side by side (an image and its mask)
-  // share this pass instead of each running the node again.
-  const runs = share<{ res: Record<string, Value>; item: FrameItem }>(async function* (signal) {
-    const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
+  // share this pass instead of each running the node again. Playback's options go on up to the
+  // sources, except skipping late frames when two videos are zipped: each would skip its own.
+  const runs = share<{ res: Record<string, Value>; item: FrameItem }, FrameOptions>(async function* (signal, opts) {
+    const up = opts?.skipTo && seqKeys.length > 1 ? { ...opts, skipTo: undefined } : opts;
+    const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal, up)[Symbol.asyncIterator]());
     try {
       for (;;) {
         const steps = await Promise.all(its.map((it) => it.next()));
@@ -242,8 +244,8 @@ async function mapNode(
       audioSource: lead.audioSource,
       range: lead.range,
       soundLater: lead.soundLater,
-      async *frames(signal) {
-        for await (const { res, item } of runs(signal)) yield { value: res[port.key], timestamp: item.timestamp, duration: item.duration, name: item.name };
+      async *frames(signal, opts) {
+        for await (const { res, item } of runs(signal, opts)) yield { value: res[port.key], timestamp: item.timestamp, duration: item.duration, name: item.name };
       },
     };
   }
@@ -406,7 +408,12 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         const upstream = edge && results.get(edge.source);
         const raw = edge && upstream?.outputs[edge.sourceHandle];
         const slot = edge && raw?.kind === "video" ? slotFor(`${edge.source}:${edge.sourceHandle}`, node.id) : undefined;
-        const value = edge && (slot && raw?.kind === "video" ? { ...raw, frames: slot.iterate, release: slot.release } : raw);
+        // Reading with options (playback) can't join the shared pass: it reads on its own and lets the others go on.
+        const value =
+          edge &&
+          (slot && raw?.kind === "video"
+            ? { ...raw, frames: (signal?: AbortSignal, opts?: FrameOptions) => (opts ? (slot.release(), raw.frames(signal, opts)) : slot.iterate(signal)), release: slot.release }
+            : raw);
         if (!value || !upstream?.key) {
           if (!edge && port.optional) continue;
           missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;

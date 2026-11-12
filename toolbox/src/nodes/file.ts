@@ -77,10 +77,11 @@ export const imagesInput: NodeDef = {
       duration: blobs.length,
       fps: 1,
       poster,
-      async *frames(signal) {
-        for (let i = 0; i < blobs.length; i++) {
+      async *frames(signal, opts = {}) {
+        for (let i = Math.max(0, Math.floor(opts.from ?? 0)); i < blobs.length; i++) {
           if (signal?.aborted) return;
-          yield { value: await decodeImage(await readable(blobs[i])), timestamp: i, duration: 1, name: found[i].name };
+          if (opts.skipTo && i < opts.skipTo()) continue;
+          yield { value: await decodeImage(await readable(blobs[i]), opts.maxSide), timestamp: i, duration: 1, name: found[i].name };
         }
       },
     };
