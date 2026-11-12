@@ -1,6 +1,6 @@
 import { bridge } from "../platform";
 import type { Bytes, Graph } from "./types";
-import type { FromWorker, NodeUpdate, ProgressUpdate, SavedFile, ToWorker } from "./worker";
+import type { FromWorker, NodeUpdate, PlayMessage, ProgressUpdate, SavedFile, ToWorker } from "./worker";
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
@@ -28,6 +28,8 @@ export class RuntimeClient {
   private previewBusy = false;
   private nextPreview: Graph | null = null;
   private renders = new Map<number, { files: RenderOutcome["files"]; resolve: (r: RenderOutcome) => void }>();
+  /** Gets what playback sends (see play). */
+  onPlay?: (msg: PlayMessage) => void;
 
   constructor(
     private onUpdate: (u: NodeUpdate) => void,
@@ -87,6 +89,25 @@ export class RuntimeClient {
     });
   }
 
+  /**
+   * Plays a node's output from `at` (0–1 of the way through) and returns the playback's id, which
+   * every message about it carries. Render stops it.
+   */
+  play(graph: Graph, nodeId: string, port: string, at: number): number {
+    const reqId = ++this.reqId;
+    this.send({ type: "play", reqId, graph, nodeId, port, at });
+    return reqId;
+  }
+
+  stopPlay() {
+    this.send({ type: "play-stop" });
+  }
+
+  /** The window drew a played frame: the worker may send another. */
+  playDrawn(reqId: number) {
+    this.send({ type: "play-ack", reqId });
+  }
+
   /** The window cleared its pictures: the next updates carry every node's picture again. */
   resendAll() {
     this.send({ type: "resend" });
@@ -106,6 +127,11 @@ export class RuntimeClient {
   }
 
   private handle(msg: FromWorker) {
+    if (msg.type === "play-info" || msg.type === "play-frame" || msg.type === "play-end") {
+      if (this.onPlay) this.onPlay(msg);
+      else if (msg.type === "play-frame") msg.bitmap.close();
+      return;
+    }
     if (msg.type === "progress") {
       this.onProgress(msg);
       return;

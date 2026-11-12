@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ResultCache, evaluate } from "../src/runtime/evaluate.ts";
-import { AckWindow, LATE_MS, MAX_UNACKED, MIN_RATE, PlayClock, STARVE_MS, clockText, needsResync, nextAction, rateFor } from "../src/runtime/pacing.ts";
+import { AckWindow, LATE_MS, MAX_UNACKED, MIN_RATE, PlayClock, STARVE_MS, clockText, needsResync, nextAction, rateFor, soundRate } from "../src/runtime/pacing.ts";
 import { share } from "../src/runtime/tee.ts";
 import type { Converter, FrameOptions, Graph, NodeDef, RunContext, Value, VideoValue } from "../src/runtime/types.ts";
 
@@ -191,10 +191,13 @@ test("pacing: real time while enough frames get shown, slower (in steps) when th
   assert.equal(rateFor(0.2, 30), MIN_RATE);
   // A 1 fps slideshow only needs 1 frame a second.
   assert.equal(rateFor(1.5, 1), 1);
-  // No flicker: a little faster doesn't speed up again, a lot faster does.
-  assert.equal(rateFor(6.5, 30, 0.6), 0.6);
-  assert.equal(rateFor(7.6, 30, 0.6), 0.7);
-  assert.equal(rateFor(11, 30, 0.9), 1);
+  // No flicker: a little faster or slower doesn't change the speed, a lot does.
+  assert.equal(rateFor(7.5, 30, 0.6), 0.6);
+  assert.equal(rateFor(8.1, 30, 0.6), 0.8);
+  assert.equal(rateFor(10.5, 30, 0.9), 0.9, "only just fast enough: stays slower rather than flicker");
+  assert.equal(rateFor(11.2, 30, 0.9), 1);
+  assert.equal(rateFor(9.1, 30, 1), 1);
+  assert.equal(rateFor(8.9, 30, 1), 0.8);
 });
 
 test("play clock: starts at the first frame, slows down honestly, and never jumps", () => {
@@ -207,6 +210,12 @@ test("play clock: starts at the first frame, slows down honestly, and never jump
   // Frames take 200 ms to make (5 a second): 0.5x, and the clock carries on from where it was.
   c.shown(2000, 200);
   assert.equal(c.rate, 0.5);
+  // One slow frame doesn't change the speed.
+  const d = new PlayClock(0, 30);
+  d.start(0, 0);
+  for (let i = 1; i <= 20; i++) d.shown(i * 50, 50);
+  d.shown(1100, 300);
+  assert.equal(d.rate, 1);
   assert.equal(c.at(2000), 3);
   assert.equal(c.at(3000), 3.5);
   // Skips what would be late by the time a frame is made (200 ms at half speed is 0.1 s of video).
@@ -258,6 +267,11 @@ test("sound drift and the time display", () => {
   assert.equal(needsResync(10.05, 10), false);
   assert.equal(needsResync(10.2, 10), true);
   assert.equal(needsResync(9.8, 10), true);
+  // Behind: a little faster; ahead: a little slower; in step: real time.
+  assert.ok(Math.abs(soundRate(9.95, 10) - 1.05) < 1e-9);
+  assert.ok(Math.abs(soundRate(10.05, 10) - 0.95) < 1e-9);
+  assert.equal(soundRate(9.5, 10), 1.1);
+  assert.equal(soundRate(10.02, 10), 1);
   assert.equal(clockText(3.9), "0:03");
   assert.equal(clockText(63.4), "1:03");
   assert.equal(clockText(3723), "1:02:03");

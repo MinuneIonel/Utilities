@@ -7,8 +7,10 @@ import { audioCodec } from "../nodes/audio";
 import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
 import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
+import { isDisk } from "../nodes/source";
 import { ResultCache, evaluate } from "./evaluate";
-import type { Bytes, CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
+import { AckWindow, LATE_MS, nextAction, PlayClock } from "./pacing";
+import type { Bytes, CameraFeed, FrameItem, FrameOptions, Graph, ImageValue, NodeStatus, Value, VideoValue } from "./types";
 
 export type ToWorker =
   /** A dropped file, and where it is on disk in the desktop app. */
@@ -33,7 +35,15 @@ export type ToWorker =
   | { type: "tool-result"; callId: string; result?: { code: number; files: Record<string, Uint8Array | KeptFile>; log: string }; error?: string }
   | { type: "scratch-result"; callId: string; result?: unknown; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
-  | { type: "tool-progress"; callId: string; fraction: number; label?: string };
+  | { type: "tool-progress"; callId: string; fraction: number; label?: string }
+  /**
+   * Plays a node's output (its `port`) from `at` (0–1 of the way through): small frames paced to
+   * the clock, and its sound. Render stops it.
+   */
+  | { type: "play"; reqId: number; graph: Graph; nodeId: string; port: string; at: number }
+  | { type: "play-stop" }
+  /** The window drew a played frame. */
+  | { type: "play-ack"; reqId: number };
 
 export interface SavedFile {
   name: string;
@@ -91,7 +101,19 @@ export type ToolRequest =
   | { type: "scratch-call"; callId: string; op: "write"; id: string; chunk: Uint8Array; position: number }
   | { type: "scratch-call"; callId: string; op: "close"; id: string };
 
+/** What playback sends the window. */
+export type PlayMessage =
+  /**
+   * Playback started: how long the output is, whether frames follow (none for a sound), and where
+   * its sound is (a Blob, or a scratch file's URL), starting `start` seconds into that file.
+   */
+  | { type: "play-info"; reqId: number; duration: number; frames: boolean; audio?: { blob?: Blob; url?: string; start: number } }
+  /** A frame to draw now, at `t` seconds; `speed` is below 1 when the graph can't keep up. */
+  | { type: "play-frame"; reqId: number; bitmap: ImageBitmap; t: number; speed: number }
+  | { type: "play-end"; reqId: number; reason: "stopped" | "error"; error?: string };
+
 export type FromWorker =
+  | PlayMessage
   | NodeUpdate
   | ProgressUpdate
   | ToolRequest
@@ -279,6 +301,16 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     feed.expectSound(msg.sound);
   } else if (msg.type === "cam-audio") {
     cameras.get(msg.id)?.setSound(msg.blob);
+  } else if (msg.type === "play") {
+    stopPlay();
+    const s: PlaySession = { reqId: msg.reqId, abort: new AbortController(), acks: new AckWindow() };
+    playing = s;
+    // Waits its turn behind a preview in progress (whose results it then gets from the cache).
+    queue = queue.then(() => startPlay(s, msg));
+  } else if (msg.type === "play-stop") {
+    stopPlay();
+  } else if (msg.type === "play-ack") {
+    if (playing?.reqId === msg.reqId) playing.acks.acked();
   } else if (msg.type === "tools") {
     setModelFetcher(
       (file, onProgress) =>
@@ -353,12 +385,120 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       pruneDownloads(msg.graph);
     }
     else {
+      // Render needs the whole computer. (The window stops playback itself when the graph changes:
+      // a webcam elsewhere in the graph asks for previews all the time without changing anything.)
+      stopPlay();
       renderCancelled = false;
       renderAbort = new AbortController();
     }
     queue = queue.then(() => run(msg.reqId, msg.mode, msg.graph));
   }
 };
+
+/** Longest side of played frames: small enough to keep up, big enough to judge the look. */
+const PLAY_MAX = 960;
+
+interface PlaySession {
+  reqId: number;
+  abort: AbortController;
+  acks: AckWindow;
+}
+let playing: PlaySession | undefined;
+
+function stopPlay() {
+  const s = playing;
+  if (!s) return;
+  playing = undefined;
+  s.abort.abort();
+  post({ type: "play-end", reqId: s.reqId, reason: "stopped" });
+}
+
+function endPlay(s: PlaySession, err: unknown) {
+  if (playing !== s) return;
+  playing = undefined;
+  s.abort.abort();
+  post({ type: "play-end", reqId: s.reqId, reason: "error", error: err instanceof Error ? err.message : String(err) });
+}
+
+async function startPlay(s: PlaySession, msg: Extract<ToWorker, { type: "play" }>) {
+  if (playing !== s) return;
+  let value: Value | undefined;
+  try {
+    // The preview that just ran left everything in the cache, so this is quick.
+    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras }, cache, converters: CONVERTERS, cancelled: () => playing !== s });
+    const r = results.get(msg.nodeId);
+    value = r?.outputs[msg.port] ?? Object.values(r?.outputs ?? {})[0];
+    if (!value) throw new Error(r?.error ?? "Nothing to play yet");
+  } catch (err) {
+    return endPlay(s, err);
+  }
+  // Not awaited: frames keep coming while previews and Render queue up as usual (and stop this).
+  void playValue(s, value, msg.at).catch((err) => endPlay(s, err));
+}
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+  });
+
+async function frameBitmap(v: Value): Promise<ImageBitmap> {
+  const img = v.kind === "grid" ? gridToImage(v) : v;
+  if (img.kind !== "image") throw new Error("Only pictures can play");
+  return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+}
+
+/** Streams a video's frames to the window in time (looping), or hands it a sound to play. */
+async function playValue(s: PlaySession, v: Value, at: number) {
+  const { reqId } = s;
+  const signal = s.abort.signal;
+  if (v.kind === "audio") {
+    // The window plays the sound itself; this session just waits to be stopped.
+    post({ type: "play-info", reqId, duration: v.duration ?? 0, frames: false, audio: { blob: new Blob([v.bytes as Uint8Array<ArrayBuffer>], { type: v.mime }), start: 0 } });
+    return;
+  }
+  if (v.kind !== "video" || (v.of !== "image" && v.of !== "grid")) throw new Error("Only videos and sound can play");
+  if (!(v.duration > 0)) throw new Error("This is live already");
+  const video: VideoValue = v;
+  const src = video.audioSource;
+  // A file on disk plays straight from the scratch folder; a dropped file's Blob is cheap to hand over.
+  const audio = src && { ...(isDisk(src) ? { url: src.url } : { blob: src }), start: video.range?.start ?? 0 };
+  post({ type: "play-info", reqId, duration: video.duration, frames: true, audio });
+  let from = at >= 0.995 ? 0 : Math.max(0, at) * video.duration;
+  let prev: PlayClock | undefined;
+  for (;;) {
+    const clock = new PlayClock(from, video.fps, prev);
+    prev = clock;
+    const opts: FrameOptions = { maxSide: PLAY_MAX, from, skipTo: () => clock.skipTo(performance.now()) };
+    let count = 0;
+    let lastPost = performance.now();
+    let lastShown = lastPost;
+    for await (const f of video.frames(signal, opts)) {
+      if (signal.aborted) return;
+      count++;
+      const got = performance.now();
+      if (!clock.started) clock.start(got, f.timestamp);
+      const act = nextAction(clock.at(got) * 1000, f.timestamp * 1000, LATE_MS, got - lastShown);
+      if (act === "skip") continue;
+      if (act === "wait") await sleep(clock.until(got, f.timestamp), signal);
+      // At most MAX_UNACKED frames wait for the window, so bitmaps never pile up.
+      const waitFrom = performance.now();
+      await s.acks.ready(signal);
+      const ackMs = performance.now() - waitFrom;
+      const bitmap = await frameBitmap(f.value);
+      if (signal.aborted) return bitmap.close();
+      post({ type: "play-frame", reqId, bitmap, t: f.timestamp, speed: clock.rate }, [bitmap]);
+      s.acks.sent();
+      const now = performance.now();
+      clock.shown(now, got - lastPost + ackMs);
+      lastPost = lastShown = now;
+    }
+    if (signal.aborted) return;
+    if (!count && !from) throw new Error("No frames to play");
+    // Round again from the start.
+    from = 0;
+  }
+}
 
 async function run(reqId: number, mode: "preview" | "render", graph: Graph) {
   // A newer preview makes this one pointless; a render only stops when asked to.

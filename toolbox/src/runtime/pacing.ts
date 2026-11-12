@@ -34,10 +34,11 @@ export function nextAction(clockMs: number, frameMs: number, late = LATE_MS, sin
  */
 export function rateFor(throughput: number, fps: number, current = 1): number {
   const need = Math.min(fps > 0 ? fps : 30, MIN_FPS);
-  const target = Math.min(1, throughput / need);
+  // Above 1 when there's time to spare.
+  const ratio = throughput / need;
   const step = (x: number) => Math.min(1, Math.max(MIN_RATE, Math.floor(x * 10 + 1e-9) / 10));
-  if (target < current - 0.05) return step(target);
-  if (target >= current + 0.15 || (target >= 1 && current < 1)) return step(target);
+  if (ratio < current - 0.1) return step(ratio);
+  if (ratio >= current + 0.2) return step(ratio);
   return current;
 }
 
@@ -91,7 +92,8 @@ export class PlayClock {
 
   /** After a frame is shown: `workMs` is how long it took to make, not counting waiting for its time. */
   shown(now: number, workMs: number) {
-    this.costMs = this.costMs === undefined ? workMs : this.costMs * 0.8 + workMs * 0.2;
+    // Smoothed over about ten frames, so one slow frame doesn't change the speed.
+    this.costMs = this.costMs === undefined ? workMs : this.costMs * 0.9 + workMs * 0.1;
     const rate = rateFor(1000 / Math.max(1, this.costMs), this.fps, this.rate);
     if (rate === this.rate) return;
     // Rebased, so the clock doesn't jump when its speed changes.
@@ -141,6 +143,20 @@ export class AckWindow {
 
 /** Whether sound at `audioTime` is far enough off `expected` (both seconds) to move it back in line. */
 export const needsResync = (audioTime: number, expected: number, max = DRIFT_MAX) => Math.abs(audioTime - expected) > max;
+
+/** Sound closer to the picture than this (seconds) is left alone. */
+export const DRIFT_OK = 0.03;
+
+/**
+ * How fast the sound should play to catch up with the picture: a little faster when it's behind,
+ * a little slower when ahead (at most 10%, which is hard to hear), 1 once it's back in step.
+ * A jump (needsResync) would only add the time sound takes to start again.
+ */
+export function soundRate(audioTime: number, expected: number): number {
+  const drift = audioTime - expected;
+  if (Math.abs(drift) <= DRIFT_OK) return 1;
+  return Math.min(1.1, Math.max(0.9, 1 - drift));
+}
 
 /** 63.4 s as "1:03". */
 export function clockText(s: number): string {
