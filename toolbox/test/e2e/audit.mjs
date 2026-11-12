@@ -62,9 +62,13 @@ try {
   const win = await app.firstWindow();
   win.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 300)));
   win.on("pageerror", (e) => errors.push(e.message));
-  await win.waitForSelector(".canvas");
-  if (await win.evaluate(() => localStorage.getItem("toolbox.tutorial") !== "1")) {
-    await win.evaluate(() => localStorage.setItem("toolbox.tutorial", "1"));
+  await win.waitForSelector(".canvas", { state: "attached" });
+  // A new profile opens on Simple view, and Graph view starts with the tour: these checks drive the graph.
+  if (await win.evaluate(() => localStorage.getItem("toolbox.tutorial") !== "1" || localStorage.getItem("toolbox.mode") !== "graph")) {
+    await win.evaluate(() => {
+      localStorage.setItem("toolbox.tutorial", "1");
+      localStorage.setItem("toolbox.mode", "graph");
+    });
     await win.reload();
     await win.waitForSelector(".canvas");
   }
@@ -124,13 +128,24 @@ try {
   const at = await field("Playhead %").locator("input.num").inputValue();
   check("A number box pulls 5000 back into its 0–100 range (bug 6)", at === "100", `box shows ${at}`);
 
+  // New opens a tab of its own now; closing it shows this graph again, which must bring its pictures back.
   const before = await thumbs();
   await menu("new");
   await win.waitForTimeout(1500);
-  await menu("undo");
+  await menu("closeTab");
   await win.waitForTimeout(2500);
   const after = await thumbs();
-  check("New then Undo brings the thumbnails back (bug 3)", after >= before && after > 0, `${before} before, ${after} after`);
+  check("New then closing it brings the thumbnails back (bug 3)", after >= before && after > 0, `${before} before, ${after} after`);
+  // Undo bringing nodes back must bring their pictures back too.
+  await win.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  await menu("selectAll");
+  await win.keyboard.press("Delete");
+  await win.waitForTimeout(1500);
+  const gone = await thumbs();
+  await menu("undo");
+  await win.waitForTimeout(2500);
+  const back = await thumbs();
+  check("Deleting the nodes then Undo brings the thumbnails back (bug 3)", gone === 0 && back >= before && back > 0, `${before} before, ${gone} deleted, ${back} after undo`);
 
   await open(cutGraph);
   await menu("render");

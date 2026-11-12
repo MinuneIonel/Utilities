@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRecent, graphPathsIn, recentLabel } from "./graph-files.js";
 import { consentText, pathsInGraph } from "./local-files.js";
 import { registerModels } from "./models.js";
 import { createPathSet } from "./path-set.js";
@@ -27,6 +28,11 @@ protocol.registerSchemesAsPrivileged([
 // isolated. The UI only ever loads its own files, so it's turned on for the whole app: Remove
 // background's model then uses every CPU core on computers where it can't use the GPU.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
+
+// One Toolbox at a time (per profile): opening a graph file while it runs shows it in a tab of
+// the running one (see second-instance below) instead of starting another.
+const firstInstance = app.requestSingleInstanceLock();
+if (!firstInstance) app.quit();
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -61,6 +67,9 @@ function createWindow() {
     webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
   });
   win.loadURL(devUrl ?? "app://toolbox/index.html");
+  // Graph files wait until the page (again, after a reload) says it's listening for them.
+  windowListening = false;
+  win.webContents.on("did-start-loading", () => (windowListening = false));
   // A file dropped outside the canvas would otherwise replace the app with that file,
   // losing the graph; links open in the browser instead of a bare window.
   win.webContents.on("will-navigate", (e) => e.preventDefault());
@@ -83,11 +92,16 @@ function buildMenu() {
       submenu: [
         { label: "New Graph", accelerator: "CmdOrCtrl+N", click: () => send("new") },
         { label: "Open Graph…", accelerator: "CmdOrCtrl+O", click: () => send("open") },
-        { label: "Save Graph…", accelerator: "CmdOrCtrl+S", click: () => send("save") },
+        { label: "Open Recent", submenu: recentMenu() },
+        { type: "separator" },
+        { label: "Save Graph", accelerator: "CmdOrCtrl+S", click: () => send("save") },
+        { label: "Save Graph As…", accelerator: "Shift+CmdOrCtrl+S", click: () => send("saveAs") },
+        { label: "Close Graph", accelerator: "CmdOrCtrl+W", click: () => send("closeTab") },
         { type: "separator" },
         { label: "Render", accelerator: "CmdOrCtrl+R", click: () => send("render") },
         { type: "separator" },
-        isMac ? { role: "close" } : { role: "quit" },
+        // ⌘W closes a graph's tab now, so closing the window moves to ⇧⌘W.
+        isMac ? { role: "close", accelerator: "Shift+CmdOrCtrl+W" } : { role: "quit" },
       ],
     },
     {
@@ -117,7 +131,8 @@ function buildMenu() {
         { role: "togglefullscreen" },
       ],
     },
-    { role: "windowMenu" },
+    // Spelled out, as the default one closes the window with Ctrl+W on Windows and Linux.
+    { role: "windowMenu", submenu: isMac ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }] : [{ role: "minimize" }] },
     {
       role: "help",
       submenu: [
@@ -129,6 +144,24 @@ function buildMenu() {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/** File > Open Recent: the last graphs opened or saved. */
+function recentMenu() {
+  const list = recent().list();
+  if (!list.length) return [{ label: "No recent graphs", enabled: false }];
+  return [
+    ...list.map((p) => ({ label: recentLabel(p, app.getPath("home")), click: () => openFromOutside(p) })),
+    { type: "separator" },
+    {
+      label: "Clear Menu",
+      click: () => {
+        recent().clear();
+        if (process.platform !== "linux") app.clearRecentDocuments();
+        buildMenu();
+      },
+    },
+  ];
 }
 
 /** `name` in `folder`, or "name (2).ext" and so on when that's taken. */
@@ -209,6 +242,9 @@ ipcMain.handle("scratch-close", (_e, id) => scratch().close(String(id)));
 // Results the worker no longer holds; paths outside the scratch folder are ignored.
 ipcMain.handle("scratch-delete", (_e, paths) => scratch().remove(paths));
 
+// Simple view saves here until a folder is picked.
+ipcMain.handle("default-folder", () => app.getPath("downloads"));
+
 ipcMain.handle("choose-folder", async () => {
   const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
   return r.canceled ? null : r.filePaths[0];
@@ -234,25 +270,41 @@ const isFile = (p) => stat(p).then((s) => s.isFile(), () => false);
 // A file dropped or chosen in the window (the preload's pathForFile; only a real drop or dialog makes a File).
 ipcMain.on("local-allow", (_e, p) => allowedFiles().add(p));
 // Graphs autosaved before Toolbox kept this list: their files were the person's own drops.
-ipcMain.handle("adopt-autosave", (_e, text) => {
+// The window sends every open graph (one per tab), or a single one from before tabs.
+ipcMain.handle("adopt-autosave", (_e, texts) => {
   allowedFiles();
-  if (!adoptAutosave || typeof text !== "string") return;
+  const list = (Array.isArray(texts) ? texts : [texts]).filter((t) => typeof t === "string");
+  if (!adoptAutosave || !list.length) return;
   adoptAutosave = false;
-  allowed.add(...pathsInGraph(text));
+  allowed.add(...list.flatMap((t) => pathsInGraph(t)));
   // Written even when empty: this happens once, so a graph opened later without its files isn't adopted next launch.
   allowed.save();
 });
 
-ipcMain.handle("open-graph", async () => {
-  const r = await dialog.showOpenDialog(win, {
-    properties: ["openFile"],
-    filters: [{ name: "Toolbox graph", extensions: ["toolbox", "json"] }],
-  });
-  if (r.canceled || !r.filePaths[0]) return null;
-  const text = await readFile(r.filePaths[0], "utf8");
-  // A graph from someone else can name any file: ask before the window may read the ones it doesn't know.
-  const named = pathsInGraph(text).filter((p) => !allowedFiles().has(p));
-  const wanted = (await Promise.all(named.map(async (p) => ((await isFile(p)) ? p : null)))).filter(Boolean);
+/** Graph files the person picked in an open or save dialog (or opened with Toolbox): the only ones Save writes over without asking. */
+let graphFilesSet;
+const graphFiles = () => (graphFilesSet ??= createPathSet(path.join(app.getPath("userData"), "graph-files.json")));
+/** File > Open Recent. */
+let recentList;
+const recent = () => (recentList ??= createRecent(path.join(app.getPath("userData"), "recent.json")));
+
+/** A graph file was opened or saved: Save may write over it from now on, and it goes to the top of Open Recent. */
+function rememberGraph(p) {
+  graphFiles().add(p);
+  recent().add(p);
+  if (process.platform !== "linux") app.addRecentDocument(p);
+  buildMenu();
+}
+
+/**
+ * Reads a graph file for the window. A graph from someone else can name any file, so this asks
+ * before the window may read the ones it doesn't know. Every way of opening a graph comes here:
+ * the Open dialog, Open Recent, and files opened with Toolbox from outside.
+ */
+async function readGraphFile(p) {
+  const text = await readFile(p, "utf8");
+  const named = pathsInGraph(text).filter((f) => !allowedFiles().has(f));
+  const wanted = (await Promise.all(named.map(async (f) => ((await isFile(f)) ? f : null)))).filter(Boolean);
   if (wanted.length) {
     const { response } = await dialog.showMessageBox(win, {
       type: "question",
@@ -263,8 +315,30 @@ ipcMain.handle("open-graph", async () => {
     });
     if (response === 0) allowedFiles().add(...wanted);
   }
-  return { name: path.basename(r.filePaths[0]), text };
+  rememberGraph(p);
+  return { name: path.basename(p), path: p, text };
+}
+
+ipcMain.handle("open-graph", async () => {
+  const r = await dialog.showOpenDialog(win, {
+    properties: ["openFile"],
+    filters: [{ name: "Toolbox graph", extensions: ["toolbox", "json"] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return readGraphFile(r.filePaths[0]);
 });
+
+/** Writes a graph file next to its old self first, so a failed write never loses the old one. */
+async function writeGraph(p, text) {
+  const part = `${p}.part`;
+  try {
+    await writeFile(part, text, "utf8");
+    await rename(part, p);
+  } catch (e) {
+    await rm(part, { force: true });
+    throw e;
+  }
+}
 
 ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
   const r = await dialog.showSaveDialog(win, {
@@ -272,8 +346,78 @@ ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
     filters: [{ name: "Toolbox graph", extensions: ["toolbox"] }],
   });
   if (r.canceled || !r.filePath) return null;
-  await writeFile(r.filePath, text, "utf8");
+  await writeGraph(r.filePath, String(text));
+  rememberGraph(r.filePath);
   return r.filePath;
+});
+
+// Save over a graph's own file without a dialog: only one the person picked before, never any path the window names.
+ipcMain.handle("save-graph-to", async (_e, p, text) => {
+  if (typeof p !== "string" || !graphFiles().has(p)) throw new Error("Toolbox can only save over graph files you opened or saved");
+  await writeGraph(p, String(text));
+  rememberGraph(p);
+});
+
+/** A question from the window, with its own answers; resolves with the index of the button pressed. */
+ipcMain.handle("ask", async (_e, message, detail, buttons) => {
+  const list = Array.isArray(buttons) && buttons.length ? buttons.slice(0, 4).map(String) : ["OK"];
+  const { response } = await dialog.showMessageBox(win, {
+    type: "question",
+    message: String(message),
+    detail: String(detail ?? ""),
+    buttons: list,
+    defaultId: 0,
+    cancelId: list.length - 1,
+  });
+  return response;
+});
+
+/** Whether the page is ready for graph files from outside; until then they wait in `waiting`. */
+let windowListening = false;
+let waiting = [];
+/** One at a time, so their questions about files don't pile up on top of each other. */
+let opening = Promise.resolve();
+
+/** Opens a graph file in a tab: from Open Recent, a double-click in the Finder or Explorer, or the command line. */
+function openFromOutside(p) {
+  if (!win || !windowListening) {
+    waiting.push(p);
+    return;
+  }
+  opening = opening.then(async () => {
+    if (!win) return void waiting.push(p);
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    try {
+      win.webContents.send("open-file", await readGraphFile(p));
+    } catch {
+      recent().remove(p);
+      buildMenu();
+      await dialog.showMessageBox(win, { type: "warning", message: `Couldn't open ${path.basename(p)}`, detail: "It may have been moved or deleted." });
+    }
+  });
+}
+
+ipcMain.handle("open-file-ready", () => {
+  windowListening = true;
+  const list = waiting;
+  waiting = [];
+  for (const p of list) openFromOutside(p);
+});
+
+// macOS hands over files opened with Toolbox (a double-click, or dropped on the Dock icon) this way, even before the app is ready.
+app.on("open-file", (e, p) => {
+  e.preventDefault();
+  openFromOutside(p);
+});
+
+// Windows and Linux start a second Toolbox with the file's path; it quits at once and the path arrives here.
+app.on("second-instance", (_e, argv, cwd) => {
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+  for (const p of graphPathsIn(argv.slice(1), cwd)) openFromOutside(p);
 });
 
 // shell.openPath runs whatever it's given, so only files Toolbox wrote.
@@ -306,6 +450,7 @@ async function readScratch(name, range) {
 }
 
 app.whenReady().then(() => {
+  if (!firstInstance) return;
   allowCamera();
   scratch();
   // Tools read the files the person gave Toolbox, and Toolbox's own results in the scratch folder.
@@ -325,6 +470,8 @@ app.whenReady().then(() => {
   });
   buildMenu();
   createWindow();
+  // A graph file Toolbox was started with (Windows and Linux).
+  for (const p of graphPathsIn(process.argv.slice(1), process.cwd())) openFromOutside(p);
   app.on("activate", () => {
     if (!win) createWindow();
   });
@@ -333,6 +480,7 @@ app.whenReady().then(() => {
 app.on("will-quit", () => {
   written?.flush();
   allowed?.flush();
+  graphFilesSet?.flush();
   scratchFolder?.clear();
 });
 

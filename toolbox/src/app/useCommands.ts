@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { bridge, isDesktop } from "../platform";
 import { typingIn } from "./flow";
 
-/** `commands` is rebuilt every render; the listeners always call the latest. */
+/** `commands` is rebuilt every render; the listeners always call the latest. A command left out does nothing. */
 export function useCommands(commands: Record<string, () => void>) {
   const ref = useRef(commands);
   ref.current = commands;
@@ -18,8 +18,9 @@ export function useCommands(commands: Record<string, () => void>) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       // Tab opens the Add node menu at the pointer, unless you're typing or moving between inspector fields.
+      // Simple view has no Add node, so Tab moves between its buttons as usual.
       if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        if (t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu, .tutorial")) return;
+        if (!ref.current.addNode || t.closest("input, textarea, select, [contenteditable], .inspector, .node-menu, .tutorial")) return;
         e.preventDefault();
         ref.current.addNode();
         return;
@@ -28,8 +29,9 @@ export function useCommands(commands: Record<string, () => void>) {
       const k = e.key.toLowerCase();
       const c =
         k === "z" ? (e.shiftKey ? "redo" : "undo")
-        : ({ y: "redo", r: "render", o: "open", s: "save", c: "copy", x: "cut", v: "paste", d: "duplicate", a: "selectAll" } as Record<string, string>)[k];
-      if (!c || (typingIn(t) && !["render", "open", "save"].includes(c))) return;
+        : k === "s" ? (e.shiftKey ? "saveAs" : "save")
+        : ({ y: "redo", r: "render", o: "open", c: "copy", x: "cut", v: "paste", d: "duplicate", a: "selectAll" } as Record<string, string>)[k];
+      if (!c || !ref.current[c] || (typingIn(t) && !["render", "open", "save", "saveAs"].includes(c))) return;
       e.preventDefault();
       ref.current[c]();
     };

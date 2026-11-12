@@ -1,7 +1,8 @@
 import { useContext, useEffect, useRef } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { INPUT_ACCEPT, REGISTRY } from "../nodes";
-import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./context";
+import { PlayIcon } from "./Player";
+import { ActionsContext, PlayingContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./context";
 
 export function Bitmap({ bitmap, className }: { bitmap?: ImageBitmap; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -54,6 +55,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const actions = useContext(ActionsContext);
   const shapes = useContext(ShapesContext);
   const previewed = useContext(PreviewContext) === id;
+  const playing = useContext(PlayingContext) === id;
   const fileRef = useRef<HTMLInputElement>(null);
   if (!def) return <div className="tnode error">Unknown node {data.type}</div>;
   const accept = INPUT_ACCEPT[def.type];
@@ -65,6 +67,9 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   // Job nodes only run on Render. A Save node offers to save again once it has saved; others can be run on their own.
   const job = def.kind === "job";
   const savedOnce = !!rt?.savedTo || (Array.isArray(data.params.lastSaved) && data.params.lastSaved.length > 0);
+  // A sound can be played from its card, once there is one (a job's last render, even out of date).
+  const out = def.outputs[0] && shapes.get(`${id}:${def.outputs[0].key}`);
+  const sound = !!actions.play && out?.type === "audio" && !out.seq && (rt?.status === "ok" || rt?.status === "cached" || rt?.status === "stale");
 
   return (
     <div className={`tnode${job ? " job" : ""}${selected ? " selected" : ""}`}>
@@ -92,6 +97,19 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
             title="Render just what feeds this node to see its result, without writing files"
           >
             Run
+          </button>
+        )}
+        {sound && (
+          <button
+            className={`nodrag preview-toggle play-now${playing ? " on" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              actions.play?.(id);
+            }}
+            title={playing ? "Pause" : "Play this sound"}
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            <PlayIcon playing={playing} />
           </button>
         )}
         <button

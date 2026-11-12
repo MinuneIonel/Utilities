@@ -5,7 +5,8 @@
 /** How many items a reader may fall behind the fastest one before the stream waits for it. */
 export const TEE_MAX = 4;
 
-export type Source<T> = (signal?: AbortSignal) => AsyncIterable<T>;
+/** `opts` say how to read the source (e.g. smaller frames for playback). */
+export type Source<T, O = unknown> = (signal?: AbortSignal, opts?: O) => AsyncIterable<T>;
 
 interface Reader<T> {
   queue: T[];
@@ -33,10 +34,13 @@ class Hub<T> {
 
   private source: Source<T>;
   private max: number;
+  /** What the pass was asked for: only readers asking the same share it. */
+  readonly opts: unknown;
 
-  constructor(source: Source<T>, max: number) {
+  constructor(source: Source<T>, max: number, opts?: unknown) {
     this.source = source;
     this.max = max;
+    this.opts = opts;
   }
 
   get joinable() {
@@ -175,14 +179,15 @@ function readerIterator<T>(start: () => { hub: Hub<T>; reader: Reader<T> } | Asy
 /**
  * Shared by timing: readers that start before the first item has gone out share one pass
  * over the source (e.g. two outputs of a frame node read side by side). A reader that starts
- * later starts a new pass, which is right, only slower.
+ * later starts a new pass, which is right, only slower. So does a reader asking with other
+ * `opts`, compared by identity (one playback hands the same object all the way up).
  */
-export function share<T>(source: Source<T>, max = TEE_MAX): Source<T> {
+export function share<T, O = unknown>(source: Source<T, O>, max = TEE_MAX): Source<T, O> {
   let hub: Hub<T> | undefined;
-  return (signal) => ({
+  return (signal, opts) => ({
     [Symbol.asyncIterator]: () =>
       readerIterator(() => {
-        if (!hub?.joinable) hub = new Hub(source, max);
+        if (!hub?.joinable || hub.opts !== opts) hub = new Hub((s) => source(s, opts), max, opts);
         return { hub, reader: hub.add() };
       }, signal),
   });

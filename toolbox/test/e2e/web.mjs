@@ -1,6 +1,7 @@
 // Browser build check (npm run toolbox:web): with no desktop app around, the starter graph still
 // renders and Save still downloads its file, so nothing desktop-only (the scratch folder, native
-// tools) leaks into the browser. Uses the installed Google Chrome; skipped when there is none.
+// tools) leaks into the browser; Simple view's button downloads its file too. Uses the installed
+// Google Chrome; skipped when there is none.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -38,8 +39,12 @@ try {
   page.on("console", (m) => m.type() === "error" && !/^Failed to load resource/.test(m.text()) && errors.push(m.text().slice(0, 300)));
   page.on("response", (r) => r.status() >= 400 && !/\/favicon\.ico$/.test(r.url()) && errors.push(`${r.status()} ${r.url()}`));
   await page.goto(url);
-  await page.waitForSelector(".canvas", { timeout: 60_000 });
-  await page.evaluate(() => localStorage.setItem("toolbox.tutorial", "1"));
+  await page.waitForSelector(".canvas", { state: "attached", timeout: 60_000 });
+  // A new browser opens on Simple view, and Graph view starts with the tour: this part drives the graph.
+  await page.evaluate(() => {
+    localStorage.setItem("toolbox.tutorial", "1");
+    localStorage.setItem("toolbox.mode", "graph");
+  });
   await page.reload();
   await page.waitForSelector(".canvas");
   check("The browser build has no desktop bridge", await page.evaluate(() => !("toolbox" in window)));
@@ -69,6 +74,17 @@ try {
     !!png && download.suggestedFilename() === "dithered.png" && png.subarray(1, 4).toString() === "PNG",
     download ? `${download.suggestedFilename()}, ${png?.length ?? 0} bytes` : `no download; ${errors.join(" | ")}`,
   );
+
+  // Simple view in a browser: no folder to pick, and the button downloads the file.
+  await page.click('.app .mode-switch button:has-text("Simple")');
+  await page.click('.simple-tile[data-workflow="qr-code"]');
+  await page.fill(".simple-text", "https://example.com/from-the-browser");
+  check(
+    "Simple view says files go to the browser's downloads folder, with no folder to pick",
+    (await page.isVisible("text=Your browser saves the files in its downloads folder.")) && !(await page.$(".simple-folder")),
+  );
+  const [qr] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }).catch(() => null), page.click(".simple-action")]);
+  check("…and its button downloads the QR code", qr?.suggestedFilename() === "qr-code.png", qr ? qr.suggestedFilename() : `no download; ${errors.join(" | ")}`);
   check("…with no errors on the page", errors.length === 0, errors.join(" | "));
 } finally {
   await browser.close();

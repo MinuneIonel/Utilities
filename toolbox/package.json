@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Toolbox: wire the Utilities tools together as a node graph",
   "type": "module",
   "main": "electron/main.js",
@@ -26,8 +26,11 @@
     "check:save": "npm run build && node test/e2e/save.mjs",
     "check:local": "npm run build && node test/e2e/local-files.mjs",
     "check:buttons": "npm run build && node test/e2e/buttons.mjs",
+    "check:tabs": "npm run build && node test/e2e/tabs.mjs",
     "check:bigfile": "npm run build && node test/e2e/bigfile.mjs",
+    "check:play": "npm run build && node test/e2e/play.mjs",
     "check:web": "node test/e2e/web.mjs",
+    "check:simple": "npm run build && node test/e2e/simple.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {
@@ -70,6 +73,15 @@
       "package.json"
     ],
     "npmRebuild": false,
+    "fileAssociations": [
+      {
+        "ext": "toolbox",
+        "name": "Toolbox graph",
+        "description": "Toolbox graph",
+        "mimeType": "application/x-toolbox-graph",
+        "role": "Editor"
+      }
+    ],
     "mac": {
       "target": [
         {

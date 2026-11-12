@@ -10,9 +10,11 @@ import type { Graph } from "../runtime/types";
 import type { NodeRuntime, ToolFlowNode } from "../ui/context";
 import type { Webcams } from "../ui/webcam";
 import { OUTPUTS_STORE, readStore, upstreamOf, writeStore, type Flash, type OutputEntry, type SetEdges, type SetNodes } from "./flow";
+import type { Documents } from "./useDocuments";
 
 interface RenderDeps {
-  flow: ReactFlowInstance<ToolFlowNode, Edge>;
+  /** Only asked for the selected node, when there's no Save node to render into. */
+  flow: Pick<ReactFlowInstance<ToolFlowNode, Edge>, "getNodes">;
   client: RuntimeClient;
   webcams: Webcams;
   graphRef: MutableRefObject<Graph>;
@@ -21,16 +23,26 @@ interface RenderDeps {
   runtime: Record<string, NodeRuntime>;
   setNodes: SetNodes;
   setEdges: SetEdges;
-  setRuntime: Dispatch<SetStateAction<Record<string, NodeRuntime>>>;
+  /** One tab's statuses; a Render keeps reporting to its own tab when another is showing. */
+  setRuntimeOf: (scope: string) => Dispatch<SetStateAction<Record<string, NodeRuntime>>>;
   flash: Flash;
   withoutHistory: (change: () => void) => void;
+  /** The tab on screen, and a way to change a tab's nodes whether it's showing or not. */
+  docs: Pick<Documents, "activeId" | "patchDoc">;
+  /** Where the Outputs tray's list is kept between launches; null keeps it for this session only. */
+  outputsStore?: string | null;
 }
 
-export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntime, flash, withoutHistory }: RenderDeps) {
+export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntimeOf, flash, withoutHistory, docs, outputsStore = OUTPUTS_STORE }: RenderDeps) {
+  const { activeId, patchDoc } = docs;
   const [rendering, setRendering] = useState(false);
+  /** The tab whose Render is running. */
+  const [renderingIn, setRenderingIn] = useState<string>();
   const [recording, setRecording] = useState(false);
-  const [outputs, setOutputs] = useState<OutputEntry[]>(() => readStore<{ list: OutputEntry[] }>(OUTPUTS_STORE, { list: [] }).list);
-  useEffect(() => writeStore(OUTPUTS_STORE, { list: outputs }), [outputs]);
+  const [outputs, setOutputs] = useState<OutputEntry[]>(() => (outputsStore ? readStore<{ list: OutputEntry[] }>(outputsStore, { list: [] }).list : []));
+  useEffect(() => {
+    if (outputsStore) writeStore(outputsStore, { list: outputs });
+  }, [outputs, outputsStore]);
 
   // The Render button says "Render & save" when something will be saved, and carries a dot when a result is out of date.
   const hasSave = nodes.some((n) => REGISTRY.get(n.data.type)?.saves);
@@ -38,17 +50,15 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
   hasSaveRef.current = hasSave;
   const stale = Object.values(runtime).some((r) => r?.status === "stale");
 
-  /** What each Save node last wrote, so an unchanged file isn't saved again. */
+  /** What each Save node last wrote, so an unchanged file isn't saved again. Keyed `tab:node`: tabs can share node ids. */
   const savedKeys = useRef(new Map<string, string>());
-  /** The files each Save node wrote this session, the ones it may replace on the next Render. */
+  /** The files each Save node wrote this session, the ones it may replace on the next Render (keyed like savedKeys). */
   const written = useRef(new Map<string, string[]>());
   /** Keeps a Save node's files in its settings too, so they're still its own after a restart. Not an undo step. */
   const rememberSaved = useCallback(
-    (nodeId: string, paths: string[]) =>
-      withoutHistory(() =>
-        setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, params: { ...n.data.params, lastSaved: paths } } } : n))),
-      ),
-    [setNodes, withoutHistory],
+    (scope: string, nodeId: string, paths: string[]) =>
+      patchDoc(scope, (ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, params: { ...n.data.params, lastSaved: paths } } } : n)), withoutHistory),
+    [patchDoc, withoutHistory],
   );
 
   /**
@@ -77,7 +87,10 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         flash(`Added a Save node after ${def!.title}.`);
       }
       const g = only ? upstreamOf(full, only) : full;
+      // The Render belongs to this tab, even if another is showing by the time it's done.
+      const scope = activeId;
       setRendering(true);
+      setRenderingIn(scope);
       // A webcam records from now until Stop.
       const live = g.nodes.some((n) => n.type === "input.webcam") && g.edges.some((e) => g.nodes.find((n) => n.id === e.source)?.type === "input.webcam");
       if (live) {
@@ -85,10 +98,11 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         flash("Recording. Press Stop to finish.");
       }
       setRecording(live);
-      const result = await client.render(g);
+      const result = await client.render(g, scope);
       webcams.stopRecording();
       setRecording(false);
       setRendering(false);
+      setRenderingIn(undefined);
       if (result.error) flash(result.error);
       if (!save) {
         if (!result.error) flash(`Rendered. Press ${hasSaveRef.current ? "Render & save" : "Render"} to write files.`);
@@ -101,7 +115,8 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
       for (const f of result.files) byNode.set(f.nodeId, [...(byNode.get(f.nodeId) ?? []), f]);
       for (const [nodeId, files] of byNode) {
         const key = files[0].key;
-        if (nodeId !== only && key && savedKeys.current.get(nodeId) === key) {
+        const mine = `${scope}:${nodeId}`;
+        if (nodeId !== only && key && savedKeys.current.get(mine) === key) {
           unchanged += files.length;
           continue;
         }
@@ -113,7 +128,7 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
           if (!folder) continue;
         }
         // The files this Save node wrote before are the only ones it may replace.
-        const own = [...(written.current.get(nodeId) ?? []), ...(Array.isArray(node?.params.lastSaved) ? (node.params.lastSaved as string[]) : [])];
+        const own = [...(written.current.get(mine) ?? []), ...(Array.isArray(node?.params.lastSaved) ? (node.params.lastSaved as string[]) : [])];
         const opts = { exists: (node?.params.exists as ExistsPolicy | undefined) ?? "replace-own", own };
         let last = "";
         let keptHere = 0;
@@ -132,17 +147,17 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
           setOutputs((o) => [{ id: newId("o"), name: r.path.split(/[\\/]/).pop() ?? f.name, bytes: f.size, savedTo: r.path }, ...o].slice(0, 30));
         }
         if (!last) continue;
-        if (key) savedKeys.current.set(nodeId, key);
+        if (key) savedKeys.current.set(mine, key);
         if (paths.length && folder) {
-          written.current.set(nodeId, paths);
-          rememberSaved(nodeId, paths);
+          written.current.set(mine, paths);
+          rememberSaved(scope, nodeId, paths);
         }
         const dir = last.split(/[\\/]/).slice(-2, -1)[0] ?? "the folder";
         const savedTo =
           keptHere === files.length ? (files.length > 1 ? `Kept the ${files.length} files already in ${dir}` : `Kept ${last.split(/[\\/]/).pop()}, already there`)
           : files.length > 1 ? `${files.length - keptHere} files in ${dir}${keptHere ? `, kept ${keptHere}` : ""}`
           : last;
-        setRuntime((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
+        setRuntimeOf(scope)((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
       }
       if (result.error) return;
       const count = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
@@ -152,12 +167,12 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         flash(saved ? `Saved ${count(saved)}; ${rest}.` : `Nothing saved: ${rest}.`);
       }
     },
-    [client, flash, flow, graphRef, rememberSaved, rendering, setEdges, setNodes, setRuntime, shapes, webcams],
+    [activeId, client, flash, flow, graphRef, rememberSaved, rendering, setEdges, setNodes, setRuntimeOf, shapes, webcams],
   );
   const saveNode = useCallback((id: string) => void render(id), [render]);
   const runNode = useCallback((id: string) => void render(id, { save: false }), [render]);
   const renderRef = useRef(render);
   renderRef.current = render;
 
-  return { render, renderRef, saveNode, runNode, rendering, recording, outputs, setOutputs, hasSave, stale };
+  return { render, renderRef, saveNode, runNode, rendering, renderingIn, recording, outputs, setOutputs, hasSave, stale };
 }

@@ -39,9 +39,14 @@ export interface Actions {
   saveNode(nodeId: string): void;
   /** Renders what feeds a job node, without writing files. */
   runNode(nodeId: string): void;
+  /** Plays or pauses a node's sound (shown behind the graph while it plays). */
+  play?(nodeId: string): void;
 }
 
 export const ActionsContext = createContext<Actions>({ setNodeFile: () => {}, setNodeFiles: () => {}, togglePreview: () => {}, saveNode: () => {}, runNode: () => {} });
 
 /** The node whose output fills the background, if any. */
 export const PreviewContext = createContext<string | undefined>(undefined);
+
+/** The node playing, if any. */
+export const PlayingContext = createContext<string | undefined>(undefined);

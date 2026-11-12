@@ -7,18 +7,23 @@ import { audioCodec } from "../nodes/audio";
 import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
 import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
+import { isDisk } from "../nodes/source";
 import { ResultCache, evaluate } from "./evaluate";
-import type { Bytes, CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
+import { AckWindow, LATE_MS, nextAction, PlayClock } from "./pacing";
+import type { Bytes, CameraFeed, FrameItem, FrameOptions, Graph, ImageValue, NodeStatus, Value, VideoValue } from "./types";
 
 export type ToWorker =
   /** A dropped file, and where it is on disk in the desktop app. */
   | { type: "asset"; id: string; blob: Blob; path?: string }
-  | { type: "run"; reqId: number; mode: "preview" | "render"; graph: Graph }
+  /** `scope` names the open graph (tab) this is: node ids are only unique within one. */
+  | { type: "run"; reqId: number; mode: "preview" | "render"; graph: Graph; scope: string }
   | { type: "cancel" }
   /** Stops downloads started by pasting a link (they run during preview, where there's no Render to cancel). */
   | { type: "stop-downloads" }
-  /** The window dropped what it was showing (New, Open): send every picture again, even unchanged ones. */
-  | { type: "resend" }
+  /** The window dropped what it was showing for a graph (or all of them): send every picture again, even unchanged ones. */
+  | { type: "resend"; scope?: string }
+  /** A graph was closed: drop what was kept for it. */
+  | { type: "forget"; scope: string }
   /** A webcam frame. `t` is in seconds. */
   | { type: "cam-frame"; id: string; bitmap: ImageBitmap; t: number }
   /** Ends every webcam recording, so Render can finish the files. */
@@ -33,7 +38,15 @@ export type ToWorker =
   | { type: "tool-result"; callId: string; result?: { code: number; files: Record<string, Uint8Array | KeptFile>; log: string }; error?: string }
   | { type: "scratch-result"; callId: string; result?: unknown; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
-  | { type: "tool-progress"; callId: string; fraction: number; label?: string };
+  | { type: "tool-progress"; callId: string; fraction: number; label?: string }
+  /**
+   * Plays a node's output (its `port`) from `at` (0–1 of the way through): small frames paced to
+   * the clock, and its sound. Render stops it.
+   */
+  | { type: "play"; reqId: number; graph: Graph; nodeId: string; port: string; at: number; scope: string }
+  | { type: "play-stop" }
+  /** The window drew a played frame. */
+  | { type: "play-ack"; reqId: number };
 
 export interface SavedFile {
   name: string;
@@ -47,6 +60,8 @@ export interface NodeUpdate {
   type: "node";
   reqId: number;
   mode: "preview" | "render";
+  /** The graph (tab) the node is in. */
+  scope: string;
   id: string;
   status: NodeStatus | "running";
   ms?: number;
@@ -70,6 +85,7 @@ export interface NodeUpdate {
 export interface ProgressUpdate {
   type: "progress";
   reqId: number;
+  scope: string;
   id: string;
   /** 0–1, or -1 when unknown. */
   fraction: number;
@@ -91,7 +107,19 @@ export type ToolRequest =
   | { type: "scratch-call"; callId: string; op: "write"; id: string; chunk: Uint8Array; position: number }
   | { type: "scratch-call"; callId: string; op: "close"; id: string };
 
+/** What playback sends the window. */
+export type PlayMessage =
+  /**
+   * Playback started: how long the output is, whether frames follow (none for a sound), and where
+   * its sound is (a Blob, or a scratch file's URL), starting `start` seconds into that file.
+   */
+  | { type: "play-info"; reqId: number; duration: number; frames: boolean; audio?: { blob?: Blob; url?: string; start: number } }
+  /** A frame to draw now, at `t` seconds; `speed` is below 1 when the graph can't keep up. */
+  | { type: "play-frame"; reqId: number; bitmap: ImageBitmap; t: number; speed: number }
+  | { type: "play-end"; reqId: number; reason: "stopped" | "error"; error?: string };
+
 export type FromWorker =
+  | PlayMessage
   | NodeUpdate
   | ProgressUpdate
   | ToolRequest
@@ -161,6 +189,12 @@ class Feed implements CameraFeed {
 
 const cameras = new Map<string, Feed>();
 
+/**
+ * Marks this worker's tool and scratch-file ids. Simple view runs a second worker beside the
+ * graph's, and the main process keeps both workers' calls in one table by id.
+ */
+const WORKER = Math.random().toString(36).slice(2, 8);
+
 type AnyResult = ToolResult | KeptResult;
 const toolCalls = new Map<string, { resolve(r: AnyResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
 let toolCallN = 0;
@@ -169,7 +203,7 @@ let toolWriteN = 0;
 
 /** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
 function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: AnyResult): void; reject(e: Error): void }) {
-  const callId = `t${++toolCallN}`;
+  const callId = `t${WORKER}.${++toolCallN}`;
   toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
   opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
   post({ type: kind, callId, tool, args, files, keep: opts.keep || undefined });
@@ -181,7 +215,7 @@ let scratchN = 0;
 
 /** One scratch-folder operation, done by the main process through the window. */
 function scratchCall<T>(msg: DistributiveOmit<Extract<ToolRequest, { type: "scratch-call" }>, "type" | "callId">, transfer: Transferable[] = []): Promise<T> {
-  const callId = `s${++scratchN}`;
+  const callId = `s${WORKER}.${++scratchN}`;
   return new Promise<T>((resolve, reject) => {
     scratchCalls.set(callId, { resolve: resolve as (r: unknown) => void, reject });
     post({ ...msg, type: "scratch-call", callId } as ToolRequest, transfer);
@@ -194,7 +228,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * Writes may be in flight together; close waits for all of them first.
  */
 async function createScratchFile(name: string) {
-  const id = `f${++scratchN}`;
+  const id = `f${WORKER}.${++scratchN}`;
   const path = await scratchCall<string>({ op: "open", id, name });
   const pending = new Set<Promise<void>>();
   let failed: Error | undefined;
@@ -240,7 +274,11 @@ const assets = new Map<string, Blob>();
 const cache = new ResultCache();
 // A result on disk that no cached value holds any more (replaced by a newer render, or evicted) is deleted.
 cache.onFree = (paths) => post({ type: "scratch-free", paths });
+/** What each node's last update showed, keyed `scope:id`, so an unchanged picture isn't sent again. */
 const sentKey = new Map<string, string>();
+const forgetSent = (scope: string) => {
+  for (const k of [...sentKey.keys()]) if (k.startsWith(`${scope}:`)) sentKey.delete(k);
+};
 let latestPreview = 0;
 let renderCancelled = false;
 let renderAbort = new AbortController();
@@ -261,7 +299,13 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     assets.set(msg.id, msg.blob);
     if (msg.path) setLocalPath(msg.blob, msg.path);
   }
-  else if (msg.type === "resend") sentKey.clear();
+  else if (msg.type === "resend") {
+    if (msg.scope === undefined) sentKey.clear();
+    else forgetSent(msg.scope);
+  } else if (msg.type === "forget") {
+    forgetSent(msg.scope);
+    cache.forget(msg.scope);
+  }
   else if (msg.type === "stop-downloads") stopDownloads();
   else if (msg.type === "cancel") {
     renderCancelled = true;
@@ -279,11 +323,21 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     feed.expectSound(msg.sound);
   } else if (msg.type === "cam-audio") {
     cameras.get(msg.id)?.setSound(msg.blob);
+  } else if (msg.type === "play") {
+    stopPlay();
+    const s: PlaySession = { reqId: msg.reqId, abort: new AbortController(), acks: new AckWindow() };
+    playing = s;
+    // Waits its turn behind a preview in progress (whose results it then gets from the cache).
+    queue = queue.then(() => startPlay(s, msg));
+  } else if (msg.type === "play-stop") {
+    stopPlay();
+  } else if (msg.type === "play-ack") {
+    if (playing?.reqId === msg.reqId) playing.acks.acked();
   } else if (msg.type === "tools") {
     setModelFetcher(
       (file, onProgress) =>
         new Promise((resolve, reject) => {
-          const callId = `t${++toolCallN}`;
+          const callId = `t${WORKER}.${++toolCallN}`;
           toolCalls.set(callId, { resolve: (r) => resolve((r as ToolResult).files[file]), reject, onProgress });
           post({ type: "model-get", callId, file });
         }),
@@ -353,14 +407,122 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       pruneDownloads(msg.graph);
     }
     else {
+      // Render needs the whole computer. (The window stops playback itself when the graph changes:
+      // a webcam elsewhere in the graph asks for previews all the time without changing anything.)
+      stopPlay();
       renderCancelled = false;
       renderAbort = new AbortController();
     }
-    queue = queue.then(() => run(msg.reqId, msg.mode, msg.graph));
+    queue = queue.then(() => run(msg.reqId, msg.mode, msg.graph, msg.scope));
   }
 };
 
-async function run(reqId: number, mode: "preview" | "render", graph: Graph) {
+/** Longest side of played frames: small enough to keep up, big enough to judge the look. */
+const PLAY_MAX = 960;
+
+interface PlaySession {
+  reqId: number;
+  abort: AbortController;
+  acks: AckWindow;
+}
+let playing: PlaySession | undefined;
+
+function stopPlay() {
+  const s = playing;
+  if (!s) return;
+  playing = undefined;
+  s.abort.abort();
+  post({ type: "play-end", reqId: s.reqId, reason: "stopped" });
+}
+
+function endPlay(s: PlaySession, err: unknown) {
+  if (playing !== s) return;
+  playing = undefined;
+  s.abort.abort();
+  post({ type: "play-end", reqId: s.reqId, reason: "error", error: err instanceof Error ? err.message : String(err) });
+}
+
+async function startPlay(s: PlaySession, msg: Extract<ToWorker, { type: "play" }>) {
+  if (playing !== s) return;
+  let value: Value | undefined;
+  try {
+    // The preview that just ran left everything in the cache, so this is quick.
+    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras }, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => playing !== s });
+    const r = results.get(msg.nodeId);
+    value = r?.outputs[msg.port] ?? Object.values(r?.outputs ?? {})[0];
+    if (!value) throw new Error(r?.error ?? "Nothing to play yet");
+  } catch (err) {
+    return endPlay(s, err);
+  }
+  // Not awaited: frames keep coming while previews and Render queue up as usual (and stop this).
+  void playValue(s, value, msg.at).catch((err) => endPlay(s, err));
+}
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+  });
+
+async function frameBitmap(v: Value): Promise<ImageBitmap> {
+  const img = v.kind === "grid" ? gridToImage(v) : v;
+  if (img.kind !== "image") throw new Error("Only pictures can play");
+  return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+}
+
+/** Streams a video's frames to the window in time (looping), or hands it a sound to play. */
+async function playValue(s: PlaySession, v: Value, at: number) {
+  const { reqId } = s;
+  const signal = s.abort.signal;
+  if (v.kind === "audio") {
+    // The window plays the sound itself; this session just waits to be stopped.
+    post({ type: "play-info", reqId, duration: v.duration ?? 0, frames: false, audio: { blob: new Blob([v.bytes as Uint8Array<ArrayBuffer>], { type: v.mime }), start: 0 } });
+    return;
+  }
+  if (v.kind !== "video" || (v.of !== "image" && v.of !== "grid")) throw new Error("Only videos and sound can play");
+  if (!(v.duration > 0)) throw new Error("This is live already");
+  const video: VideoValue = v;
+  const src = video.audioSource;
+  // A file on disk plays straight from the scratch folder; a dropped file's Blob is cheap to hand over.
+  const audio = src && { ...(isDisk(src) ? { url: src.url } : { blob: src }), start: video.range?.start ?? 0 };
+  post({ type: "play-info", reqId, duration: video.duration, frames: true, audio });
+  let from = at >= 0.995 ? 0 : Math.max(0, at) * video.duration;
+  let prev: PlayClock | undefined;
+  for (;;) {
+    const clock = new PlayClock(from, video.fps, prev);
+    prev = clock;
+    const opts: FrameOptions = { maxSide: PLAY_MAX, from, skipTo: () => clock.skipTo(performance.now()) };
+    let count = 0;
+    let lastPost = performance.now();
+    let lastShown = lastPost;
+    for await (const f of video.frames(signal, opts)) {
+      if (signal.aborted) return;
+      count++;
+      const got = performance.now();
+      if (!clock.started) clock.start(got, f.timestamp);
+      const act = nextAction(clock.at(got) * 1000, f.timestamp * 1000, LATE_MS, got - lastShown);
+      if (act === "skip") continue;
+      if (act === "wait") await sleep(clock.until(got, f.timestamp), signal);
+      // At most MAX_UNACKED frames wait for the window, so bitmaps never pile up.
+      const waitFrom = performance.now();
+      await s.acks.ready(signal);
+      const ackMs = performance.now() - waitFrom;
+      const bitmap = await frameBitmap(f.value);
+      if (signal.aborted) return bitmap.close();
+      post({ type: "play-frame", reqId, bitmap, t: f.timestamp, speed: clock.rate }, [bitmap]);
+      s.acks.sent();
+      const now = performance.now();
+      clock.shown(now, got - lastPost + ackMs);
+      lastPost = lastShown = now;
+    }
+    if (signal.aborted) return;
+    if (!count && !from) throw new Error("No frames to play");
+    // Round again from the start.
+    from = 0;
+  }
+}
+
+async function run(reqId: number, mode: "preview" | "render", graph: Graph, scope: string) {
   // A newer preview makes this one pointless; a render only stops when asked to.
   const cancelled = () => (mode === "preview" ? reqId !== latestPreview : renderCancelled);
   if (cancelled()) return post({ type: "done", reqId, mode });
@@ -373,18 +535,19 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph) {
       cache,
       converters: CONVERTERS,
       cancelled,
+      scope,
       // Previews are quick and constant with a webcam; only Render shows nodes as running.
-      onStart: (id) => mode === "render" && post({ type: "node", reqId, mode, id, status: "running" }),
+      onStart: (id) => mode === "render" && post({ type: "node", reqId, mode, scope, id, status: "running" }),
       onProgress: (id, fraction, label) => {
         // At most ten updates a second per node.
         const now = Date.now();
         if (now - (lastProgress.get(id) ?? 0) < 100) return;
         lastProgress.set(id, now);
-        post({ type: "progress", reqId, id, fraction, label });
+        post({ type: "progress", reqId, scope, id, fraction, label });
       },
       onNode: (id, r) => {
         const saves = !!REGISTRY.get(graph.nodes.find((n) => n.id === id)?.type ?? "")?.saves;
-        pending.push(report(reqId, mode, id, saves, r.status, r.outputs, r.key, r.ms, r.error));
+        pending.push(report(reqId, mode, scope, id, saves, r.status, r.outputs, r.key, r.ms, r.error));
       },
     });
     await Promise.all(pending);
@@ -400,6 +563,7 @@ const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024)
 async function report(
   reqId: number,
   mode: "preview" | "render",
+  scope: string,
   id: string,
   saves: boolean,
   status: NodeStatus,
@@ -408,12 +572,13 @@ async function report(
   ms: number | undefined,
   error: string | undefined,
 ) {
-  const msg: NodeUpdate = { type: "node", reqId, mode, id, status, ms, error };
+  const msg: NodeUpdate = { type: "node", reqId, mode, scope, id, status, ms, error };
   const transfer: Transferable[] = [];
   let first: Value | undefined = Object.values(outputs)[0];
-  const changed = key !== undefined && sentKey.get(id) !== key;
-  if (key === undefined) sentKey.delete(id);
-  else sentKey.set(id, key);
+  const sent = `${scope}:${id}`;
+  const changed = key !== undefined && sentKey.get(sent) !== key;
+  if (key === undefined) sentKey.delete(sent);
+  else sentKey.set(sent, key);
   const sendImage = async (img: ImageValue) => {
     msg.size = { width: img.width, height: img.height };
     if (changed) {
@@ -429,9 +594,9 @@ async function report(
   const later = (draw: () => Promise<ImageValue | undefined>) =>
     void draw()
       .then(async (img) => {
-        if (!img || sentKey.get(id) !== key) return;
+        if (!img || sentKey.get(sent) !== key) return;
         const bitmap = await createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
-        post({ type: "node", reqId, mode, id, status, thumb: true, bitmap, size: { width: img.width, height: img.height } }, [bitmap]);
+        post({ type: "node", reqId, mode, scope, id, status, thumb: true, bitmap, size: { width: img.width, height: img.height } }, [bitmap]);
       })
       .catch(() => undefined);
   if (first?.kind === "video") {

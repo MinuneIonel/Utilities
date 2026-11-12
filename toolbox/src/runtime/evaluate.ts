@@ -1,6 +1,6 @@
 import { share, tee, type TeeSlot } from "./tee.ts";
 import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
-import type { Converter, FrameItem, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
+import type { Converter, FrameItem, FrameOptions, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
 
 type Rendered = { key: string; outputs: Record<string, Value> };
 
@@ -39,7 +39,10 @@ export class ResultCache {
    * count towards the cache's size; once no cached result holds one, it's handed to `onFree`.
    */
   readonly refs = new ScratchRefs();
-  /** The last full-size result of each job node, shown during live preview. */
+  /**
+   * The last full-size result of each job node, shown during live preview. Keyed by node id, or
+   * `scope:id` when the run names a scope (one per open graph, whose node ids may be the same).
+   */
   readonly lastRender: Map<string, Rendered> = new HoldingMap();
 
   constructor(maxBytes = 1 << 30) {
@@ -77,6 +80,11 @@ export class ResultCache {
 
   get size() {
     return this.map.size;
+  }
+
+  /** Drops a closed graph's last renders; their files on disk go once nothing else holds them. */
+  forget(scope: string) {
+    for (const k of [...this.lastRender.keys()]) if (k.startsWith(`${scope}:`)) this.lastRender.delete(k);
   }
 }
 
@@ -177,8 +185,8 @@ function convertVideo(v: VideoValue, conv: Converter, poster: Value): VideoValue
     ...v,
     of: conv.to as VideoValue["of"],
     poster,
-    async *frames(signal) {
-      for await (const f of v.frames(signal)) yield { ...f, value: await conv.convert(f.value) };
+    async *frames(signal, opts) {
+      for await (const f of v.frames(signal, opts)) yield { ...f, value: await conv.convert(f.value) };
     },
   };
 }
@@ -208,9 +216,11 @@ async function mapNode(
   const posters = await runOn(seqKeys.map((k) => (inputs[k] as VideoValue).poster), ctx);
   const frameCtx: RunContext = { ...ctx, mode: "render", progress: undefined };
   // One run per frame for every output: the outputs read side by side (an image and its mask)
-  // share this pass instead of each running the node again.
-  const runs = share<{ res: Record<string, Value>; item: FrameItem }>(async function* (signal) {
-    const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
+  // share this pass instead of each running the node again. Playback's options go on up to the
+  // sources, except skipping late frames when two videos are zipped: each would skip its own.
+  const runs = share<{ res: Record<string, Value>; item: FrameItem }, FrameOptions>(async function* (signal, opts) {
+    const up = opts?.skipTo && seqKeys.length > 1 ? { ...opts, skipTo: undefined } : opts;
+    const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal, up)[Symbol.asyncIterator]());
     try {
       for (;;) {
         const steps = await Promise.all(its.map((it) => it.next()));
@@ -242,8 +252,8 @@ async function mapNode(
       audioSource: lead.audioSource,
       range: lead.range,
       soundLater: lead.soundLater,
-      async *frames(signal) {
-        for await (const { res, item } of runs(signal)) yield { value: res[port.key], timestamp: item.timestamp, duration: item.duration, name: item.name };
+      async *frames(signal, opts) {
+        for await (const { res, item } of runs(signal, opts)) yield { value: res[port.key], timestamp: item.timestamp, duration: item.duration, name: item.name };
       },
     };
   }
@@ -331,6 +341,11 @@ export interface EvaluateOptions {
   onProgress?: (id: string, fraction: number, label?: string) => void;
   /** Returning true stops the run before the next node (a newer request arrived). */
   cancelled?: () => boolean;
+  /**
+   * Which open graph this is. Two graphs can hold nodes with the same ids (the same file opened
+   * twice, say), so each keeps its own last renders. "" (the default) keys them by node id alone.
+   */
+  scope?: string;
 }
 
 /**
@@ -338,7 +353,8 @@ export interface EvaluateOptions {
  * in preview mode, job nodes only show their last rendered result.
  */
 export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
-  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [] } = opts;
+  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [], scope = "" } = opts;
+  const lastOf = (id: string) => (scope ? `${scope}:${id}` : id);
   const results = new Map<string, NodeResult>();
   // Nodes fed, directly or not, by a live node.
   const live = new Set<string>();
@@ -406,7 +422,12 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         const upstream = edge && results.get(edge.source);
         const raw = edge && upstream?.outputs[edge.sourceHandle];
         const slot = edge && raw?.kind === "video" ? slotFor(`${edge.source}:${edge.sourceHandle}`, node.id) : undefined;
-        const value = edge && (slot && raw?.kind === "video" ? { ...raw, frames: slot.iterate, release: slot.release } : raw);
+        // Reading with options (playback) can't join the shared pass: it reads on its own and lets the others go on.
+        const value =
+          edge &&
+          (slot && raw?.kind === "video"
+            ? { ...raw, frames: (signal?: AbortSignal, opts?: FrameOptions) => (opts ? (slot.release(), raw.frames(signal, opts)) : slot.iterate(signal)), release: slot.release }
+            : raw);
         if (!value || !upstream?.key) {
           if (!edge && port.optional) continue;
           missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
@@ -452,7 +473,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         def.kind === "job" ? renderKey : hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, nodeCtxKey) ?? "", ...inputKeys].join("|"));
 
       if (def.kind === "job" && ctx.mode === "preview") {
-        const last = cache.lastRender.get(node.id);
+        const last = cache.lastRender.get(lastOf(node.id));
         if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
         // A recording can't be "out of date": every camera frame is new.
         else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
@@ -460,10 +481,10 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         return;
       }
 
-      const last = def.kind === "job" ? cache.lastRender.get(node.id) : undefined;
+      const last = def.kind === "job" ? cache.lastRender.get(lastOf(node.id)) : undefined;
       const hit = cache.get(key) ?? (last?.key === key ? last.outputs : undefined);
       if (hit) {
-        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs: hit });
+        if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs: hit });
         finish(node.id, { status: "cached", outputs: hit, key, renderKey });
         return;
       }
@@ -481,7 +502,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
           ? await mapNode(def, node.params, inputs, seqKeys, frameConvs, nodeCtx)
           : await def.run(inputs, node.params, nodeCtx);
         if (!live.has(node.id)) cache.set(key, outputs);
-        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
+        if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs });
         finish(node.id, { status: "ok", outputs, key, renderKey, ms: Date.now() - t0 });
       } catch (err) {
         if (ctx.signal?.aborted) {

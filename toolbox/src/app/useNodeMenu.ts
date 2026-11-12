@@ -7,7 +7,8 @@ import { CONVERTERS, NODE_DEFS, REGISTRY } from "../nodes";
 import { canConnect, type outputShapes } from "../runtime/evaluate";
 import type { NodeDef } from "../runtime/types";
 import type { ToolFlowNode } from "../ui/context";
-import { hasContent, inputPort, MOD, NODE_HALF_WIDTH, toFlow, type Flash, type MenuState, type Point, type SetEdges, type SetNodes } from "./flow";
+import { inputPort, NODE_HALF_WIDTH, toFlow, type Flash, type MenuState, type Point, type SetEdges, type SetNodes } from "./flow";
+import type { Documents } from "./useDocuments";
 
 export function useNodeMenu(
   flow: ReactFlowInstance<ToolFlowNode, Edge>,
@@ -16,6 +17,7 @@ export function useNodeMenu(
   setNodes: SetNodes,
   setEdges: SetEdges,
   flash: Flash,
+  docs: Pick<Documents, "activeId" | "openDoc" | "isUntouched">,
 ) {
   const [menu, setMenu] = useState<MenuState | null>(null);
 
@@ -118,37 +120,41 @@ export function useNodeMenu(
   );
   const closeMenu = useCallback(() => setMenu(null), []);
 
-  // A workflow takes over a graph that holds nothing of yours yet; otherwise it drops in under what's there.
-  // Its first node is selected so the inspector shows what to fill in.
+  // A workflow opens in a tab of its own, named after it, so workflows don't pile up on one canvas.
+  // It takes the place of a starter graph nobody has touched. `insert` drops it in under what's
+  // in this graph instead, for chaining one onto another. Its first node is selected so the
+  // inspector shows what to fill in.
+  const { openDoc, isUntouched, activeId } = docs;
   const pickWorkflow = useCallback(
-    (id: string) => {
+    (id: string, insert = false) => {
       const w = WORKFLOWS.find((x) => x.id === id);
       if (!menu || !w) return;
       setMenu(null);
-      const current = flow.getNodes();
-      const replace = !hasContent(current);
-      const box = (n: { position: Point; measured?: { width?: number; height?: number } }) => ({
-        l: n.position.x,
-        t: n.position.y,
-        r: n.position.x + (n.measured?.width ?? 2 * NODE_HALF_WIDTH),
-        b: n.position.y + (n.measured?.height ?? 160),
-      });
-      const existing = replace ? [] : current.map(box);
-      let placed = placeWorkflow(w, menu.at);
-      const covers = placed.nodes.map(box).some((a) => existing.some((e) => a.l < e.r && e.l < a.r && a.t < e.b && e.t < a.b));
-      if (covers) {
-        placed = placeWorkflow(w, { x: Math.min(...existing.map((e) => e.l)), y: Math.max(...existing.map((e) => e.b)) + 80 });
-      }
-      const f = toFlow(placed);
-      f.nodes[0].selected = true;
-      if (replace) {
-        setNodes(f.nodes);
-        setEdges(f.edges);
+      let first: NodeDef;
+      if (!insert) {
+        const placed = placeWorkflow(w, { x: 40, y: 120 });
+        first = REGISTRY.get(placed.nodes[0].type)!;
+        openDoc({ name: w.title, graph: placed, select: [placed.nodes[0].id], replace: isUntouched() ? activeId : undefined });
       } else {
+        const box = (n: { position: Point; measured?: { width?: number; height?: number } }) => ({
+          l: n.position.x,
+          t: n.position.y,
+          r: n.position.x + (n.measured?.width ?? 2 * NODE_HALF_WIDTH),
+          b: n.position.y + (n.measured?.height ?? 160),
+        });
+        const existing = flow.getNodes().map(box);
+        let placed = placeWorkflow(w, menu.at);
+        const covers = placed.nodes.map(box).some((a) => existing.some((e) => a.l < e.r && e.l < a.r && a.t < e.b && e.t < a.b));
+        if (covers) {
+          placed = placeWorkflow(w, { x: Math.min(...existing.map((e) => e.l)), y: Math.max(...existing.map((e) => e.b)) + 80 });
+        }
+        const f = toFlow(placed);
+        f.nodes[0].selected = true;
         setNodes((ns) => [...ns.map((x) => ({ ...x, selected: false })), ...f.nodes]);
         setEdges((es) => [...es, ...f.edges]);
+        first = REGISTRY.get(f.nodes[0].data.type)!;
+        setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
       }
-      const first = REGISTRY.get(f.nodes[0].data.type)!;
       const todo =
         first.type === "input.download" ? "paste a link in the inspector, then Render"
         : first.type === "input.text" ? "type or paste your text, then Render"
@@ -156,10 +162,9 @@ export function useNodeMenu(
         : first.type === "input.qr" ? "type your link or text in the inspector, then Render"
         : first.type === "input.webcam" ? "allow the camera, press Render to record and Stop to finish"
         : "drop in your file, then Render";
-      flash(`${w.title}: ${todo}.${replace && current.length ? ` ${MOD}Z brings back the old graph.` : ""}`);
-      setTimeout(() => flow.fitView({ nodes: f.nodes.map((n) => ({ id: n.id })), padding: 0.25, maxZoom: 1, duration: 300 }), 50);
+      flash(`${w.title}: ${todo}.`);
     },
-    [flash, flow, menu, setEdges, setNodes],
+    [activeId, flash, flow, isUntouched, menu, openDoc, setEdges, setNodes],
   );
 
   return { menu, addNode, openMenu, closeMenu, menuDefs, pickFromMenu, pickWorkflow, onConnect, onConnectEnd, isValidConnection };

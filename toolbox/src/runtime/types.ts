@@ -73,6 +73,19 @@ export interface FrameItem {
   name?: string;
 }
 
+/** How to read a video's frames for playback rather than for Render. */
+export interface FrameOptions {
+  /** Frames no larger than this on their longest side (with `scale` set), as in the live preview. */
+  maxSide?: number;
+  /** Start this many seconds in. Timestamps still count from the start of the video. */
+  from?: number;
+  /**
+   * The play clock, in seconds: frames that start before it are already too late to show, so a
+   * source may skip them without drawing them (and every frame node after it is spared too).
+   */
+  skipTo?: () => number;
+}
+
 /**
  * A sequence of frames: a video file, a webcam, the pages of a PDF, or any of
  * those after a frame node has been mapped over every frame.
@@ -101,8 +114,11 @@ export interface VideoValue {
   soundLater?: () => Promise<Blob | undefined>;
   /** Set only by input nodes, when frames are still the file's own (lets encoders skip decoding). */
   origin?: MediaFile;
-  /** Full-size frames in order. Each call starts from the beginning. */
-  frames(signal?: AbortSignal): AsyncIterable<FrameItem>;
+  /**
+   * Full-size frames in order. Each call starts from the beginning, or from `opts.from`; sources
+   * that can't make smaller frames or skip ahead ignore those options.
+   */
+  frames(signal?: AbortSignal, opts?: FrameOptions): AsyncIterable<FrameItem>;
   /**
    * Set on a reader's share of frames that other job nodes read at the same time: says this
    * reader won't read them (a cache hit, a missing input, an error), so the others don't wait for it.
