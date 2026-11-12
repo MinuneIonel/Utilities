@@ -7,6 +7,9 @@ import type { RuntimeClient } from "../runtime/client";
 import type { Graph, Params } from "../runtime/types";
 import type { SetNodes } from "./flow";
 
+/** Files read back for one node, and the path (or paths) they were read for. */
+type Patch = { for: string | string[]; params: Params };
+
 export function useAssets(client: RuntimeClient, setNodes: SetNodes, withoutHistory: (change: () => void) => void, graphRef: MutableRefObject<Graph>) {
   const setParams = useCallback(
     (id: string, patch: Params) =>
@@ -44,14 +47,14 @@ export function useAssets(client: RuntimeClient, setNodes: SetNodes, withoutHist
       if (!bridge) return 0;
       let missing = 0;
       const patches = await Promise.all(
-        g.nodes.map(async (n): Promise<[string, Params] | undefined> => {
+        g.nodes.map(async (n): Promise<[string, Patch] | undefined> => {
           const p = n.params;
           if (typeof p.path === "string" && p.path && !p.assetId) {
             const f = await reopenFile(p.path, String(p.name ?? ""));
             if (!f) return void missing++;
             const assetId = newId("a");
             client.addAsset(assetId, f, p.path);
-            return [n.id, { assetId }];
+            return [n.id, { for: p.path, params: { assetId } }];
           }
           const paths = Array.isArray(p.paths) ? (p.paths as string[]) : [];
           if (paths.length && !(p.assetIds as unknown[] | undefined)?.length) {
@@ -63,16 +66,27 @@ export function useAssets(client: RuntimeClient, setNodes: SetNodes, withoutHist
               client.addAsset(id, f!, paths[i]);
               return id;
             });
-            return [n.id, { assetIds }];
+            return [n.id, { for: paths, params: { assetIds } }];
           }
           return undefined;
         }),
       );
-      const found = new Map(patches.filter((x): x is [string, Params] => !!x));
+      const found = new Map(patches.filter((x): x is [string, Patch] => !!x));
       if (!found.size) return missing;
+      // Reading takes a while, and another graph may have been opened meanwhile, with a node of the
+      // same id. A file only goes back into a node that still names it and hasn't got it already.
+      const stillWants = (params: Params, patch: Patch) =>
+        typeof patch.for === "string"
+          ? params.path === patch.for && !params.assetId
+          : Array.isArray(params.paths) && JSON.stringify(params.paths) === JSON.stringify(patch.for) && !(params.assetIds as unknown[] | undefined)?.length;
       // Files coming back isn't something to undo.
       withoutHistory(() =>
-        setNodes((ns) => ns.map((n) => (found.has(n.id) ? { ...n, data: { ...n.data, params: { ...n.data.params, ...found.get(n.id) } } } : n))),
+        setNodes((ns) =>
+          ns.map((n) => {
+            const patch = found.get(n.id);
+            return patch && stillWants(n.data.params, patch) ? { ...n, data: { ...n.data, params: { ...n.data.params, ...patch.params } } } : n;
+          }),
+        ),
       );
       return missing;
     },
