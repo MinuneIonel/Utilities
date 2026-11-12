@@ -4,6 +4,7 @@ import fontUrl from "dejavu-fonts-ttf/ttf/DejaVuSans.ttf?url";
 import type { NumberPosition, Plan, RasterPage, Source } from "../../../pdf/src/engine";
 import { parseRanges } from "../../../pdf/src/engine/ranges";
 import type { Converter, DocumentValue, FileValue, FrameItem, ImageValue, NodeDef, Value, VideoValue } from "../runtime/types";
+import { fromBytes } from "./bytes";
 import { encodeImage } from "./image";
 import { frameImage } from "./video";
 
@@ -303,7 +304,7 @@ export const PDF_CONVERTERS: Converter[] = [
     label: "pdf",
     async convert(v) {
       const d = v as DocumentValue;
-      const f: FileValue = { kind: "file", name: /\.pdf$/i.test(d.name) ? d.name : `${baseName(d.name)}.pdf`, mime: "application/pdf", bytes: d.bytes };
+      const f: FileValue = { kind: "file", name: /\.pdf$/i.test(d.name) ? d.name : `${baseName(d.name)}.pdf`, mime: "application/pdf", data: fromBytes(d.bytes) };
       return f;
     },
   },

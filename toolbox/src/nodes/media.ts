@@ -1,5 +1,6 @@
 import type { ImageFormat, ImageJob, Resize, Rotation } from "../../../media/src/engine/types";
 import type { ImageValue, NodeDef } from "../runtime/types";
+import { fromBytes } from "./bytes";
 import { gpu } from "./gpu";
 
 /** Media Lab's image engine (the jsquash codecs), loaded on first use. */
@@ -165,6 +166,6 @@ export const imageEncode: NodeDef = {
     const src = inputs.image as ImageValue;
     const r = await (await engine()).processImage(src, { ...job(params, src.width, src.height), crop: undefined, rotate: 0, flipH: false, flipV: false, resize: { mode: "none" } });
     const base = String(params.name || "image").replace(/[\\/:*?"<>|]+/g, "-");
-    return { file: { kind: "file", name: `${base}.${r.ext}`, mime: r.mime, bytes: r.bytes } };
+    return { file: { kind: "file", name: `${base}.${r.ext}`, mime: r.mime, data: fromBytes(r.bytes) } };
   },
 };

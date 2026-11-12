@@ -4,10 +4,11 @@ import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
-import { setLocalPath, setModelFetcher, setNativeTools, type NativeTool, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
+import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { ResultCache, evaluate } from "./evaluate";
-import type { CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
+import type { Bytes, CameraFeed, FrameItem, Graph, ImageValue, NodeStatus, Value } from "./types";
 
 export type ToWorker =
   /** A dropped file, and where it is on disk in the desktop app. */
@@ -28,14 +29,17 @@ export type ToWorker =
   | { type: "cam-audio"; id: string; blob?: Blob }
   /** Which native tools the desktop app has (none in a browser). */
   | { type: "tools"; ffmpeg: boolean; ytdlp: boolean; sips?: boolean; encoders?: string[]; hwaccels?: string[] }
-  | { type: "tool-result"; callId: string; result?: ToolResult; error?: string }
+  /** The files are bytes, or paths in the scratch folder when the call asked to keep them. */
+  | { type: "tool-result"; callId: string; result?: { code: number; files: Record<string, Uint8Array | KeptFile>; log: string }; error?: string }
+  | { type: "scratch-result"; callId: string; result?: unknown; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string };
 
 export interface SavedFile {
   name: string;
   mime: string;
-  bytes: Uint8Array;
+  /** In memory (its buffer is handed to the window), or a path in the scratch folder the main process copies from. */
+  data: Bytes;
   key?: string;
 }
 
@@ -74,15 +78,26 @@ export interface ProgressUpdate {
 
 /** Asks the window to run a native tool through the desktop app. */
 export type ToolRequest =
-  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
-  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile> }
+  /** `keep`: the tool's new files stay in the scratch folder and come back as paths. */
+  | { type: "tool-run"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile>; keep?: boolean }
+  | { type: "tool-open"; callId: string; tool: NativeTool; args: string[]; files: Record<string, ToolFile>; keep?: boolean }
   | { type: "tool-write"; callId: string; writeId: number; bytes: Uint8Array }
   | { type: "tool-end"; callId: string }
   | { type: "tool-cancel"; callId: string }
   /** A model file from the desktop app's folder (downloaded there the first time). */
-  | { type: "model-get"; callId: string; file: string };
+  | { type: "model-get"; callId: string; file: string }
+  /** A file written into the scratch folder chunk by chunk (an encoded video); answered with scratch-result. */
+  | { type: "scratch-call"; callId: string; op: "open"; id: string; name: string }
+  | { type: "scratch-call"; callId: string; op: "write"; id: string; chunk: Uint8Array; position: number }
+  | { type: "scratch-call"; callId: string; op: "close"; id: string };
 
-export type FromWorker = NodeUpdate | ProgressUpdate | ToolRequest | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string };
+export type FromWorker =
+  | NodeUpdate
+  | ProgressUpdate
+  | ToolRequest
+  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string }
+  /** Scratch files no cached result holds any more: the desktop app deletes them. */
+  | { type: "scratch-free"; paths: string[] };
 
 /** The worker's end of a webcam: the newest frame, and recordings that stream frames as they arrive. */
 class Feed implements CameraFeed {
@@ -146,18 +161,71 @@ class Feed implements CameraFeed {
 
 const cameras = new Map<string, Feed>();
 
-const toolCalls = new Map<string, { resolve(r: ToolResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
+type AnyResult = ToolResult | KeptResult;
+const toolCalls = new Map<string, { resolve(r: AnyResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
 let toolCallN = 0;
 const toolWrites = new Map<number, { resolve(): void; reject(e: Error): void }>();
 let toolWriteN = 0;
 
 /** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
-function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: ToolResult): void; reject(e: Error): void }) {
+function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: AnyResult): void; reject(e: Error): void }) {
   const callId = `t${++toolCallN}`;
   toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
   opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
-  post({ type: kind, callId, tool, args, files });
+  post({ type: kind, callId, tool, args, files, keep: opts.keep || undefined });
   return callId;
+}
+
+const scratchCalls = new Map<string, { resolve(r: unknown): void; reject(e: Error): void }>();
+let scratchN = 0;
+
+/** One scratch-folder operation, done by the main process through the window. */
+function scratchCall<T>(msg: DistributiveOmit<Extract<ToolRequest, { type: "scratch-call" }>, "type" | "callId">, transfer: Transferable[] = []): Promise<T> {
+  const callId = `s${++scratchN}`;
+  return new Promise<T>((resolve, reject) => {
+    scratchCalls.set(callId, { resolve: resolve as (r: unknown) => void, reject });
+    post({ ...msg, type: "scratch-call", callId } as ToolRequest, transfer);
+  });
+}
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/**
+ * A file the worker writes into the scratch folder (an encoder's output streamed to disk).
+ * Writes may be in flight together; close waits for all of them first.
+ */
+async function createScratchFile(name: string) {
+  const id = `f${++scratchN}`;
+  const path = await scratchCall<string>({ op: "open", id, name });
+  const pending = new Set<Promise<void>>();
+  let failed: Error | undefined;
+  let closed = false;
+  const settle = () => Promise.allSettled([...pending]);
+  return {
+    path,
+    write(data: Uint8Array, position: number) {
+      if (failed) return Promise.reject(failed);
+      // Copied once and handed over: Mediabunny may reuse its buffer, and a view would otherwise send all of it.
+      const chunk = data.slice();
+      const p = scratchCall<void>({ op: "write", id, chunk, position }, [chunk.buffer]).catch((e: Error) => {
+        failed ??= e;
+        throw e;
+      });
+      pending.add(p);
+      void p.finally(() => pending.delete(p)).catch(() => undefined);
+      return p;
+    },
+    async close() {
+      await settle();
+      if (failed) throw failed;
+      closed = true;
+      const r = await scratchCall<{ path: string; size: number }>({ op: "close", id });
+      return fromDisk(r.path, r.size);
+    },
+    async abort() {
+      await settle();
+      if (!closed) post({ type: "scratch-free", paths: [path] });
+    },
+  };
 }
 
 function bitmapToImage(bmp: ImageBitmap): ImageValue {
@@ -170,6 +238,8 @@ function bitmapToImage(bmp: ImageBitmap): ImageValue {
 
 const assets = new Map<string, Blob>();
 const cache = new ResultCache();
+// A result on disk that no cached value holds any more (replaced by a newer render, or evicted) is deleted.
+cache.onFree = (paths) => post({ type: "scratch-free", paths });
 const sentKey = new Map<string, string>();
 let latestPreview = 0;
 let renderCancelled = false;
@@ -214,10 +284,20 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       (file, onProgress) =>
         new Promise((resolve, reject) => {
           const callId = `t${++toolCallN}`;
-          toolCalls.set(callId, { resolve: (r) => resolve(r.files[file]), reject, onProgress });
+          toolCalls.set(callId, { resolve: (r) => resolve((r as ToolResult).files[file]), reject, onProgress });
           post({ type: "model-get", callId, file });
         }),
     );
+    // Only the desktop app sends "tools", and it always has a scratch folder.
+    setScratchFiles({
+      create: createScratchFile,
+      // Files a node made along the way; one a cached result holds stays.
+      free: (paths) => {
+        const unheld = paths.filter((p) => cache.refs.count(p) === 0);
+        if (unheld.length) post({ type: "scratch-free", paths: unheld });
+      },
+      hold: (path) => cache.refs.retain([path]),
+    });
     const { ffmpeg, ytdlp } = msg;
     const sips = !!msg.sips;
     setNativeTools(
@@ -228,10 +308,12 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
             sips,
             encoders: new Set(msg.encoders ?? []),
             hwaccels: new Set(msg.hwaccels ?? []),
-            run: (tool, args, files, opts = {}) => new Promise((resolve, reject) => void callTool("tool-run", tool, args, files, opts, { resolve, reject })),
-            open(tool, args, files, opts = {}): ToolStream {
+            // With keep, the result's files are paths in the scratch folder (see NativeTools' overloads).
+            run: ((tool, args, files, opts = {}) =>
+              new Promise<AnyResult>((resolve, reject) => void callTool("tool-run", tool, args, files, opts, { resolve, reject }))) as NativeTools["run"],
+            open: ((tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions = {}): ToolStream<AnyResult> => {
               let callId = "";
-              const done = new Promise<ToolResult>((resolve, reject) => (callId = callTool("tool-open", tool, args, files, opts, { resolve, reject })));
+              const done = new Promise<AnyResult>((resolve, reject) => (callId = callTool("tool-open", tool, args, files, opts, { resolve, reject })));
               return {
                 done,
                 // Each frame is copied on its way to the main process, so the caller's buffer stays usable.
@@ -243,14 +325,19 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
                   }),
                 end: () => post({ type: "tool-end", callId }),
               };
-            },
+            }) as NativeTools["open"],
           }
         : undefined,
     );
+  } else if (msg.type === "scratch-result") {
+    const call = scratchCalls.get(msg.callId);
+    scratchCalls.delete(msg.callId);
+    if (msg.error) call?.reject(new Error(msg.error));
+    else call?.resolve(msg.result);
   } else if (msg.type === "tool-result") {
     const call = toolCalls.get(msg.callId);
     toolCalls.delete(msg.callId);
-    if (msg.result) call?.resolve(msg.result);
+    if (msg.result) call?.resolve(msg.result as AnyResult);
     else call?.reject(new Error(msg.error ?? "The tool failed"));
   } else if (msg.type === "tool-written") {
     const w = toolWrites.get(msg.writeId);
@@ -364,20 +451,21 @@ async function report(
     const a = first;
     if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
-      msg.file = { name: first.name, mime: first.mime, bytes: first.bytes.slice(), key };
-      transfer.push(msg.file.bytes.buffer);
+      const bytes = first.bytes.slice();
+      msg.file = { name: first.name, mime: first.mime, data: fromBytes(bytes), key };
+      transfer.push(bytes.buffer);
     }
   } else if (first?.kind === "document") {
     msg.info = `${first.pageCount} page${first.pageCount === 1 ? "" : "s"} · ${kb(first.bytes.byteLength)}`;
     const d = first;
     if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {
-    msg.fileInfo = { name: first.name, bytes: first.bytes.byteLength };
-    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + f.bytes.byteLength, 0))}`;
+    msg.fileInfo = { name: first.name, bytes: sizeOf(first.data) };
+    if (first.batch) msg.info = `${first.batch.length} files · ${kb(first.batch.reduce((n, f) => n + sizeOf(f.data), 0))}`;
     // Show encoded images as they decode, so compression artefacts are visible.
-    if (changed && first.mime.startsWith("image/")) {
+    if (changed && first.mime.startsWith("image/") && sizeOf(first.data) <= READ_LIMIT) {
       try {
-        msg.bitmap = await createImageBitmap(new Blob([first.bytes as Uint8Array<ArrayBuffer>], { type: first.mime }));
+        msg.bitmap = await createImageBitmap(await asBlob(first.data, first.mime));
         msg.size = { width: msg.bitmap.width, height: msg.bitmap.height };
         transfer.push(msg.bitmap);
       } catch {
@@ -385,8 +473,9 @@ async function report(
       }
     }
     if (mode === "render" && saves) {
-      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, bytes: f.bytes.slice(), key }));
-      for (const f of msg.files) transfer.push(f.bytes.buffer);
+      // Bytes in memory are copied and handed over; a file on disk goes as its path, and the main process copies it.
+      msg.files = (first.batch ?? [first]).map((f) => ({ name: f.name, mime: f.mime, data: f.data.in === "memory" ? fromBytes(f.data.bytes.slice()) : f.data, key }));
+      for (const f of msg.files) if (f.data.in === "memory") transfer.push(f.data.bytes.buffer);
     }
   }
   post(msg, transfer);

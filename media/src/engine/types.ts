@@ -75,6 +75,8 @@ export interface VideoJob extends Transform {
 
 export interface EncodedFile {
   bytes: Uint8Array;
+  /** Written to the target the caller passed (RunOptions.target) instead: `bytes` is empty. */
+  streamed?: boolean;
   mime: string;
   ext: string;
   width: number;

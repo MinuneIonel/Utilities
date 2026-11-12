@@ -16,6 +16,8 @@ import {
   Quality,
   WebMOutputFormat,
   type OutputFormat,
+  type Source,
+  type Target,
   type VideoCodec,
 } from "mediabunny";
 import { ffmpegProbe, ffmpegVideo } from "./ffmpeg";
@@ -44,6 +46,12 @@ export interface VideoInfo {
 export interface RunOptions {
   onProgress?: (p: Progress) => void;
   signal?: AbortSignal;
+  /**
+   * Where Mediabunny writes the file instead of memory (e.g. a StreamTarget to disk). MP4 and MOV
+   * then skip the in-memory fast start, and the result's `bytes` are empty with `streamed` set.
+   * The ffmpeg.wasm fallback ignores it and returns bytes as usual.
+   */
+  target?: () => Target;
 }
 
 export async function probeVideo(file: Blob): Promise<VideoInfo> {
@@ -88,23 +96,31 @@ export function targetBitrate(job: VideoJob, seconds: number): number | undefine
   return undefined;
 }
 
-export async function processVideo(file: Blob, info: VideoInfo, job: VideoJob, opts: RunOptions = {}): Promise<EncodedFile> {
-  if (job.container === "gif" || info.reader === "ffmpeg") return ffmpegVideo(file, info, job, opts);
+/**
+ * `file` is a Blob, or (for a file Mediabunny reads some other way, such as by URL) a function
+ * making its input source; the ffmpeg.wasm fallback needs a Blob, so it's skipped then.
+ */
+export async function processVideo(file: Blob | (() => Source), info: VideoInfo, job: VideoJob, opts: RunOptions = {}): Promise<EncodedFile> {
+  const blob = file instanceof Blob ? file : undefined;
+  if (job.container === "gif" || info.reader === "ffmpeg") {
+    if (!blob) throw new Error("This video can't be converted here.");
+    return ffmpegVideo(blob, info, job, opts);
+  }
   try {
     return await mediabunnyVideo(file, info, job, opts);
   } catch (e) {
-    if (e instanceof ConversionCanceledError || opts.signal?.aborted) throw e;
+    if (e instanceof ConversionCanceledError || opts.signal?.aborted || !blob) throw e;
     console.warn("Mediabunny failed, falling back to ffmpeg.wasm:", e);
     opts.onProgress?.({ fraction: -1, label: "Retrying with ffmpeg.wasm…" });
-    return ffmpegVideo(file, info, job, opts);
+    return ffmpegVideo(blob, info, job, opts);
   }
 }
 
-async function mediabunnyVideo(file: Blob, info: VideoInfo, job: VideoJob, opts: RunOptions): Promise<EncodedFile> {
+async function mediabunnyVideo(file: Blob | (() => Source), info: VideoInfo, job: VideoJob, opts: RunOptions): Promise<EncodedFile> {
   const container = job.container as Exclude<VideoContainer, "gif">;
   const format: OutputFormat =
-    container === "mp4" ? new Mp4OutputFormat({ fastStart: "in-memory" })
-    : container === "mov" ? new MovOutputFormat({ fastStart: "in-memory" })
+    container === "mp4" ? new Mp4OutputFormat({ fastStart: opts.target ? false : "in-memory" })
+    : container === "mov" ? new MovOutputFormat({ fastStart: opts.target ? false : "in-memory" })
     : container === "webm" ? new WebMOutputFormat()
     : new MkvOutputFormat();
 
@@ -121,8 +137,8 @@ async function mediabunnyVideo(file: Blob, info: VideoInfo, job: VideoJob, opts:
 
   const quality = bitrate ? new Quality({ bitrate }) : job.rate.mode === "quality" ? new Quality(job.rate.level) : undefined;
 
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
-  const target = new BufferTarget();
+  const input = new Input({ source: file instanceof Blob ? new BlobSource(file) : file(), formats: ALL_FORMATS });
+  const target = opts.target?.() ?? new BufferTarget();
   const output = new Output({ format, target });
   const conversion = await Conversion.init({
     input,
@@ -161,5 +177,6 @@ async function mediabunnyVideo(file: Blob, info: VideoInfo, job: VideoJob, opts:
     opts.signal?.removeEventListener("abort", onAbort);
   }
   const meta = VIDEO_CONTAINERS[container];
-  return { bytes: new Uint8Array(target.buffer!), mime: meta.mime, ext: meta.ext, width: g.width, height: g.height, via: `Mediabunny · ${codec}` };
+  const bytes = target instanceof BufferTarget ? new Uint8Array(target.buffer!) : new Uint8Array(0);
+  return { bytes, streamed: !(target instanceof BufferTarget) || undefined, mime: meta.mime, ext: meta.ext, width: g.width, height: g.height, via: `Mediabunny · ${codec}` };
 }

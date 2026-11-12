@@ -32,11 +32,34 @@ export interface GridValue {
   glyphs: string[];
 }
 
+/**
+ * Where a file's bytes are: in memory, or in Toolbox's scratch folder on disk (desktop app only,
+ * for big results such as encoded videos). Helpers in nodes/bytes.ts work with either.
+ */
+export type Bytes = { in: "memory"; bytes: Uint8Array } | { in: "disk"; path: string; size: number };
+
+/**
+ * A video or sound file in the scratch folder (a download, a converted copy, an encoded video),
+ * read through the desktop app's `url` a range at a time instead of whole.
+ */
+export interface DiskMedia {
+  kind: "disk";
+  path: string;
+  size: number;
+  name: string;
+  /** MIME type. */
+  type: string;
+  url: string;
+}
+
+/** A media file a node reads: a Blob (a dropped file) or a file on disk (see nodes/source.ts). */
+export type MediaFile = Blob | DiskMedia;
+
 export interface FileValue {
   kind: "file";
   name: string;
   mime: string;
-  bytes: Uint8Array;
+  data: Bytes;
   /** Every file a Save node writes when it was fed a list (this file is the first of them). */
   batch?: FileValue[];
 }
@@ -68,7 +91,7 @@ export interface VideoValue {
   /** The frame at the playhead: preview size during live preview. */
   poster: Value;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
-  audioSource?: Blob;
+  audioSource?: MediaFile;
   /**
    * The part of `origin` and `audioSource` the frames come from (a trimmed Video file), in the file's seconds.
    * Frame timestamps still start at 0.
@@ -77,9 +100,14 @@ export interface VideoValue {
   /** Sound recorded alongside live frames (a webcam's microphone), ready once the frames end. */
   soundLater?: () => Promise<Blob | undefined>;
   /** Set only by input nodes, when frames are still the file's own (lets encoders skip decoding). */
-  origin?: Blob;
+  origin?: MediaFile;
   /** Full-size frames in order. Each call starts from the beginning. */
   frames(signal?: AbortSignal): AsyncIterable<FrameItem>;
+  /**
+   * Set on a reader's share of frames that other job nodes read at the same time: says this
+   * reader won't read them (a cache hit, a missing input, an error), so the others don't wait for it.
+   */
+  release?(): void;
 }
 
 /** Encoded audio (any container ffmpeg reads, including a video file's sound). */

@@ -2,7 +2,11 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("toolbox", {
-  saveFile: (name, bytes, folder, opts) => ipcRenderer.invoke("save-file", name, bytes, folder, opts),
+  saveFile: (name, data, folder, opts) => ipcRenderer.invoke("save-file", name, data, folder, opts),
+  scratchOpen: (id, name) => ipcRenderer.invoke("scratch-open", id, name),
+  scratchWrite: (id, chunk, position) => ipcRenderer.invoke("scratch-write", id, chunk, position),
+  scratchClose: (id) => ipcRenderer.invoke("scratch-close", id),
+  scratchDelete: (paths) => ipcRenderer.invoke("scratch-delete", paths),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
@@ -28,8 +32,8 @@ contextBridge.exposeInMainWorld("toolbox", {
   adoptAutosave: (text) => ipcRenderer.invoke("adopt-autosave", text),
   onMenu: (handler) => ipcRenderer.on("menu", (_e, command) => handler(command)),
   toolsInfo: () => ipcRenderer.invoke("tools-info"),
-  runTool: (id, tool, args, files) => ipcRenderer.invoke("tool-run", id, tool, args, files),
-  openTool: (id, tool, args, files) => ipcRenderer.invoke("tool-open", id, tool, args, files),
+  runTool: (id, tool, args, files, opts) => ipcRenderer.invoke("tool-run", id, tool, args, files, opts),
+  openTool: (id, tool, args, files, opts) => ipcRenderer.invoke("tool-open", id, tool, args, files, opts),
   writeTool: (id, bytes) => ipcRenderer.invoke("tool-write", id, bytes),
   endTool: (id) => ipcRenderer.invoke("tool-end", id),
   cancelTool: (id) => ipcRenderer.invoke("tool-cancel", id),

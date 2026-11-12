@@ -1,15 +1,55 @@
+import { share, tee, type TeeSlot } from "./tee.ts";
+import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
 import type { Converter, FrameItem, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
+
+type Rendered = { key: string; outputs: Record<string, Value> };
+
+/** Every scratch file a node's outputs hold. */
+const pathsOf = (outputs: Record<string, Value>) => {
+  const s = new Set<string>();
+  for (const v of Object.values(outputs)) diskPaths(v, s);
+  return s;
+};
+
+/** A map whose values hold scratch files: setting, replacing or deleting an entry counts them. */
+class HoldingMap extends Map<string, Rendered> {
+  refs?: ScratchRefs;
+  set(key: string, value: Rendered) {
+    const old = this.get(key);
+    super.set(key, value);
+    this.refs?.retain(pathsOf(value.outputs));
+    if (old) this.refs?.release(pathsOf(old.outputs));
+    return this;
+  }
+  delete(key: string) {
+    const old = this.get(key);
+    const had = super.delete(key);
+    if (old) this.refs?.release(pathsOf(old.outputs));
+    return had;
+  }
+}
 
 /** Results kept between runs, keyed by node type + params + input keys. */
 export class ResultCache {
   private map = new Map<string, Record<string, Value>>();
   private bytes = 0;
   private maxBytes: number;
+  /**
+   * Who holds each result kept on disk (desktop app). Disk files take no memory, so they don't
+   * count towards the cache's size; once no cached result holds one, it's handed to `onFree`.
+   */
+  readonly refs = new ScratchRefs();
   /** The last full-size result of each job node, shown during live preview. */
-  readonly lastRender = new Map<string, { key: string; outputs: Record<string, Value> }>();
+  readonly lastRender: Map<string, Rendered> = new HoldingMap();
 
   constructor(maxBytes = 1 << 30) {
     this.maxBytes = maxBytes;
+    (this.lastRender as HoldingMap).refs = this.refs;
+  }
+
+  /** Called with scratch files no cached result holds any more, so they can be deleted. */
+  set onFree(free: (paths: string[]) => void) {
+    this.refs.setFree(free);
   }
 
   get(key: string): Record<string, Value> | undefined {
@@ -26,10 +66,12 @@ export class ResultCache {
     if (this.map.has(key)) return;
     this.map.set(key, outputs);
     this.bytes += sizeOf(outputs);
+    this.refs.retain(pathsOf(outputs));
     for (const [k, v] of this.map) {
       if (this.bytes <= this.maxBytes || k === key) break;
       this.map.delete(k);
       this.bytes -= sizeOf(v);
+      this.refs.release(pathsOf(v));
     }
   }
 
@@ -43,6 +85,8 @@ function sizeOfValue(v: Value): number {
     case "image":
       return v.data.byteLength;
     case "file":
+      // A file on disk takes no memory; a batch holds every file it writes.
+      return (v.batch ?? [v]).reduce((n, f) => n + (f.data.in === "memory" ? bytesSize(f.data) : 0), 0);
     case "audio":
     case "document":
       return v.bytes.byteLength;
@@ -163,6 +207,21 @@ async function mapNode(
   const lead = inputs[seqKeys[0]] as VideoValue;
   const posters = await runOn(seqKeys.map((k) => (inputs[k] as VideoValue).poster), ctx);
   const frameCtx: RunContext = { ...ctx, mode: "render", progress: undefined };
+  // One run per frame for every output: the outputs read side by side (an image and its mask)
+  // share this pass instead of each running the node again.
+  const runs = share<{ res: Record<string, Value>; item: FrameItem }>(async function* (signal) {
+    const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
+    try {
+      for (;;) {
+        const steps = await Promise.all(its.map((it) => it.next()));
+        if (steps.some((s) => s.done)) return;
+        const items = steps.map((s) => s.value as FrameItem);
+        yield { res: await runOn(items.map((f) => f.value), frameCtx), item: items[0] };
+      }
+    } finally {
+      await Promise.all(its.map((it) => it.return?.()));
+    }
+  });
   const out: Record<string, Value> = {};
   for (const port of def.outputs) {
     const poster = posters[port.key];
@@ -184,18 +243,7 @@ async function mapNode(
       range: lead.range,
       soundLater: lead.soundLater,
       async *frames(signal) {
-        const its = seqKeys.map((k) => (inputs[k] as VideoValue).frames(signal)[Symbol.asyncIterator]());
-        try {
-          for (;;) {
-            const steps = await Promise.all(its.map((it) => it.next()));
-            if (steps.some((s) => s.done)) return;
-            const items = steps.map((s) => s.value as FrameItem);
-            const res = await runOn(items.map((f) => f.value), frameCtx);
-            yield { value: res[port.key], timestamp: items[0].timestamp, duration: items[0].duration, name: items[0].name };
-          }
-        } finally {
-          await Promise.all(its.map((it) => it.return?.()));
-        }
+        for await (const { res, item } of runs(signal)) yield { value: res[port.key], timestamp: item.timestamp, duration: item.duration, name: item.name };
       },
     };
   }
@@ -217,6 +265,55 @@ export function topoSort(graph: Graph): GraphNode[] {
     out.push(byId.get(id)!);
   };
   for (const n of graph.nodes) visit(n.id);
+  return out;
+}
+
+/**
+ * Sequence outputs that two or more job nodes read whole on Render, with the jobs reading each.
+ * Those jobs run at the same time and share one pass over the frames, so the video is decoded,
+ * and every frame node before them runs, once instead of once per job. Left out, so that no job
+ * waits for a reader that can't start: live values (a recording already reaches every reader),
+ * jobs fed by another such job (they start only once it has finished), and jobs that read two
+ * shared outputs (each could be waiting for the other to start).
+ */
+export function fanout(graph: Graph, registry: ReadonlyMap<string, NodeDef>, live: ReadonlySet<string> = new Set()): Map<string, string[]> {
+  const shapes = outputShapes(graph, registry);
+  const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
+  const readers = new Map<string, string[]>();
+  for (const e of graph.edges) {
+    const port = `${e.source}:${e.sourceHandle}`;
+    if (live.has(e.source) || !shapes.get(port)?.seq) continue;
+    const def = registry.get(types.get(e.target) ?? "");
+    const input = def?.inputs.find((p) => p.key === e.targetHandle);
+    // A job mapped over the frames (its input takes one value) reads them later, lazily.
+    if (def?.kind !== "job" || !input || !(input.type === "video" || input.sequence)) continue;
+    const list = readers.get(port) ?? [];
+    if (!list.includes(e.target)) list.push(e.target);
+    readers.set(port, list);
+  }
+  const shared = [...readers.values()].filter((l) => l.length >= 2);
+  const candidates = new Set(shared.flat());
+  const reads = new Map<string, number>();
+  for (const id of shared.flat()) reads.set(id, (reads.get(id) ?? 0) + 1);
+  const parents = new Map<string, string[]>();
+  for (const e of graph.edges) parents.set(e.target, [...(parents.get(e.target) ?? []), e.source]);
+  const fedByCandidate = (id: string) => {
+    const seen = new Set<string>();
+    const stack = [...(parents.get(id) ?? [])];
+    while (stack.length) {
+      const p = stack.pop()!;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      if (candidates.has(p)) return true;
+      stack.push(...(parents.get(p) ?? []));
+    }
+    return false;
+  };
+  const out = new Map<string, string[]>();
+  for (const [port, list] of readers) {
+    const ok = list.filter((id) => candidates.has(id) && reads.get(id) === 1 && !fedByCandidate(id));
+    if (ok.length >= 2) out.set(port, ok);
+  }
   return out;
 }
 
@@ -255,12 +352,38 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
     const def = registry.get(node.type);
     if (def?.live || graph.edges.some((e) => e.target === node.id && live.has(e.source))) live.add(node.id);
   }
+  // Job nodes reading the same video on Render share one pass over its frames (see fanout).
+  const fan = ctx.mode === "render" ? fanout(graph, registry, live) : new Map<string, string[]>();
+  const sharing = new Set([...fan.values()].flat());
+  const tees = new Map<string, TeeSlot<FrameItem>[] | null>();
+  /** This reader's share of a fanned-out output, made when the first reader asks for it. */
+  const slotFor = (port: string, reader: string): TeeSlot<FrameItem> | undefined => {
+    const readers = fan.get(port);
+    if (!readers) return undefined;
+    if (!tees.has(port)) {
+      const cut = port.lastIndexOf(":");
+      const v = results.get(port.slice(0, cut))?.outputs[port.slice(cut + 1)];
+      // An untouched file (`origin`) may be read straight from the file, never pulling its frames;
+      // a reader doing that would hold the others up until it finished.
+      tees.set(port, v?.kind === "video" && !v.origin ? tee((signal) => v.frames(signal), readers.length) : null);
+    }
+    return tees.get(port)?.[readers.indexOf(reader)];
+  };
+  /** Mandatory once a sharing reader is done, whatever happened: a share never read would stall the others. */
+  const releaseShares = (id: string) => {
+    for (const [port, readers] of fan) if (readers.includes(id)) slotFor(port, id)?.release();
+  };
+
   let stopped = false;
   const tasks = new Map<string, Promise<void>>();
+  // Nodes run one at a time, each once the nodes feeding it are done, except during a recording
+  // (every node after the webcam runs at once, so two encoders both see every frame) and job nodes
+  // sharing a video, which all read it together.
+  let turn: Promise<void> = Promise.resolve();
   for (const node of order) {
     const sources = graph.edges.filter((e) => e.target === node.id).map((e) => tasks.get(e.source));
-    const task = (async () => {
-      await Promise.all(sources);
+    const together = sharing.has(node.id) || (ctx.mode === "render" && live.has(node.id));
+    const runNode = async () => {
       if (stopped || cancelled?.()) {
         stopped = true;
         return;
@@ -281,7 +404,9 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
       for (const port of def.inputs) {
         const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
         const upstream = edge && results.get(edge.source);
-        const value = edge && upstream?.outputs[edge.sourceHandle];
+        const raw = edge && upstream?.outputs[edge.sourceHandle];
+        const slot = edge && raw?.kind === "video" ? slotFor(`${edge.source}:${edge.sourceHandle}`, node.id) : undefined;
+        const value = edge && (slot && raw?.kind === "video" ? { ...raw, frames: slot.iterate, release: slot.release } : raw);
         if (!value || !upstream?.key) {
           if (!edge && port.optional) continue;
           missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
@@ -366,11 +491,22 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         }
         finish(node.id, { status: "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
       }
+    };
+    const task = (async () => {
+      await Promise.all(sources);
+      if (together) {
+        try {
+          await runNode();
+        } finally {
+          releaseShares(node.id);
+        }
+      } else {
+        const mine = turn.then(runNode);
+        turn = mine.catch(() => undefined);
+        await mine;
+      }
     })();
     tasks.set(node.id, task);
-    // A recording runs every node after the webcam at once, so two encoders both see every frame;
-    // everything else runs one node at a time.
-    if (!(ctx.mode === "render" && live.has(node.id))) await task;
   }
   await Promise.all(tasks.values());
   return results;

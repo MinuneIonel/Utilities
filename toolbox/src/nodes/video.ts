@@ -2,11 +2,13 @@
 // decoded with Mediabunny (WebCodecs), which works in the graph worker; that code
 // lives in video-codec.ts and loads on first use, so the window never parses it.
 import { VIDEO_CONTAINERS, type VideoCodecChoice, type VideoContainer } from "../../../media/src/engine/types";
-import type { AudioValue, ImageValue, NodeDef, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, ImageValue, MediaFile, NodeDef, Value, VideoValue } from "../runtime/types";
+import { asBytes } from "./bytes";
 import { gridToImage } from "./ascii";
 import { PRORES_LABEL, type ProresProfile } from "./ffmpeg-video";
 import { PREVIEW_MAX } from "./file";
 import { scaleImage } from "./image";
+import { bytesOfDisk, isDisk, MediaCache, mediaName } from "./source";
 
 /** Mediabunny, gifenc and Media Lab's video engine, loaded on first use. */
 export const videoCodec = () => import("./video-codec");
@@ -32,7 +34,7 @@ export const videoInput: NodeDef = {
   async run(_inputs, params, ctx) {
     const blob = ctx.assets.get(String(params.assetId));
     if (!blob) throw new Error("Drop a video here");
-    return { video: await (await videoCodec()).videoFromBlob(blob, params, ctx) };
+    return { video: await (await videoCodec()).videoFromFile(blob, params, ctx) };
   },
 };
 
@@ -178,13 +180,13 @@ export const extractAudio: NodeDef = {
   },
 };
 
-const sounds = new WeakMap<Blob, Map<string, Promise<AudioValue>>>();
+const sounds = new MediaCache<Map<string, Promise<AudioValue>>>();
 /**
  * A file's sound (or the `range` of it) as an audio value, made once per file and range.
  * Moving a video's playhead re-runs everything after it; handing back the same bytes lets
  * the waveform (which decodes the whole track) come from its cache instead.
  */
-export function soundOf(blob: Blob, duration?: number, range?: { start: number; end: number }): Promise<AudioValue> {
+export function soundOf(blob: MediaFile, duration?: number, range?: { start: number; end: number }): Promise<AudioValue> {
   let byRange = sounds.get(blob);
   if (!byRange) sounds.set(blob, (byRange = new Map()));
   const key = range ? `${range.start}-${range.end}` : "";
@@ -195,7 +197,9 @@ export function soundOf(blob: Blob, duration?: number, range?: { start: number; 
       .catch(async (e: Error) => {
         if (range || /no sound/.test(e.message)) throw e;
         // A sound the copier can't handle still reaches ffmpeg, in the whole file.
-        return { kind: "audio" as const, name: (blob as File).name || "video.mp4", mime: blob.type || "video/mp4", bytes: new Uint8Array(await blob.arrayBuffer()), duration };
+        // (A file on disk is read only when it fits in memory.)
+        const bytes = isDisk(blob) ? await asBytes(bytesOfDisk(blob)) : new Uint8Array(await blob.arrayBuffer());
+        return { kind: "audio" as const, name: mediaName(blob) || "video.mp4", mime: blob.type || "video/mp4", bytes, duration };
       });
     byRange.set(key, p);
     p.catch(() => byRange.delete(key));
