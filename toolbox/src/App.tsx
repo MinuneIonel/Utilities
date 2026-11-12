@@ -92,11 +92,20 @@ export function App() {
       /* storage may be unavailable */
     }
   }, [mode]);
-  const setMode = useCallback((m: ViewMode) => {
-    setModeState(m);
-    if (m === "simple") setSimpleStarted(true);
-    if (m === "graph" && !tutorialSeen()) setTutorial(true);
-  }, []);
+  // A canvas hidden since launch was fitted at zero size: fit it the first time it shows.
+  const canvasShown = useRef(mode === "graph");
+  const setMode = useCallback(
+    (m: ViewMode) => {
+      setModeState(m);
+      if (m === "simple") setSimpleStarted(true);
+      if (m === "graph" && !tutorialSeen()) setTutorial(true);
+      if (m === "graph" && !canvasShown.current) {
+        canvasShown.current = true;
+        setTimeout(() => flow.fitView({ padding: 0.2 }), 50);
+      }
+    },
+    [flow],
+  );
   /** "Open as graph" from a Simple form: its graph, with its files. */
   const openAsGraph = useCallback(
     (g: Graph, files: GivenFile[], title: string) => {

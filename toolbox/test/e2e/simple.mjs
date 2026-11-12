@@ -130,6 +130,22 @@ try {
   const photo = path.join(tmp, "holiday.png");
   writeFileSync(photo, Buffer.from(png));
 
+  // Graph view, the first time: the starter graph fills the canvas (it was hidden at launch), under the tour.
+  await win.click('.simple .mode-switch button:has-text("Graph")');
+  await win.waitForSelector(".canvas", { state: "visible" });
+  await win.waitForTimeout(800);
+  const first = await win.evaluate(() => {
+    const c = document.querySelector(".canvas").getBoundingClientRect();
+    const boxes = [...document.querySelectorAll(".react-flow__node")].map((n) => n.getBoundingClientRect());
+    const inside = boxes.every((b) => b.left >= c.left && b.right <= c.right && b.top >= c.top && b.bottom <= c.bottom);
+    const span = Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left));
+    return { count: boxes.length, inside, span: Math.round(span), canvas: Math.round(c.width), tutorial: !!document.querySelector(".tutorial") };
+  });
+  check("switching to Graph shows the starter graph fitted to the canvas", first.count === 3 && first.inside && first.span > first.canvas / 3, JSON.stringify(first));
+  check("…and the tour starts the first time Graph view opens", first.tutorial);
+  if (first.tutorial) await win.click('.tutorial button:has-text("Skip tour")');
+  await toSimple(win);
+
   // The default folder is the system's Downloads folder: point it at ours and start again.
   await stubDialogs(app, out);
   await win.reload();
@@ -152,8 +168,7 @@ try {
   let g = await openAsGraph(win);
   check("Open as graph shows the same three nodes", g.simpleHidden && JSON.stringify(g.titles) === JSON.stringify(["Image file", "Encode image", "Save"]), g.titles.join(", "));
   check("…with the photo in it", g.thumb);
-  check("…and the tour starts the first time Graph view opens", g.tutorial);
-  if (g.tutorial) await win.click('.tutorial button:has-text("Skip tour")');
+  check("…and no tour the second time", !g.tutorial);
   await toSimple(win);
   check("back in Simple view the form is as it was", await win.isVisible('.simple-form[data-workflow="compress-image"] .simple-drop.has'));
   await backHome(win);
@@ -169,7 +184,6 @@ try {
   check("Clean up Romanian text writes the text with diacritics", txt && /[ăâîșț]/.test(fixed) && fixed !== plain, fixed || ls().join(", "));
   g = await openAsGraph(win);
   check("Open as graph shows Text, Romanian diacritics and Save", JSON.stringify(g.titles) === JSON.stringify(["Text", "Romanian diacritics", "Save"]), g.titles.join(", "));
-  check("…and no tour the second time", !g.tutorial);
   check("…and says ⌘Z (Ctrl+Z) brings the old graph back", /brings back the graph/.test(g.message), g.message);
   await toSimple(win);
   await backHome(win);
