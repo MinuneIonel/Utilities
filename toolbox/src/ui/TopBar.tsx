@@ -1,10 +1,13 @@
 // The bar along the top: graph buttons, undo and redo, the message line, and Render.
+import type { ReactNode } from "react";
 import { MOD, type Flash } from "../app/flow";
 import type { UpdateInfo } from "../platform";
 import { UpdateButton } from "./UpdateButton";
 import logoUrl from "../../build/icon.svg?url";
 
 interface TopBarProps {
+  /** The Simple | Graph switch. */
+  modeSwitch?: ReactNode;
   commands: Record<string, () => void>;
   canUndo: boolean;
   canRedo: boolean;
@@ -30,6 +33,7 @@ export function TopBar(p: TopBarProps) {
       <div className="brand">
         <img className="logo" src={logoUrl} alt="" /> TOOLBOX
       </div>
+      {p.modeSwitch}
       <div className="group">
         <button onClick={() => c.new()}>New graph</button>
         <button className="add-node" onClick={() => c.addNode()} title="Add a node (Tab, or right-click the canvas)">

@@ -1,9 +1,10 @@
 // The window: wires the hooks under app/ together and lays out the top bar, tabs, canvas,
-// settings panel and Outputs tray.
-import { useCallback, useMemo, useRef, useState } from "react";
+// settings panel and Outputs tray, or Simple view in its place.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Background, Controls, ReactFlow, useReactFlow, type Edge } from "@xyflow/react";
 import { WORKFLOWS } from "./graphs";
 import { typingIn, type Point } from "./app/flow";
+import { DOCS_STORE, OLD_STORE } from "./app/documents";
 import { useAssets } from "./app/useAssets";
 import { useClipboard } from "./app/useClipboard";
 import { useCommands } from "./app/useCommands";
@@ -15,23 +16,41 @@ import { useNodeMenu } from "./app/useNodeMenu";
 import { usePlayback } from "./app/usePlayback";
 import { useRender } from "./app/useRender";
 import { useRuntime } from "./app/useRuntime";
+import type { GivenFile } from "./app/useSimple";
 import { useUpdates } from "./app/useUpdates";
 import { useView } from "./app/useView";
+import type { Graph } from "./runtime/types";
+import { MODE_STORE, startMode, type ViewMode } from "./simple-form";
 import { ActionsContext, PlayingContext, PreviewContext, RuntimeContext, ShapesContext, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
+import { ModeSwitch } from "./ui/ModeSwitch";
 import { NodeMenu } from "./ui/NodeMenu";
 import { OutputsTray } from "./ui/OutputsTray";
 import { Player, PlayerFrame } from "./ui/Player";
 import { TabStrip } from "./ui/TabStrip";
+import { SimpleView } from "./ui/SimpleView";
 import { TopBar } from "./ui/TopBar";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
 
 const nodeTypes = { tool: ToolNode };
 
+/** Simple view for someone new; Graph view for someone who already has a graph, and from then on the view last used. */
+function initialMode(): ViewMode {
+  try {
+    return startMode(localStorage.getItem(MODE_STORE), localStorage.getItem(DOCS_STORE) !== null || localStorage.getItem(OLD_STORE) !== null);
+  } catch {
+    return "graph";
+  }
+}
+
 export function App() {
   const [message, setMessage] = useState("");
-  const [tutorial, setTutorial] = useState(() => !tutorialSeen());
+  const [mode, setModeState] = useState(initialMode);
+  // Simple view (and its worker) starts the first time it's shown, then stays, so switching back keeps the form.
+  const [simpleStarted, setSimpleStarted] = useState(mode === "simple");
+  // The tour is about the graph: it starts the first time Graph view opens.
+  const [tutorial, setTutorial] = useState(() => mode === "graph" && !tutorialSeen());
   const flow = useReactFlow<ToolFlowNode, Edge>();
   const canvasRef = useRef<HTMLDivElement>(null);
   const pointer = useRef<Point | undefined>(undefined);
@@ -64,9 +83,34 @@ export function App() {
   // A recording reads the cameras of the graph on screen, so it has to stop before another tab shows.
   const selectTab = (id: string) => (r.recording && id !== activeId ? flash("Stop the recording first.") : docs.switchTo(id));
   const closeTab = (id = activeId) => (r.recording ? flash("Stop the recording first.") : void closeGraph(id));
+
+  // Written at once, so this launch's autosave doesn't make the next launch think it's an old graph.
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODE_STORE, mode);
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [mode]);
+  const setMode = useCallback((m: ViewMode) => {
+    setModeState(m);
+    if (m === "simple") setSimpleStarted(true);
+    if (m === "graph" && !tutorialSeen()) setTutorial(true);
+  }, []);
+  /** "Open as graph" from a Simple form: its graph, with its files. */
+  const openAsGraph = useCallback(
+    (g: Graph, files: GivenFile[], title: string) => {
+      for (const f of files) client.addAsset(f.id, f.blob, f.path);
+      // In a tab of its own, like a workflow picked from the menu.
+      docs.openDoc({ name: title, graph: g, replace: docs.isUntouched() ? docs.activeId : undefined });
+      setMode("graph");
+      flash(`Opened “${title}” as a graph, in a tab of its own.`, 8000);
+    },
+    [client, docs, flash, setMode],
+  );
   const { dropping, setDropping, onDrop } = useDrop({ flow, flash, addNode, setNodeFile, setNodeFiles, setParams });
 
-  const commands = useCommands({
+  const graphCommands: Record<string, () => void> = {
     render: () => {
       // The Link box applies what was typed when it loses focus. ⌘R while typing a link would
       // otherwise render the old one, so let the box apply it first, then render once that's in.
@@ -94,7 +138,13 @@ export function App() {
     paste: () => paste(),
     duplicate,
     selectAll: () => setNodes((ns) => ns.map((n) => ({ ...n, selected: true }))),
-  });
+  };
+  // In Simple view the graph's own commands do nothing; New, Open and the tour switch to Graph view first.
+  const toGraph = (c: string) => () => {
+    setMode("graph");
+    graphCommands[c]();
+  };
+  useCommands(mode === "graph" ? graphCommands : { new: toGraph("new"), open: toGraph("open"), tutorial: toGraph("tutorial"), checkUpdate });
 
   const selected = nodes.find((n) => n.selected);
   // A pasted link downloads during the live preview, where there's no Render to cancel.
@@ -108,14 +158,16 @@ export function App() {
   const { shown, scrubbed } = v;
 
   return (
+    <>
     <ShapesContext.Provider value={shapes}>
     <RuntimeContext.Provider value={runtime}>
       <PreviewContext.Provider value={v.shownId}>
       <ActionsContext.Provider value={actions}>
       <PlayingContext.Provider value={playback.playingId}>
-        <div className="app">
+        <div className="app" hidden={mode !== "graph"}>
           <TopBar
-            commands={commands.current}
+            modeSwitch={<ModeSwitch mode="graph" onMode={setMode} />}
+            commands={graphCommands}
             canUndo={canUndo}
             canRedo={canRedo}
             message={message}
@@ -135,7 +187,7 @@ export function App() {
             }}
             onRender={() => void r.render()}
           />
-          <TabStrip tabs={docs.tabs} active={activeId} busy={r.renderingIn} onSelect={selectTab} onClose={closeTab} onNew={() => commands.current.new()} />
+          <TabStrip tabs={docs.tabs} active={activeId} busy={r.renderingIn} onSelect={selectTab} onClose={closeTab} onNew={() => graphCommands.new()} />
 
           <div className="main" style={{ gridTemplateColumns: `minmax(0, 1fr) ${inspectorWidth}px` }}>
             <section className="center">
@@ -178,7 +230,7 @@ export function App() {
                   colorMode="dark"
                   fitView
                   fitViewOptions={{ padding: 0.2 }}
-                  deleteKeyCode={["Backspace", "Delete"]}
+                  deleteKeyCode={mode === "graph" ? ["Backspace", "Delete"] : null}
                   proOptions={{ hideAttribution: true }}
                 >
                   <Background gap={20} size={1} />
@@ -224,5 +276,7 @@ export function App() {
       </PreviewContext.Provider>
     </RuntimeContext.Provider>
     </ShapesContext.Provider>
+    {simpleStarted && <SimpleView active={mode === "simple"} onMode={setMode} openAsGraph={openAsGraph} />}
+    </>
   );
 }
