@@ -1,12 +1,13 @@
-// The window: wires the hooks under app/ together and lays out the top bar, canvas, settings
-// panel and Outputs tray.
+// The window: wires the hooks under app/ together and lays out the top bar, tabs, canvas,
+// settings panel and Outputs tray.
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Background, Controls, ReactFlow, useEdgesState, useNodesState, useReactFlow, type Edge } from "@xyflow/react";
-import { starterGraph, WORKFLOWS } from "./graphs";
-import { loadInitial, toFlow, typingIn, type Point } from "./app/flow";
+import { Background, Controls, ReactFlow, useReactFlow, type Edge } from "@xyflow/react";
+import { WORKFLOWS } from "./graphs";
+import { typingIn, type Point } from "./app/flow";
 import { useAssets } from "./app/useAssets";
 import { useClipboard } from "./app/useClipboard";
 import { useCommands } from "./app/useCommands";
+import { useDocuments } from "./app/useDocuments";
 import { useDrop } from "./app/useDrop";
 import { useGraphFile } from "./app/useGraphFile";
 import { useHistory } from "./app/useHistory";
@@ -21,6 +22,7 @@ import { Inspector } from "./ui/Inspector";
 import { NodeMenu } from "./ui/NodeMenu";
 import { OutputsTray } from "./ui/OutputsTray";
 import { Player, PlayerFrame } from "./ui/Player";
+import { TabStrip } from "./ui/TabStrip";
 import { TopBar } from "./ui/TopBar";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
@@ -28,9 +30,6 @@ import { Bitmap, ToolNode } from "./ui/ToolNode";
 const nodeTypes = { tool: ToolNode };
 
 export function App() {
-  const initial = useMemo(() => toFlow(loadInitial()), []);
-  const [nodes, setNodes, onNodesChange] = useNodesState<ToolFlowNode>(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
   const [message, setMessage] = useState("");
   const [tutorial, setTutorial] = useState(() => !tutorialSeen());
   const flow = useReactFlow<ToolFlowNode, Edge>();
@@ -42,15 +41,18 @@ export function App() {
     setTimeout(() => setMessage((m) => (m === text ? "" : m)), ms);
   }, []);
 
-  const { runtime, setRuntime, client, graph, graphRef, shapes, webcams, runKey } = useRuntime(nodes, edges, flash);
-  const { undo, redo, canUndo, canRedo, withoutHistory } = useHistory(graph, setNodes, setEdges, flash);
-  const { setParams, setNodeFile, setNodeFiles, restoreFiles } = useAssets(client, setNodes, withoutHistory, graphRef);
+  // The open graphs (tabs); the one on screen is `nodes` and `edges`.
+  const docs = useDocuments(flow, flash);
+  const { nodes, edges, setNodes, setEdges, onNodesChange, onEdgesChange, activeId, openIds } = docs;
+  const { runtime, setRuntimeOf, client, graph, graphRef, shapes, webcams, runKey } = useRuntime(nodes, edges, flash, activeId, openIds);
+  const { undo, redo, canUndo, canRedo, withoutHistory } = useHistory(graph, activeId, openIds, setNodes, setEdges, flash);
+  const { setParams, setNodeFile, setNodeFiles, restoreFiles } = useAssets({ client, setNodes, withoutHistory, graphRef, docs });
   const { update, checkUpdate } = useUpdates(flash);
   const { copy, deleteSelected, paste, duplicate } = useClipboard(flow, setNodes, setEdges, canvasRef, pointer);
-  const nodeMenu = useNodeMenu(flow, canvasRef, shapes, setNodes, setEdges, flash);
+  const nodeMenu = useNodeMenu(flow, canvasRef, shapes, setNodes, setEdges, flash, docs);
   const { menu, addNode, openMenu } = nodeMenu;
-  const r = useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntime, flash, withoutHistory });
-  const { loadGraph, openGraph, saveGraph } = useGraphFile({ graph, graphRef, client, flow, setNodes, setEdges, setRuntime, restoreFiles, flash });
+  const r = useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntimeOf, flash, withoutHistory, docs });
+  const { openGraph, saveGraph, saveGraphAs, closeGraph } = useGraphFile({ docs, restoreFiles, flash });
   const v = useView(nodes, edges, shapes, runtime);
   const playback = usePlayback({
     client, graphRef, runKey, shapes, setParams, withoutHistory, flash,
@@ -59,6 +61,9 @@ export function App() {
     scrubbed: v.scrubbed,
     show: (id) => v.shownId !== id && v.togglePreview(id),
   });
+  // A recording reads the cameras of the graph on screen, so it has to stop before another tab shows.
+  const selectTab = (id: string) => (r.recording && id !== activeId ? flash("Stop the recording first.") : docs.switchTo(id));
+  const closeTab = (id = activeId) => (r.recording ? flash("Stop the recording first.") : void closeGraph(id));
   const { dropping, setDropping, onDrop } = useDrop({ flow, flash, addNode, setNodeFile, setNodeFiles, setParams });
 
   const commands = useCommands({
@@ -73,10 +78,9 @@ export function App() {
     },
     open: () => void openGraph(),
     save: () => void saveGraph(),
-    new: () => {
-      loadGraph(starterGraph());
-      flash("New graph. ⌘Z brings the old one back.");
-    },
+    saveAs: () => void saveGraphAs(),
+    new: () => (r.recording ? flash("Stop the recording first.") : docs.newDoc()),
+    closeTab: () => closeTab(),
     addNode: () => openMenu(pointer.current),
     workflows: () => openMenu(undefined, undefined, true),
     tutorial: () => setTutorial(true),
@@ -131,6 +135,7 @@ export function App() {
             }}
             onRender={() => void r.render()}
           />
+          <TabStrip tabs={docs.tabs} active={activeId} busy={r.renderingIn} onSelect={selectTab} onClose={closeTab} onNew={() => commands.current.new()} />
 
           <div className="main" style={{ gridTemplateColumns: `minmax(0, 1fr) ${inspectorWidth}px` }}>
             <section className="center">

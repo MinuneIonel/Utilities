@@ -2,12 +2,10 @@
 // nodes and edges, small graph queries, and the few values kept in localStorage.
 import type { Dispatch, SetStateAction } from "react";
 import type { Edge } from "@xyflow/react";
-import { parseGraph, starterGraph } from "../graphs";
 import { REGISTRY } from "../nodes";
 import type { Graph, Params } from "../runtime/types";
 import type { ToolFlowNode } from "../ui/context";
 
-export const STORE = "toolbox.graph";
 export const VIEW_STORE = "toolbox.view";
 export const OUTPUTS_STORE = "toolbox.outputs";
 export const UPDATE_STORE = "toolbox.update-check";
@@ -63,16 +61,6 @@ export function toGraph(nodes: ToolFlowNode[], edges: Edge[]): Graph {
       targetHandle: e.targetHandle ?? "",
     })),
   };
-}
-
-export function loadInitial(): Graph {
-  try {
-    const saved = localStorage.getItem(STORE);
-    if (saved) return parseGraph(saved);
-  } catch {
-    /* storage unavailable or a broken save */
-  }
-  return starterGraph();
 }
 
 export function readStore<T>(key: string, fallback: T): T {

@@ -13,8 +13,15 @@ interface ToolboxBridge {
   /** Deletes scratch files nothing holds any more (paths outside the scratch folder are ignored). */
   scratchDelete(paths: string[]): Promise<void>;
   chooseFolder(): Promise<string | null>;
-  openGraph(): Promise<{ name: string; text: string } | null>;
+  openGraph(): Promise<GraphFile | null>;
+  /** Asks where to save; resolves with the path, or null if cancelled. */
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
+  /** Saves over a graph file opened or saved before, without asking. Rejects for any other path. */
+  saveGraphTo(path: string, text: string): Promise<void>;
+  /** Graph files opened from outside the window: Open Recent, a double-click in the Finder or Explorer. */
+  onOpenFile(handler: (file: GraphFile) => void): void;
+  /** A question in a system dialog; resolves with the index of the button pressed (the last one is Cancel). */
+  ask(message: string, detail: string, buttons: string[]): Promise<number>;
   reveal(path: string): Promise<void>;
   openPath(path: string): Promise<string>;
   /** Runs an Edit menu command in the focused text field. */
@@ -29,8 +36,8 @@ interface ToolboxBridge {
   onUpdateProgress(handler: (fraction: number) => void): void;
   /** Where a dropped or chosen file is on disk, or "" if it isn't a file on disk. */
   pathForFile(file: File): string;
-  /** Lets the autosaved graph's files come back on the first launch that checks which files may be read. */
-  adoptAutosave(text: string): Promise<void>;
+  /** Lets the autosaved graphs' files come back on the first launch that checks which files may be read. */
+  adoptAutosave(texts: string[]): Promise<void>;
   onMenu(handler: (command: string) => void): void;
   toolsInfo(): Promise<ToolsInfo>;
   /** With `keep`, the new files are moved into the scratch folder and come back as `{ path, size }`. */
@@ -43,6 +50,13 @@ interface ToolboxBridge {
   /** A model file kept in Toolbox's folder, downloaded (with progress under `id`) the first time. */
   getModel(id: string, file: string): Promise<Uint8Array>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
+}
+
+/** A graph file's text, its file name, and (desktop app) where it is. */
+export interface GraphFile {
+  name: string;
+  text: string;
+  path?: string;
 }
 
 export interface UpdateInfo {
@@ -132,7 +146,7 @@ export async function saveGraphFile(text: string, suggestedName: string): Promis
   return suggestedName;
 }
 
-export function openGraphFile(): Promise<{ name: string; text: string } | null> {
+export function openGraphFile(): Promise<GraphFile | null> {
   if (bridge) return bridge.openGraph();
   return new Promise((resolve) => {
     const input = document.createElement("input");

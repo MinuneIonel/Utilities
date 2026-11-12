@@ -60,7 +60,8 @@ export function NodeMenu({
   /** The tab to open on, instead of the last one used. */
   tab?: Tab;
   onPick(type: string): void;
-  onPickWorkflow?(id: string): void;
+  /** A workflow opens in a tab of its own; with `insert` it goes into the graph on screen. */
+  onPickWorkflow?(id: string, insert: boolean): void;
   onClose(): void;
 }) {
   const entries = useMemo<Entry[]>(
@@ -91,7 +92,8 @@ export function NodeMenu({
       .map((e) => e.d);
   }, [entries, q, category]);
   const current = items[Math.min(active, items.length - 1)];
-  const pick = (d: Entry) => (d.tab === "workflow" ? onPickWorkflow?.(d.id) : onPick(d.id));
+  // ⌥-click (or ⌥-Enter) puts a workflow into this graph instead of a new tab.
+  const pick = (d: Entry, insert = false) => (d.tab === "workflow" ? onPickWorkflow?.(d.id, insert) : onPick(d.id));
 
   useEffect(() => setActive(0), [q, category]);
   useEffect(() => {
@@ -155,7 +157,7 @@ export function NodeMenu({
         break;
       case "Enter":
         e.preventDefault();
-        if (current) pick(current);
+        if (current) pick(current, e.altKey);
         break;
     }
     e.stopPropagation();
@@ -182,21 +184,31 @@ export function NodeMenu({
       )}
       <ul className="node-menu-list" ref={listRef}>
         {items.map((d, i) => (
-          <li key={`${d.tab}:${d.id}`}>
+          <li key={`${d.tab}:${d.id}`} className={d.tab === "workflow" ? "workflow-row" : undefined}>
             <button
               className={d === current ? "active" : ""}
               tabIndex={-1}
               onMouseMove={() => setActive(i)}
-              onClick={() => pick(d)}
+              onClick={(e) => pick(d, e.altKey)}
             >
               <span>{d.title}</span>
               {q && <span className="muted">{d.tab === "workflow" ? "Workflow" : CATEGORY_LABEL[d.tab]}</span>}
             </button>
+            {d.tab === "workflow" && (
+              <button className="insert" tabIndex={-1} onMouseMove={() => setActive(i)} onClick={() => pick(d, true)} title="Add it to this graph instead of a new tab (⌥-click)">
+                Insert
+              </button>
+            )}
           </li>
         ))}
         {!items.length && <li className="node-menu-empty muted">Nothing matches “{query}”</li>}
       </ul>
-      {current && <p className="node-menu-desc">{current.description}</p>}
+      {current && (
+        <p className="node-menu-desc">
+          {current.description}
+          {current.tab === "workflow" && <span className="muted"> Opens in a new tab.</span>}
+        </p>
+      )}
     </div>
   );
 }

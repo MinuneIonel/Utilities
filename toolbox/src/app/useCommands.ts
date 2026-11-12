@@ -28,8 +28,9 @@ export function useCommands(commands: Record<string, () => void>) {
       const k = e.key.toLowerCase();
       const c =
         k === "z" ? (e.shiftKey ? "redo" : "undo")
-        : ({ y: "redo", r: "render", o: "open", s: "save", c: "copy", x: "cut", v: "paste", d: "duplicate", a: "selectAll" } as Record<string, string>)[k];
-      if (!c || (typingIn(t) && !["render", "open", "save"].includes(c))) return;
+        : k === "s" ? (e.shiftKey ? "saveAs" : "save")
+        : ({ y: "redo", r: "render", o: "open", c: "copy", x: "cut", v: "paste", d: "duplicate", a: "selectAll" } as Record<string, string>)[k];
+      if (!c || (typingIn(t) && !["render", "open", "save", "saveAs"].includes(c))) return;
       e.preventDefault();
       ref.current[c]();
     };

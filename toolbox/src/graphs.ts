@@ -37,15 +37,18 @@ export function parseGraph(text: string): Graph {
   return readGraph(text).graph;
 }
 
-/** Saved graphs don't carry dropped files, so file inputs come back empty. */
-export function serializeGraph(g: Graph): string {
+/**
+ * Saved graphs don't carry dropped files, so file inputs come back empty. Files are indented for
+ * people to read; the autosave passes `indent` 0, as it keeps every open graph in a few MB.
+ */
+export function serializeGraph(g: Graph, indent = 2): string {
   const nodes = g.nodes.map((n) => {
     const params = { ...n.params };
     if ("assetId" in params) params.assetId = "";
     if ("assetIds" in params) params.assetIds = [];
     return { ...n, params };
   });
-  return JSON.stringify({ ...g, nodes }, null, 2);
+  return JSON.stringify({ ...g, nodes }, null, indent || undefined);
 }
 
 /** Builds a left-to-right chain: each step's output feeds the next step's input. */
