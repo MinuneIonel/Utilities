@@ -17,9 +17,11 @@ interface AssetDeps {
   withoutHistory: (change: () => void) => void;
   graphRef: MutableRefObject<Graph>;
   docs: Pick<Documents, "activeId" | "patchDoc" | "allTexts">;
+  /** Read the autosaved graphs' files back at launch (the graph canvas; Simple view starts empty). */
+  lastSession?: boolean;
 }
 
-export function useAssets({ client, setNodes, withoutHistory, graphRef, docs }: AssetDeps) {
+export function useAssets({ client, setNodes, withoutHistory, graphRef, docs, lastSession = true }: AssetDeps) {
   const { activeId, patchDoc, allTexts } = docs;
   const setParams = useCallback(
     (id: string, patch: Params) =>
@@ -125,12 +127,13 @@ export function useAssets({ client, setNodes, withoutHistory, graphRef, docs }: 
   // Before the first, the files every autosaved tab names are adopted, once (see adopt-autosave).
   const adopted = useRef<Promise<void> | undefined>(undefined);
   useEffect(() => {
+    if (!lastSession) return;
     void (async () => {
       adopted.current ??= bridge?.adoptAutosave(allTexts());
       await adopted.current;
       await restoreFiles(graphRef.current, activeId);
     })();
-  }, [activeId, allTexts, graphRef, restoreFiles]);
+  }, [activeId, allTexts, graphRef, lastSession, restoreFiles]);
 
   return { setParams, setNodeFile, setNodeFiles, restoreFiles };
 }

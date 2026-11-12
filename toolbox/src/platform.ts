@@ -13,6 +13,8 @@ interface ToolboxBridge {
   /** Deletes scratch files nothing holds any more (paths outside the scratch folder are ignored). */
   scratchDelete(paths: string[]): Promise<void>;
   chooseFolder(): Promise<string | null>;
+  /** The system's Downloads folder, where Simple view saves until another is picked. */
+  defaultFolder(): Promise<string>;
   openGraph(): Promise<GraphFile | null>;
   /** Asks where to save; resolves with the path, or null if cancelled. */
   saveGraph(text: string, suggestedName: string): Promise<string | null>;

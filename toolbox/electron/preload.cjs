@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("toolbox", {
   scratchClose: (id) => ipcRenderer.invoke("scratch-close", id),
   scratchDelete: (paths) => ipcRenderer.invoke("scratch-delete", paths),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
+  defaultFolder: () => ipcRenderer.invoke("default-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
   saveGraphTo: (p, text) => ipcRenderer.invoke("save-graph-to", p, text),

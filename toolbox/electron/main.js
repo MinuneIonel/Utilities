@@ -242,6 +242,9 @@ ipcMain.handle("scratch-close", (_e, id) => scratch().close(String(id)));
 // Results the worker no longer holds; paths outside the scratch folder are ignored.
 ipcMain.handle("scratch-delete", (_e, paths) => scratch().remove(paths));
 
+// Simple view saves here until a folder is picked.
+ipcMain.handle("default-folder", () => app.getPath("downloads"));
+
 ipcMain.handle("choose-folder", async () => {
   const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
   return r.canceled ? null : r.filePaths[0];

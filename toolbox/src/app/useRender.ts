@@ -13,7 +13,8 @@ import { OUTPUTS_STORE, readStore, upstreamOf, writeStore, type Flash, type Outp
 import type { Documents } from "./useDocuments";
 
 interface RenderDeps {
-  flow: ReactFlowInstance<ToolFlowNode, Edge>;
+  /** Only asked for the selected node, when there's no Save node to render into. */
+  flow: Pick<ReactFlowInstance<ToolFlowNode, Edge>, "getNodes">;
   client: RuntimeClient;
   webcams: Webcams;
   graphRef: MutableRefObject<Graph>;
@@ -28,16 +29,20 @@ interface RenderDeps {
   withoutHistory: (change: () => void) => void;
   /** The tab on screen, and a way to change a tab's nodes whether it's showing or not. */
   docs: Pick<Documents, "activeId" | "patchDoc">;
+  /** Where the Outputs tray's list is kept between launches; null keeps it for this session only. */
+  outputsStore?: string | null;
 }
 
-export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntimeOf, flash, withoutHistory, docs }: RenderDeps) {
+export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntimeOf, flash, withoutHistory, docs, outputsStore = OUTPUTS_STORE }: RenderDeps) {
   const { activeId, patchDoc } = docs;
   const [rendering, setRendering] = useState(false);
   /** The tab whose Render is running. */
   const [renderingIn, setRenderingIn] = useState<string>();
   const [recording, setRecording] = useState(false);
-  const [outputs, setOutputs] = useState<OutputEntry[]>(() => readStore<{ list: OutputEntry[] }>(OUTPUTS_STORE, { list: [] }).list);
-  useEffect(() => writeStore(OUTPUTS_STORE, { list: outputs }), [outputs]);
+  const [outputs, setOutputs] = useState<OutputEntry[]>(() => (outputsStore ? readStore<{ list: OutputEntry[] }>(outputsStore, { list: [] }).list : []));
+  useEffect(() => {
+    if (outputsStore) writeStore(outputsStore, { list: outputs });
+  }, [outputs, outputsStore]);
 
   // The Render button says "Render & save" when something will be saved, and carries a dot when a result is out of date.
   const hasSave = nodes.some((n) => REGISTRY.get(n.data.type)?.saves);

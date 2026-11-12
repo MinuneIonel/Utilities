@@ -169,7 +169,8 @@ function NumberBox({ def, value, set }: { def: Extract<ParamDef, { kind: "number
   );
 }
 
-function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
+/** One setting, drawn from its ParamDef. Simple view's forms use it too. */
+export function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
   switch (def.kind) {
     case "number":
       return (

@@ -189,6 +189,12 @@ class Feed implements CameraFeed {
 
 const cameras = new Map<string, Feed>();
 
+/**
+ * Marks this worker's tool and scratch-file ids. Simple view runs a second worker beside the
+ * graph's, and the main process keeps both workers' calls in one table by id.
+ */
+const WORKER = Math.random().toString(36).slice(2, 8);
+
 type AnyResult = ToolResult | KeptResult;
 const toolCalls = new Map<string, { resolve(r: AnyResult): void; reject(e: Error): void; onProgress?(f: number, l?: string): void }>();
 let toolCallN = 0;
@@ -197,7 +203,7 @@ let toolWriteN = 0;
 
 /** Starts a native tool call and returns its id; the result arrives as a tool-result message. */
 function callTool(kind: "tool-run" | "tool-open", tool: NativeTool, args: string[], files: Record<string, ToolFile>, opts: ToolOptions, done: { resolve(r: AnyResult): void; reject(e: Error): void }) {
-  const callId = `t${++toolCallN}`;
+  const callId = `t${WORKER}.${++toolCallN}`;
   toolCalls.set(callId, { ...done, onProgress: opts.onProgress });
   opts.signal?.addEventListener("abort", () => post({ type: "tool-cancel", callId }), { once: true });
   post({ type: kind, callId, tool, args, files, keep: opts.keep || undefined });
@@ -209,7 +215,7 @@ let scratchN = 0;
 
 /** One scratch-folder operation, done by the main process through the window. */
 function scratchCall<T>(msg: DistributiveOmit<Extract<ToolRequest, { type: "scratch-call" }>, "type" | "callId">, transfer: Transferable[] = []): Promise<T> {
-  const callId = `s${++scratchN}`;
+  const callId = `s${WORKER}.${++scratchN}`;
   return new Promise<T>((resolve, reject) => {
     scratchCalls.set(callId, { resolve: resolve as (r: unknown) => void, reject });
     post({ ...msg, type: "scratch-call", callId } as ToolRequest, transfer);
@@ -222,7 +228,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * Writes may be in flight together; close waits for all of them first.
  */
 async function createScratchFile(name: string) {
-  const id = `f${++scratchN}`;
+  const id = `f${WORKER}.${++scratchN}`;
   const path = await scratchCall<string>({ op: "open", id, name });
   const pending = new Set<Promise<void>>();
   let failed: Error | undefined;
@@ -331,7 +337,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     setModelFetcher(
       (file, onProgress) =>
         new Promise((resolve, reject) => {
-          const callId = `t${++toolCallN}`;
+          const callId = `t${WORKER}.${++toolCallN}`;
           toolCalls.set(callId, { resolve: (r) => resolve((r as ToolResult).files[file]), reject, onProgress });
           post({ type: "model-get", callId, file });
         }),
