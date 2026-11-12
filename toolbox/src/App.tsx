@@ -75,6 +75,7 @@ export function App() {
   const v = useView(nodes, edges, shapes, runtime);
   const playback = usePlayback({
     client, graphRef, runKey, shapes, setParams, withoutHistory, flash,
+    active: mode === "graph",
     shownId: v.shownId,
     shownBitmap: v.shown?.bitmap,
     scrubbed: v.scrubbed,
@@ -106,6 +107,13 @@ export function App() {
     },
     [flow],
   );
+  // A graph that opens from outside (Open Recent, a double-click on a .toolbox file) shows Graph view.
+  const shownTab = useRef(activeId);
+  useEffect(() => {
+    if (shownTab.current === activeId) return;
+    shownTab.current = activeId;
+    if (mode !== "graph") setMode("graph");
+  }, [activeId, mode, setMode]);
   /** "Open as graph" from a Simple form: its graph, with its files. */
   const openAsGraph = useCallback(
     (g: Graph, files: GivenFile[], title: string) => {

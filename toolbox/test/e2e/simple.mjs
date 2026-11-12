@@ -93,6 +93,8 @@ const openAsGraph = async (win) => {
     thumb: [...document.querySelectorAll(".react-flow__node .tnode-thumb")].some((c) => !c.hidden && c.width > 0),
     tutorial: !!document.querySelector(".tutorial"),
     message: document.querySelector(".topbar .message")?.textContent ?? "",
+    tabs: [...document.querySelectorAll(".tabstrip .tab .tab-name")].map((e) => e.textContent),
+    activeTab: document.querySelector(".tabstrip .tab.active .tab-name")?.textContent ?? "",
   }));
 };
 const toSimple = async (win) => {
@@ -184,7 +186,7 @@ try {
   check("Clean up Romanian text writes the text with diacritics", txt && /[ăâîșț]/.test(fixed) && fixed !== plain, fixed || ls().join(", "));
   g = await openAsGraph(win);
   check("Open as graph shows Text, Romanian diacritics and Save", JSON.stringify(g.titles) === JSON.stringify(["Text", "Romanian diacritics", "Save"]), g.titles.join(", "));
-  check("…and says ⌘Z (Ctrl+Z) brings the old graph back", /brings back the graph/.test(g.message), g.message);
+  check("…in a tab of its own, named after it, beside the one opened before", g.activeTab === "Clean up Romanian text" && g.tabs.length >= 2 && /tab of its own/.test(g.message), `${g.tabs.join(" | ")} · ${g.message}`);
   await toSimple(win);
   await backHome(win);
 
@@ -253,6 +255,16 @@ try {
   check("the last view used is the one that opens", await win.isVisible(".simple-home"));
   await pickTile(win, "compress-image");
   check("a form's settings come back after a restart", (await win.inputValue(".simple-fields input.num")) === "55", await win.inputValue(".simple-fields input.num"));
+
+  // A graph file opened from outside (a double-click on it, Open Recent) shows Graph view, in its own tab.
+  const outside = path.join(tmp, "from-outside.toolbox");
+  writeFileSync(outside, JSON.stringify({ version: 1, nodes: [{ id: "q", type: "input.qr", params: { text: "outside" }, position: { x: 40, y: 120 } }], edges: [] }));
+  await app.evaluate(({ app: a }, f) => a.emit("open-file", { preventDefault() {} }, f), outside);
+  const shown = await waitFor(win, async () => win.isVisible(".canvas"), 20);
+  const tab = await win.evaluate(() => document.querySelector(".tabstrip .tab.active .tab-name")?.textContent ?? "");
+  check("a graph file opened from outside switches to Graph view, in its own tab", shown && tab === "from-outside", tab);
+  await win.click('.app .mode-switch button:has-text("Simple")');
+  await win.waitForSelector(".simple:not([hidden])");
 
   check("no save dialog was ever opened", (await app.evaluate(() => globalThis.saveDialogs)) === 0);
   check("no errors in the console", errors.length === 0, errors.join("\n     "));

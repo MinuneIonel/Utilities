@@ -56,6 +56,8 @@ interface PlaybackDeps {
   /** Shows a node behind the graph. */
   show(id: string): void;
   flash: Flash;
+  /** False while Graph view is hidden behind Simple view: playback stops and Space leaves it alone. */
+  active?: boolean;
 }
 
 /** What the shown node can play: frames (a video, or a list of pictures) or a sound. Live webcams can't. */
@@ -345,13 +347,18 @@ export function usePlayback(d: PlaybackDeps) {
     };
   }, [d.client, pause, store]);
 
+  // Hiding Graph view (for Simple view) stops playback and its sound.
+  useEffect(() => {
+    if (d.active === false) pause(true);
+  }, [d.active, pause]);
+
   // Space plays and pauses, unless typing, on a button, or holding it to pan the canvas.
   const toggleRef = useRef(toggle);
   toggleRef.current = toggle;
   useEffect(() => {
     let armed = false;
     const down = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey || deps.current.active === false) return;
       const t = e.target as HTMLElement;
       if (typingIn(t) || t.closest?.("button, select, a, .node-menu, .tutorial")) return;
       armed = !!playableRef.current;
