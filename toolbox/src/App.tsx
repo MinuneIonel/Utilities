@@ -11,14 +11,16 @@ import { useDrop } from "./app/useDrop";
 import { useGraphFile } from "./app/useGraphFile";
 import { useHistory } from "./app/useHistory";
 import { useNodeMenu } from "./app/useNodeMenu";
+import { usePlayback } from "./app/usePlayback";
 import { useRender } from "./app/useRender";
 import { useRuntime } from "./app/useRuntime";
 import { useUpdates } from "./app/useUpdates";
 import { useView } from "./app/useView";
-import { ActionsContext, PreviewContext, RuntimeContext, ShapesContext, type ToolFlowNode } from "./ui/context";
+import { ActionsContext, PlayingContext, PreviewContext, RuntimeContext, ShapesContext, type ToolFlowNode } from "./ui/context";
 import { Inspector } from "./ui/Inspector";
 import { NodeMenu } from "./ui/NodeMenu";
 import { OutputsTray } from "./ui/OutputsTray";
+import { Player, PlayerFrame } from "./ui/Player";
 import { TopBar } from "./ui/TopBar";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
 import { Bitmap, ToolNode } from "./ui/ToolNode";
@@ -40,7 +42,7 @@ export function App() {
     setTimeout(() => setMessage((m) => (m === text ? "" : m)), ms);
   }, []);
 
-  const { runtime, setRuntime, client, graph, graphRef, shapes, webcams } = useRuntime(nodes, edges, flash);
+  const { runtime, setRuntime, client, graph, graphRef, shapes, webcams, runKey } = useRuntime(nodes, edges, flash);
   const { undo, redo, canUndo, canRedo, withoutHistory } = useHistory(graph, setNodes, setEdges, flash);
   const { setParams, setNodeFile, setNodeFiles, restoreFiles } = useAssets(client, setNodes, withoutHistory, graphRef);
   const { update, checkUpdate } = useUpdates(flash);
@@ -50,6 +52,13 @@ export function App() {
   const r = useRender({ flow, client, webcams, graphRef, shapes, nodes, runtime, setNodes, setEdges, setRuntime, flash, withoutHistory });
   const { loadGraph, openGraph, saveGraph } = useGraphFile({ graph, graphRef, client, flow, setNodes, setEdges, setRuntime, restoreFiles, flash });
   const v = useView(nodes, edges, shapes, runtime);
+  const playback = usePlayback({
+    client, graphRef, runKey, shapes, setParams, withoutHistory, flash,
+    shownId: v.shownId,
+    shownBitmap: v.shown?.bitmap,
+    scrubbed: v.scrubbed,
+    show: (id) => v.shownId !== id && v.togglePreview(id),
+  });
   const { dropping, setDropping, onDrop } = useDrop({ flow, flash, addNode, setNodeFile, setNodeFiles, setParams });
 
   const commands = useCommands({
@@ -88,8 +97,8 @@ export function App() {
   const downloading = nodes.some((n) => n.data.type === "input.download" && runtime[n.id]?.status === "running");
   const { saveNode, runNode } = r;
   const actions = useMemo(
-    () => ({ setNodeFile, setNodeFiles, togglePreview: v.togglePreview, saveNode, runNode }),
-    [runNode, saveNode, setNodeFile, setNodeFiles, v.togglePreview],
+    () => ({ setNodeFile, setNodeFiles, togglePreview: v.togglePreview, saveNode, runNode, play: playback.playNode }),
+    [runNode, saveNode, setNodeFile, setNodeFiles, v.togglePreview, playback.playNode],
   );
   const inspectorWidth = v.view.inspectorHidden ? 0 : v.view.inspectorWidth;
   const { shown, scrubbed } = v;
@@ -99,6 +108,7 @@ export function App() {
     <RuntimeContext.Provider value={runtime}>
       <PreviewContext.Provider value={v.shownId}>
       <ActionsContext.Provider value={actions}>
+      <PlayingContext.Provider value={playback.playingId}>
         <div className="app">
           <TopBar
             commands={commands.current}
@@ -138,6 +148,7 @@ export function App() {
                 {shown && (shown.bitmap || shown.text !== undefined) && (
                   <div className="backdrop">
                     {shown.bitmap ? <Bitmap bitmap={shown.bitmap} className="backdrop-img" /> : <pre className="backdrop-text">{shown.text}</pre>}
+                    <PlayerFrame playback={playback} size={shown.size} />
                     <span className="backdrop-label">
                       {v.shownTitle}
                       {shown.size ? ` · ${shown.size.width}×${shown.size.height}` : ""}
@@ -168,18 +179,7 @@ export function App() {
                   <Background gap={20} size={1} />
                   <Controls showInteractive={false} />
                 </ReactFlow>
-                {shown && scrubbed && (
-                  <label className="scrub" title="Playhead: the frame every live node previews">
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={0.1}
-                      value={Number(scrubbed.data.params.at ?? 0)}
-                      onChange={(e) => setParams(scrubbed.id, { at: e.target.valueAsNumber })}
-                    />
-                  </label>
-                )}
+                {shown && <Player playback={playback} scrubbed={scrubbed} stale={shown.status === "stale"} />}
                 {dropping && <div className="drop">Drop files to add them</div>}
                 {menu && (
                   <NodeMenu
@@ -214,6 +214,7 @@ export function App() {
           <OutputsTray outputs={r.outputs} onClear={() => r.setOutputs([])} />
           {tutorial && <Tutorial onClose={() => setTutorial(false)} />}
         </div>
+      </PlayingContext.Provider>
       </ActionsContext.Provider>
       </PreviewContext.Provider>
     </RuntimeContext.Provider>

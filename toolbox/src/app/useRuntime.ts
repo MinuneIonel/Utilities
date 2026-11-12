@@ -84,5 +84,5 @@ export function useRuntime(nodes: ToolFlowNode[], edges: Edge[], flash: Flash) {
     client.preview(graphRef.current);
   }, [runKey, client]);
 
-  return { runtime, setRuntime, client, graph, graphRef, shapes, webcams };
+  return { runtime, setRuntime, client, graph, graphRef, shapes, webcams, runKey };
 }
