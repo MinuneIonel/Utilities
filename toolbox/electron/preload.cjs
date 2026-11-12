@@ -10,6 +10,13 @@ contextBridge.exposeInMainWorld("toolbox", {
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
+  saveGraphTo: (p, text) => ipcRenderer.invoke("save-graph-to", p, text),
+  /** Graph files opened from Open Recent or the system; the main process holds them until this is called. */
+  onOpenFile: (handler) => {
+    ipcRenderer.on("open-file", (_e, file) => handler(file));
+    void ipcRenderer.invoke("open-file-ready");
+  },
+  ask: (message, detail, buttons) => ipcRenderer.invoke("ask", message, detail, buttons),
   reveal: (p) => ipcRenderer.invoke("reveal", p),
   openPath: (p) => ipcRenderer.invoke("open-path", p),
   editText: (command) => ipcRenderer.invoke("edit-text", command),
@@ -29,7 +36,7 @@ contextBridge.exposeInMainWorld("toolbox", {
     if (p) ipcRenderer.send("local-allow", p);
     return p;
   },
-  adoptAutosave: (text) => ipcRenderer.invoke("adopt-autosave", text),
+  adoptAutosave: (texts) => ipcRenderer.invoke("adopt-autosave", texts),
   onMenu: (handler) => ipcRenderer.on("menu", (_e, command) => handler(command)),
   toolsInfo: () => ipcRenderer.invoke("tools-info"),
   runTool: (id, tool, args, files, opts) => ipcRenderer.invoke("tool-run", id, tool, args, files, opts),

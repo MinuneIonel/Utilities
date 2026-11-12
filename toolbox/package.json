@@ -26,6 +26,7 @@
     "check:save": "npm run build && node test/e2e/save.mjs",
     "check:local": "npm run build && node test/e2e/local-files.mjs",
     "check:buttons": "npm run build && node test/e2e/buttons.mjs",
+    "check:tabs": "npm run build && node test/e2e/tabs.mjs",
     "check:bigfile": "npm run build && node test/e2e/bigfile.mjs",
     "check:play": "npm run build && node test/e2e/play.mjs",
     "check:web": "node test/e2e/web.mjs",
@@ -71,6 +72,15 @@
       "package.json"
     ],
     "npmRebuild": false,
+    "fileAssociations": [
+      {
+        "ext": "toolbox",
+        "name": "Toolbox graph",
+        "description": "Toolbox graph",
+        "mimeType": "application/x-toolbox-graph",
+        "role": "Editor"
+      }
+    ],
     "mac": {
       "target": [
         {
