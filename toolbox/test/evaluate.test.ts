@@ -489,3 +489,28 @@ test("fanout leaves out live values, mapped jobs and readers fed by another read
   const chained: Graph = { ...g, edges: [...g.edges, wire("r1", "text", "r2", "other")] };
   assert.deepEqual([...fanout(chained, reg)], []);
 });
+
+test("graphs in different scopes don't share last renders, even with the same node ids", async () => {
+  const cache = new ResultCache();
+  await evaluate(chain("one"), { registry, ctx: renderCtx, cache, scope: "A" });
+  // Tab B holds a graph with the same ids: its job node hasn't been rendered there.
+  let b = await evaluate(chain("two"), { registry, ctx: preview, cache, scope: "B" });
+  assert.equal(b.get("c")!.status, "skipped");
+  await evaluate(chain("two"), { registry, ctx: renderCtx, cache, scope: "B" });
+  b = await evaluate(chain("two"), { registry, ctx: preview, cache, scope: "B" });
+  assert.equal(textOf(b, "c"), "TWO");
+  const a = await evaluate(chain("one"), { registry, ctx: preview, cache, scope: "A" });
+  assert.equal(a.get("c")!.status, "cached");
+  assert.equal(textOf(a, "c"), "ONE");
+});
+
+test("forgetting a scope drops only that graph's last renders", async () => {
+  const cache = new ResultCache();
+  await evaluate(chain("one"), { registry, ctx: renderCtx, cache, scope: "A" });
+  await evaluate(chain("one"), { registry, ctx: renderCtx, cache, scope: "AB" });
+  cache.forget("A");
+  const a = await evaluate(chain("one"), { registry, ctx: preview, cache, scope: "A" });
+  assert.equal(a.get("c")!.status, "skipped");
+  const ab = await evaluate(chain("one"), { registry, ctx: preview, cache, scope: "AB" });
+  assert.equal(ab.get("c")!.status, "cached");
+});

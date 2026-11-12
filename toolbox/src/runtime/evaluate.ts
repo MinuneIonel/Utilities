@@ -39,7 +39,10 @@ export class ResultCache {
    * count towards the cache's size; once no cached result holds one, it's handed to `onFree`.
    */
   readonly refs = new ScratchRefs();
-  /** The last full-size result of each job node, shown during live preview. */
+  /**
+   * The last full-size result of each job node, shown during live preview. Keyed by node id, or
+   * `scope:id` when the run names a scope (one per open graph, whose node ids may be the same).
+   */
   readonly lastRender: Map<string, Rendered> = new HoldingMap();
 
   constructor(maxBytes = 1 << 30) {
@@ -77,6 +80,11 @@ export class ResultCache {
 
   get size() {
     return this.map.size;
+  }
+
+  /** Drops a closed graph's last renders; their files on disk go once nothing else holds them. */
+  forget(scope: string) {
+    for (const k of [...this.lastRender.keys()]) if (k.startsWith(`${scope}:`)) this.lastRender.delete(k);
   }
 }
 
@@ -333,6 +341,11 @@ export interface EvaluateOptions {
   onProgress?: (id: string, fraction: number, label?: string) => void;
   /** Returning true stops the run before the next node (a newer request arrived). */
   cancelled?: () => boolean;
+  /**
+   * Which open graph this is. Two graphs can hold nodes with the same ids (the same file opened
+   * twice, say), so each keeps its own last renders. "" (the default) keys them by node id alone.
+   */
+  scope?: string;
 }
 
 /**
@@ -340,7 +353,8 @@ export interface EvaluateOptions {
  * in preview mode, job nodes only show their last rendered result.
  */
 export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
-  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [] } = opts;
+  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [], scope = "" } = opts;
+  const lastOf = (id: string) => (scope ? `${scope}:${id}` : id);
   const results = new Map<string, NodeResult>();
   // Nodes fed, directly or not, by a live node.
   const live = new Set<string>();
@@ -459,7 +473,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         def.kind === "job" ? renderKey : hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, nodeCtxKey) ?? "", ...inputKeys].join("|"));
 
       if (def.kind === "job" && ctx.mode === "preview") {
-        const last = cache.lastRender.get(node.id);
+        const last = cache.lastRender.get(lastOf(node.id));
         if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
         // A recording can't be "out of date": every camera frame is new.
         else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
@@ -467,10 +481,10 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
         return;
       }
 
-      const last = def.kind === "job" ? cache.lastRender.get(node.id) : undefined;
+      const last = def.kind === "job" ? cache.lastRender.get(lastOf(node.id)) : undefined;
       const hit = cache.get(key) ?? (last?.key === key ? last.outputs : undefined);
       if (hit) {
-        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs: hit });
+        if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs: hit });
         finish(node.id, { status: "cached", outputs: hit, key, renderKey });
         return;
       }
@@ -488,7 +502,7 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
           ? await mapNode(def, node.params, inputs, seqKeys, frameConvs, nodeCtx)
           : await def.run(inputs, node.params, nodeCtx);
         if (!live.has(node.id)) cache.set(key, outputs);
-        if (def.kind === "job") cache.lastRender.set(node.id, { key, outputs });
+        if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs });
         finish(node.id, { status: "ok", outputs, key, renderKey, ms: Date.now() - t0 });
       } catch (err) {
         if (ctx.signal?.aborted) {

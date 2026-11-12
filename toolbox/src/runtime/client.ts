@@ -26,7 +26,7 @@ export class RuntimeClient {
   private worker: Worker = new RuntimeWorker();
   private reqId = 0;
   private previewBusy = false;
-  private nextPreview: Graph | null = null;
+  private nextPreview: { graph: Graph; scope: string } | null = null;
   private renders = new Map<number, { files: RenderOutcome["files"]; resolve: (r: RenderOutcome) => void }>();
   /** Gets what playback sends (see play). */
   onPlay?: (msg: PlayMessage) => void;
@@ -72,20 +72,24 @@ export class RuntimeClient {
     this.send({ type: "asset", id, blob, path });
   }
 
+  /** The graph (tab) on screen. Previews are for it; node ids are only unique within one graph. */
+  scope = "";
+
   preview(graph: Graph) {
+    const scope = this.scope;
     if (this.previewBusy) {
-      this.nextPreview = graph;
+      this.nextPreview = { graph, scope };
       return;
     }
     this.previewBusy = true;
-    this.send({ type: "run", reqId: ++this.reqId, mode: "preview", graph });
+    this.send({ type: "run", reqId: ++this.reqId, mode: "preview", graph, scope });
   }
 
-  render(graph: Graph): Promise<RenderOutcome> {
+  render(graph: Graph, scope = this.scope): Promise<RenderOutcome> {
     const reqId = ++this.reqId;
     return new Promise((resolve) => {
       this.renders.set(reqId, { files: [], resolve });
-      this.send({ type: "run", reqId, mode: "render", graph });
+      this.send({ type: "run", reqId, mode: "render", graph, scope });
     });
   }
 
@@ -93,9 +97,9 @@ export class RuntimeClient {
    * Plays a node's output from `at` (0–1 of the way through) and returns the playback's id, which
    * every message about it carries. Render stops it.
    */
-  play(graph: Graph, nodeId: string, port: string, at: number): number {
+  play(graph: Graph, nodeId: string, port: string, at: number, scope = this.scope): number {
     const reqId = ++this.reqId;
-    this.send({ type: "play", reqId, graph, nodeId, port, at });
+    this.send({ type: "play", reqId, graph, nodeId, port, at, scope });
     return reqId;
   }
 
@@ -108,9 +112,14 @@ export class RuntimeClient {
     this.send({ type: "play-ack", reqId });
   }
 
-  /** The window cleared its pictures: the next updates carry every node's picture again. */
-  resendAll() {
-    this.send({ type: "resend" });
+  /** The window cleared its pictures for a graph (or all): the next updates carry every node's picture again. */
+  resendAll(scope?: string) {
+    this.send({ type: "resend", scope });
+  }
+
+  /** A graph was closed: the worker drops its last renders. */
+  forget(scope: string) {
+    this.send({ type: "forget", scope });
   }
 
   /** Stops downloads a pasted link started; they stay stopped until Render or a new link. */
@@ -208,9 +217,10 @@ export class RuntimeClient {
     this.previewBusy = false;
     if (msg.error) this.onPreviewError(msg.error);
     if (this.nextPreview) {
-      const g = this.nextPreview;
+      const { graph, scope } = this.nextPreview;
       this.nextPreview = null;
-      this.preview(g);
+      this.previewBusy = true;
+      this.send({ type: "run", reqId: ++this.reqId, mode: "preview", graph, scope });
     }
   }
 }
