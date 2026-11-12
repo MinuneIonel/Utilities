@@ -31,8 +31,10 @@ test("the recent list is kept across launches, and a broken file starts it empty
 
 test("graph files on a command line", () => {
   const cwd = abs("here");
-  const argv = ["/opt/Toolbox/toolbox", ".", "--user-data-dir=/x/y.toolbox", "graph.toolbox", "/abs/Other.TOOLBOX", "photo.png"];
-  assert.deepEqual(graphPathsIn(argv, cwd), [path.join(cwd, "graph.toolbox"), path.resolve("/abs/Other.TOOLBOX")]);
+  // An absolute path made here, so on Windows it has the same drive as `cwd` ("/abs/x" would take cwd's drive).
+  const other = abs("Other.TOOLBOX");
+  const argv = ["/opt/Toolbox/toolbox", ".", "--user-data-dir=/x/y.toolbox", "graph.toolbox", other, "photo.png"];
+  assert.deepEqual(graphPathsIn(argv, cwd), [path.join(cwd, "graph.toolbox"), other]);
 });
 
 test("recent menu labels", () => {
