@@ -63,9 +63,13 @@ try {
   const win = await app.firstWindow();
   win.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 300)));
   win.on("pageerror", (e) => errors.push(e.message));
-  await win.waitForSelector(".canvas");
-  if (await win.evaluate(() => localStorage.getItem("toolbox.tutorial") !== "1")) {
-    await win.evaluate(() => localStorage.setItem("toolbox.tutorial", "1"));
+  await win.waitForSelector(".canvas", { state: "attached" });
+  // A new profile opens on Simple view, and Graph view starts with the tour: these checks drive the graph.
+  if (await win.evaluate(() => localStorage.getItem("toolbox.tutorial") !== "1" || localStorage.getItem("toolbox.mode") !== "graph")) {
+    await win.evaluate(() => {
+      localStorage.setItem("toolbox.tutorial", "1");
+      localStorage.setItem("toolbox.mode", "graph");
+    });
     await win.reload();
     await win.waitForSelector(".canvas");
   }

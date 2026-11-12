@@ -55,7 +55,13 @@ async function runCase(c) {
   try {
     const win = await app.firstWindow();
     win.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 300)));
-    await win.waitForSelector(".canvas");
+    await win.waitForSelector(".canvas", { state: "attached" });
+    // A new profile opens on Simple view: these checks drive the graph.
+    if (await win.evaluate(() => localStorage.getItem("toolbox.mode") !== "graph")) {
+      await win.evaluate(() => localStorage.setItem("toolbox.mode", "graph"));
+      await win.reload();
+      await win.waitForSelector(".canvas");
+    }
     await app.evaluate(({ dialog, BrowserWindow }, f) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] });
       // Opening a graph that names files asks first: use them.
