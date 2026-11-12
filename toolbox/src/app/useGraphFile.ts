@@ -21,19 +21,26 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 export function useGraphFile({ docs, restoreFiles, flash }: GraphFileDeps) {
   const { docOf, graphOf, nodesOf, findByPath, switchTo, openDoc, closeDoc, markSaved, isUntouched } = docs;
 
-  /** Shows a graph from a file in a tab of its own, or the tab that already has that file. */
+  /**
+   * Shows a graph from a file in a tab of its own. A file that's already open shows its tab; if the
+   * file has changed since and the tab has no changes of its own, the tab shows the file as it is now.
+   */
   const showFile = useCallback(
     async (f: GraphFile) => {
-      const open = f.path ? findByPath(f.path) : undefined;
-      if (open) {
-        switchTo(open.id);
-        return flash(`${open.name} is already open.`);
-      }
       try {
         const { graph: g, notes } = readGraph(f.text);
+        const open = f.path ? findByPath(f.path) : undefined;
+        if (open) {
+          const edited = fingerprint(graphOf(open.id)) !== open.saved;
+          if (edited || fingerprint(g) === open.saved) {
+            switchTo(open.id);
+            return flash(edited && fingerprint(g) !== open.saved ? `${open.name} is already open, with changes. Save or close it to open the file again.` : `${open.name} is already open.`, 8000);
+          }
+        }
         if (!g.nodes.length) return flash(`${f.name} has no nodes this Toolbox can open.${notes.length ? ` ${notes.join(" ")}` : ""}`, 12000);
-        // A starter graph nobody has touched gives its tab to the file.
-        const id = openDoc({ name: nameFromPath(f.path ?? f.name), path: f.path, graph: g, replace: isUntouched() ? docs.activeId : undefined });
+        // A starter graph nobody has touched gives its tab to the file, as does an older copy of the file.
+        const replace = open?.id ?? (isUntouched() ? docs.activeId : undefined);
+        const id = openDoc({ name: nameFromPath(f.path ?? f.name), path: f.path, graph: g, replace });
         const missing = await restoreFiles(g, id);
         const needsFiles = g.nodes.some((n) => REGISTRY.get(n.type)?.category === "input" && "assetId" in n.params && !n.params.path);
         const files = missing ? ` ${missing} file${missing === 1 ? " has" : "s have"} moved: drop ${missing === 1 ? "it" : "them"} in again.` : needsFiles ? " Drop the input files in again." : "";
@@ -43,7 +50,7 @@ export function useGraphFile({ docs, restoreFiles, flash }: GraphFileDeps) {
         flash(`Couldn't open ${f.name}. ${errorText(err)}`, 10000);
       }
     },
-    [docs.activeId, findByPath, flash, isUntouched, openDoc, restoreFiles, switchTo],
+    [docs.activeId, findByPath, flash, graphOf, isUntouched, openDoc, restoreFiles, switchTo],
   );
 
   const openGraph = useCallback(async () => {
