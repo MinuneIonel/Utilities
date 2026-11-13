@@ -126,6 +126,10 @@ test("values are checked against their ParamDef", () => {
   assert.equal(validValue(num, Number.NaN), false);
   assert.equal(validValue({ key: "t", label: "T", kind: "toggle" }, "yes"), false);
   assert.equal(validValue({ key: "t", label: "T", kind: "text" }, "hi"), true);
+  // A time is seconds as a number, with no upper limit.
+  assert.equal(validValue({ key: "s", label: "S", kind: "time" }, 90000), true);
+  assert.equal(validValue({ key: "s", label: "S", kind: "time" }, -1), false);
+  assert.equal(validValue({ key: "s", label: "S", kind: "time" }, "1:05"), false);
   assert.equal(validValue({ key: "c", label: "C", kind: "custom" }, { name: "Game Boy" }), true);
   assert.equal(validValue({ key: "c", label: "C", kind: "custom" }, null), false);
 });

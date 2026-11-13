@@ -176,6 +176,8 @@ export type ParamDef = { advanced?: boolean } & (
   /** `commit` applies the value on Enter or blur instead of every keystroke. */
   | { key: string; label: string; kind: "text"; multiline?: boolean; commit?: boolean; placeholder?: string }
   | { key: string; label: string; kind: "toggle" }
+  /** A number of seconds, typed and shown as m:ss.d (it stays a number, so saved graphs keep working). */
+  | { key: string; label: string; kind: "time" }
   /** Edited by a node-specific inspector panel (e.g. Dither Lab's effect stack). */
   | { key: string; label: string; kind: "custom" }
 );
@@ -204,6 +206,22 @@ export interface CameraFeed {
   record(signal?: AbortSignal): AsyncIterable<FrameItem>;
   /** The microphone's recording, when this Render records sound; resolves after Stop. */
   sound?: Promise<Blob | undefined>;
+}
+
+/** Which params the timeline under the canvas draws as handles, and how. */
+export interface NodeTimeline {
+  /** Start and End param keys (End 0 = to the end). */
+  range?: { start: string; end: string };
+  /** A param holding cut times as text, "0:30, 1:15" (Split's Cut at). */
+  marks?: string;
+  /** A param holding parts as text, "0:10-0:25, 1:00-1:30" (Split's Parts). */
+  parts?: string;
+  /** The range is taken out rather than kept (Cut audio's Take this part out). */
+  remove?: (p: Params) => boolean;
+  /** Which of the above these settings use (Split: marks or parts, by its mode); all of them when absent. */
+  uses?: (p: Params) => "range" | "marks" | "parts" | "cuts" | undefined;
+  /** Cut times worked out from the settings, drawn but not draggable (Split every … seconds, equal parts). */
+  cuts?: (p: Params, duration: number) => number[];
 }
 
 export interface NodeDef {
@@ -241,6 +259,8 @@ export interface NodeDef {
    * is previewed). Render's result doesn't depend on them, so changing one never re-renders.
    */
   previewParams?: string[];
+  /** Time settings the timeline can show and edit, in seconds of this node's input. */
+  timeline?: NodeTimeline;
   run(inputs: Record<string, Value | undefined>, params: Params, ctx: RunContext): Promise<Record<string, Value>>;
 }
 

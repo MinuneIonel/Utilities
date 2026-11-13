@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { REGISTRY } from "../nodes";
+import { formatTime, parseTime } from "../nodes/clips";
 import { bridge } from "../platform";
 import { hasPresets, matchingPreset, PRESET_STORE, presetParams, readPresets, withoutPreset, withPreset, type PresetBook } from "../presets";
 import type { NodeDef, ParamDef, Params } from "../runtime/types";
@@ -169,6 +170,36 @@ function NumberBox({ def, value, set }: { def: Extract<ParamDef, { kind: "number
   );
 }
 
+/**
+ * A time in seconds, shown as m:ss.d. Takes 65.5, 1:05.5 or 1:02:03 on Enter or blur; anything
+ * else goes back to the time it was.
+ */
+function TimeBox({ value, set }: { value: number; set: (v: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = formatTime(Number.isFinite(value) ? value : 0);
+  const commit = () => {
+    if (draft === null) return;
+    const v = parseTime(draft);
+    if (Number.isFinite(v) && v !== value && draft.trim() !== shown) set(v);
+    setDraft(null);
+  };
+  return (
+    <input
+      type="text"
+      className="time"
+      inputMode="decimal"
+      value={draft ?? shown}
+      title="Minutes:seconds (1:05.5) or seconds (65.5)"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setDraft(null);
+      }}
+    />
+  );
+}
+
 /** One setting, drawn from its ParamDef. Simple view's forms use it too. */
 export function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
   switch (def.kind) {
@@ -178,6 +209,13 @@ export function Field({ def, value, set }: { def: ParamDef; value: unknown; set:
           <label>{def.label}</label>
           <input type="range" min={def.min} max={def.max} step={def.step} value={Number(value)} onChange={(e) => set(e.target.valueAsNumber)} />
           <NumberBox def={def} value={Number(value)} set={set} />
+        </div>
+      );
+    case "time":
+      return (
+        <div className="field">
+          <label>{def.label}</label>
+          <TimeBox value={Number(value)} set={set} />
         </div>
       );
     case "select":

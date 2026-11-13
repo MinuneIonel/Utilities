@@ -118,6 +118,8 @@ export function validValue(def: ParamDef, v: unknown): boolean {
   switch (def.kind) {
     case "number":
       return typeof v === "number" && Number.isFinite(v) && v >= def.min && v <= def.max;
+    case "time":
+      return typeof v === "number" && Number.isFinite(v) && v >= 0;
     case "select":
       return def.options.some((o) => o.value === v);
     case "toggle":

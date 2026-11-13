@@ -56,8 +56,8 @@ export const audioConvert: NodeDef = {
         { value: "2", label: "Stereo" },
       ],
     },
-    { key: "trimStart", label: "Start s", kind: "number", min: 0, max: 3600, step: 0.1 },
-    { key: "trimEnd", label: "End s (0 = to the end)", kind: "number", min: 0, max: 3600, step: 0.1 },
+    { key: "trimStart", label: "Start", kind: "time" },
+    { key: "trimEnd", label: "End (0 = to the end)", kind: "time" },
     { key: "fadeIn", label: "Fade in s", kind: "number", min: 0, max: 30, step: 0.1 },
     { key: "fadeOut", label: "Fade out s", kind: "number", min: 0, max: 30, step: 0.1 },
     { key: "normalize", label: "Normalize loudness", kind: "toggle" },
@@ -69,6 +69,7 @@ export const audioConvert: NodeDef = {
     fadeIn: 0, fadeOut: 0, normalize: false, gainDb: 0, name: "",
   }),
   visible: (key, p) => key !== "bitrate" || FORMATS[isAudioFormat(String(p.format)) ? (p.format as "mp3") : "mp3"].lossy,
+  timeline: { range: { start: "trimStart", end: "trimEnd" } },
   kind: "job",
   async run(inputs, params, ctx) {
     return (await audioCodec()).convert(inputs.audio as AudioValue, params, ctx);
@@ -93,8 +94,8 @@ export const audioCut: NodeDef = {
         { value: "remove", label: "Take this part out" },
       ],
     },
-    { key: "start", label: "Start s", kind: "number", min: 0, max: 36000, step: 0.1 },
-    { key: "end", label: "End s (0 = to the end)", kind: "number", min: 0, max: 36000, step: 0.1 },
+    { key: "start", label: "Start", kind: "time" },
+    { key: "end", label: "End (0 = to the end)", kind: "time" },
     {
       key: "format",
       label: "Format",
@@ -104,6 +105,7 @@ export const audioCut: NodeDef = {
     { key: "name", label: "File name", kind: "text" },
   ],
   defaults: () => ({ mode: "keep", start: 0, end: 0, format: "same", name: "" }),
+  timeline: { range: { start: "start", end: "end" }, remove: (p) => p.mode === "remove" },
   kind: "job",
   async run(inputs, params, ctx) {
     return (await audioCodec()).cut(inputs.audio as AudioValue, params, ctx);

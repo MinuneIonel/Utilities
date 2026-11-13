@@ -31,7 +31,7 @@ export const splitClips: NodeDef = {
         { value: "parts", label: "Keep these parts" },
       ],
     },
-    { key: "every", label: "Clip length s", kind: "number", min: 0.5, max: 36000, step: 0.5 },
+    { key: "every", label: "Clip length", kind: "time" },
     { key: "count", label: "Number of clips", kind: "number", min: 1, max: 500, step: 1 },
     { key: "at", label: "Cut at", kind: "text", commit: true, placeholder: "0:30, 1:15, 2:40" },
     { key: "parts", label: "Parts", kind: "text", multiline: true, commit: true, placeholder: "0:10-0:25, 1:00-1:30" },
@@ -63,6 +63,19 @@ export const splitClips: NodeDef = {
     if (key === "every" || key === "count" || key === "at" || key === "parts") return key === p.mode;
     if (key === "quality") return !isAudioFormat(String(p.container));
     return true;
+  },
+  timeline: {
+    marks: "at",
+    parts: "parts",
+    uses: (p) => (p.mode === "at" ? "marks" : p.mode === "parts" ? "parts" : "cuts"),
+    cuts: (p, duration) => {
+      try {
+        const mode = p.mode === "count" ? "count" : "every";
+        return clipRanges(duration, mode, { every: Number(p.every), count: Number(p.count) }).slice(1).map((r) => r.start);
+      } catch {
+        return [];
+      }
+    },
   },
   kind: "job",
   async run(inputs, params, ctx) {

@@ -158,7 +158,7 @@ export const WORKFLOWS: Workflow[] = [
       input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
       fields: [
         { node: 1, param: "mode", label: "Split" },
-        { node: 1, param: "every", label: "Clip length (seconds)" },
+        { node: 1, param: "every", label: "Clip length (1:30 or 90)" },
         { node: 1, param: "count", label: "Number of clips" },
         { node: 1, param: "at", label: "Cut at" },
       ],
@@ -180,8 +180,8 @@ export const WORKFLOWS: Workflow[] = [
       input: { node: 0, kind: "file", label: "Your sound", accept: "audio/*" },
       fields: [
         { node: 1, param: "mode", label: "This part" },
-        { node: 1, param: "start", label: "From (seconds)" },
-        { node: 1, param: "end", label: "To (seconds, 0 = the end)" },
+        { node: 1, param: "start", label: "From (1:05 or 65)" },
+        { node: 1, param: "end", label: "To (0 = the end)" },
       ],
       action: "Cut",
       topic: "sound",
