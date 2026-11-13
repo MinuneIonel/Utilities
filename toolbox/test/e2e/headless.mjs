@@ -103,6 +103,17 @@ try {
   r = run(compress, "--input", `Several images=${photos}`, "--out", outPhotos);
   check("A folder feeds Several images, and each image is saved", r.code === 0 && ls(outPhotos).join() === "photo1.jpg,photo2.jpg,photo3.jpg", `${show(r)}; ${ls(outPhotos).join()}`);
 
+  // Folder of files -> Encode image -> Save, its folder given on the command line: the folder is
+  // listed and read for this run only, though the person never picked it in the app.
+  const outFolder = dir("out-folder");
+  const fromFolder = graphFile({
+    version: 1,
+    nodes: [node("f", "input.folder"), node("e", "media.encode", { format: "jpeg", quality: 80 }, 300), node("s", "output.save-file", {}, 600)],
+    edges: [edge("f", "images", "e", "image"), edge("e", "file", "s", "file")],
+  });
+  r = run(fromFolder, "--input", `Folder of files=${photos}`, "--out", outFolder);
+  check("A folder given to a Folder of files node is listed and each image saved", r.code === 0 && ls(outFolder).join() === "photo1.jpg,photo2.jpg,photo3.jpg", `${show(r)}; ${ls(outFolder).join()}`);
+
   // Exit code 1: a node failed, and the message names it.
   r = run(graphFile(ditherGraph()), "--out", dir("out-missing"));
   check("A graph with a missing input exits 1, naming the node", r.code === 1 && /Image file/.test(r.err), show(r));
