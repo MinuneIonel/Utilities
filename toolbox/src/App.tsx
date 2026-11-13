@@ -16,6 +16,7 @@ import { useNodeMenu } from "./app/useNodeMenu";
 import { usePlayback } from "./app/usePlayback";
 import { useRender } from "./app/useRender";
 import { useRuntime } from "./app/useRuntime";
+import { useTimeline } from "./app/useTimeline";
 import type { GivenFile } from "./app/useSimple";
 import { useUpdates } from "./app/useUpdates";
 import { useView } from "./app/useView";
@@ -28,6 +29,7 @@ import { NodeMenu } from "./ui/NodeMenu";
 import { OutputsTray } from "./ui/OutputsTray";
 import { Player, PlayerFrame } from "./ui/Player";
 import { TabStrip } from "./ui/TabStrip";
+import { Timeline } from "./ui/Timeline";
 import { SimpleView } from "./ui/SimpleView";
 import { TopBar } from "./ui/TopBar";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
@@ -80,6 +82,12 @@ export function App() {
     shownBitmap: v.shown?.bitmap,
     scrubbed: v.scrubbed,
     show: (id) => v.shownId !== id && v.togglePreview(id),
+  });
+  const tl = useTimeline({
+    client, graph, runKey, nodes, runtime,
+    selectedId: nodes.find((n) => n.selected)?.id,
+    shownId: v.shownId,
+    enabled: mode === "graph" && !v.view.timelineHidden,
   });
   // A recording reads the cameras of the graph on screen, so it has to stop before another tab shows.
   const selectTab = (id: string) => (r.recording && id !== activeId ? flash("Stop the recording first.") : docs.switchTo(id));
@@ -272,6 +280,9 @@ export function App() {
                   <p className="canvas-hint">Press Tab or right-click to add a node, or pick a ready-made one under Workflows. Drop images, videos, sound, PDFs or text anywhere.</p>
                 )}
               </div>
+              {tl.target && (
+                <Timeline tl={tl} playback={playback} scrubbed={scrubbed} shownId={v.shownId} setParams={setParams} collapsed={!!v.view.timelineHidden} onToggle={v.toggleTimeline} />
+              )}
             </section>
 
             <div className="inspector-wrap">

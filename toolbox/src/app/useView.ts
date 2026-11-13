@@ -52,6 +52,7 @@ export function useView(nodes: ToolFlowNode[], edges: Edge[], shapes: ReturnType
     window.addEventListener("pointerup", up);
   }, []);
   const toggleInspector = useCallback(() => setView((v) => ({ ...v, inspectorHidden: !v.inspectorHidden })), []);
+  const toggleTimeline = useCallback(() => setView((v) => ({ ...v, timelineHidden: !v.timelineHidden })), []);
 
   // Wires that pass through a converter are dashed and labelled with it; wires carrying video are thicker.
   const displayEdges = useMemo(
@@ -68,5 +69,5 @@ export function useView(nodes: ToolFlowNode[], edges: Edge[], shapes: ReturnType
     [edges, nodes, shapes],
   );
 
-  return { view, togglePreview, toggleInspector, resizeInspector, shownId, shown, shownTitle, scrubbed, displayEdges };
+  return { view, togglePreview, toggleInspector, toggleTimeline, resizeInspector, shownId, shown, shownTitle, scrubbed, displayEdges };
 }
