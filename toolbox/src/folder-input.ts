@@ -39,19 +39,32 @@ export const folderName = (folder: string) => folder.replace(/[\\/]+$/, "").spli
 
 const plural = (n: number, one: string) => `${n.toLocaleString("en")} ${one}${n === 1 ? "" : "s"}`;
 
+/** The kinds of file a Folder of files node can work on, and what one of them is called. */
+export const FOLDER_KINDS = {
+  images: { one: "image", many: "images", label: "Images" },
+  videos: { one: "video", many: "videos", label: "Videos" },
+  sounds: { one: "sound", many: "sounds", label: "Sounds" },
+  pdfs: { one: "PDF", many: "PDFs", label: "PDFs" },
+} as const;
+
+export type FolderKind = keyof typeof FOLDER_KINDS;
+
+export const folderKind = (k: unknown): FolderKind => (typeof k === "string" && k in FOLDER_KINDS ? (k as FolderKind) : "images");
+
 /** What the node's card says: "128 images in Holiday", or with "Only new files", "12 new of 140 in Holiday". */
-export function folderSummary(folder: string, total: number, fresh: number, onlyNew: boolean, more = false): string {
+export function folderSummary(folder: string, total: number, fresh: number, onlyNew: boolean, more = false, kind: FolderKind = "images"): string {
   const where = folderName(folder);
   const cut = more ? " (the first ones)" : "";
-  if (!onlyNew) return `${plural(total, "image")} in ${where}${cut}`;
+  if (!onlyNew) return `${plural(total, FOLDER_KINDS[kind].one)} in ${where}${cut}`;
   return `${fresh.toLocaleString("en")} new of ${total.toLocaleString("en")} in ${where}${cut}`;
 }
 
 /** Why there's nothing to work on, in plain words: an empty folder, or nothing new in it. */
-export function nothingToDo(folder: string, total: number, onlyNew: boolean, pattern: string): string {
+export function nothingToDo(folder: string, total: number, onlyNew: boolean, pattern: string, kind: FolderKind = "images"): string {
   const where = folderName(folder);
-  if (total && onlyNew) return `Nothing new in ${where}. ${plural(total, "image")} done before`;
-  return pattern.trim() ? `No images in ${where} match ${pattern.trim()}` : `No images in ${where} yet`;
+  const many = FOLDER_KINDS[kind].many;
+  if (total && onlyNew) return `Nothing new in ${where}. ${plural(total, FOLDER_KINDS[kind].one)} done before`;
+  return pattern.trim() ? `No ${many} in ${where} match ${pattern.trim()}` : `No ${many} in ${where} yet`;
 }
 
 /** A batch file's name split into its sub-folder ("2024/beach") and its own name, for Save. */

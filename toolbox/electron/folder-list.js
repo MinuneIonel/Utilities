@@ -11,6 +11,9 @@ export const MAX_FILES = 5000;
 /** The extensions each kind of file has (lower case, without the dot). */
 export const KIND_EXTS = {
   images: ["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "heic", "heif"],
+  videos: ["mp4", "m4v", "mov", "webm", "mkv", "avi"],
+  sounds: ["mp3", "wav", "flac", "m4a", "ogg", "opus", "aac", "aif", "aiff"],
+  pdfs: ["pdf"],
 };
 
 /** Sorts names as a person would: "IMG_2" before "IMG_10". */

@@ -727,11 +727,16 @@ async function report(
     msg.info = v.about ?? parts.join(" · ");
     first = v.poster;
   }
+  // Whole files one after another (a Folder of videos on Render): just what's in the folder.
+  if (first?.kind === "each") {
+    msg.info = first.about ?? `${first.items.length} files`;
+    first = undefined;
+  }
   if (first?.kind === "grid" && changed) first = gridToImage(first);
   if (first?.kind === "image") await sendImage(first);
   else if (first?.kind === "text") msg.text = first.text.length > 20000 ? first.text.slice(0, 20000) + "\n…" : first.text;
   else if (first?.kind === "audio") {
-    msg.info = [first.name, first.duration ? `${first.duration.toFixed(1)} s` : "", kb(first.bytes.byteLength)].filter(Boolean).join(" · ");
+    msg.info = first.about ?? [first.name, first.duration ? `${first.duration.toFixed(1)} s` : "", kb(first.bytes.byteLength)].filter(Boolean).join(" · ");
     const a = first;
     if (changed) later(async () => (await audioCodec()).waveform(a));
     if (mode === "render" && saves) {
@@ -740,7 +745,7 @@ async function report(
       transfer.push(bytes.buffer);
     }
   } else if (first?.kind === "document") {
-    msg.info = `${first.pageCount} page${first.pageCount === 1 ? "" : "s"} · ${kb(first.bytes.byteLength)}`;
+    msg.info = first.about ?? `${first.pageCount} page${first.pageCount === 1 ? "" : "s"} · ${kb(first.bytes.byteLength)}`;
     const d = first;
     if (changed) later(async () => (await pdfRender()).pdfThumbnail(d));
   } else if (first?.kind === "file") {

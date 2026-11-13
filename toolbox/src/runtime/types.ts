@@ -136,6 +136,8 @@ export interface AudioValue {
   bytes: Uint8Array;
   /** Seconds, when known. */
   duration?: number;
+  /** What the node's card says about it instead of its name and length ("12 sounds in Podcasts"). */
+  about?: string;
 }
 
 export interface DocumentValue {
@@ -143,9 +145,35 @@ export interface DocumentValue {
   name: string;
   bytes: Uint8Array;
   pageCount: number;
+  /** What the node's card says about it instead of its page count ("8 PDFs in Invoices"). */
+  about?: string;
 }
 
-export type Value = ImageValue | TextValue | GridValue | FileValue | VideoValue | AudioValue | DocumentValue;
+/** One whole file of an EachValue, opened only when its turn comes. */
+export interface EachItem {
+  /** Tells files apart across Renders (a path with its size and modified time), for cache keys. */
+  id: string;
+  /** Relative to the folder, with "/" between sub-folders: Save keeps the sub-folder. */
+  name: string;
+  load(): Promise<Value>;
+  /** Set on Render when the nodes after it failed on this file, so it isn't counted as done. */
+  failed?: boolean;
+}
+
+/**
+ * Whole files one after another (a Folder of videos, sounds or PDFs), only on Render: the runtime
+ * runs everything after the node once per file (see evaluateEach), and Save nodes collect one file
+ * from each run. In live preview the node gives just the previewed file instead.
+ */
+export interface EachValue {
+  kind: "each";
+  /** What each file is. */
+  of: "video" | "audio" | "document";
+  items: EachItem[];
+  about?: string;
+}
+
+export type Value = ImageValue | TextValue | GridValue | FileValue | VideoValue | AudioValue | DocumentValue | EachValue;
 
 /** Turns a value of one port type into another, so e.g. a Grid output can feed an Image input. */
 export interface Converter {
@@ -199,6 +227,11 @@ export interface RunContext {
   progress?(fraction: number, label?: string): void;
   /** Aborted when Render is cancelled. */
   signal?: AbortSignal;
+  /**
+   * The file this run is for, when the nodes after a Folder of videos, sounds or PDFs run once per
+   * file: Save names what it writes after it.
+   */
+  item?: { name: string; index: number };
 }
 
 /** The worker's side of a webcam: the newest frame, and a recording to stream from. */
@@ -239,6 +272,16 @@ export interface NodeDef {
   defaults(): Params;
   /** Hides params that don't apply to the current values. */
   visible?(key: string, params: Params): boolean;
+  /**
+   * The output ports for these settings, when they differ from `outputs` (a Folder of files gives
+   * images, videos, sounds or PDFs). Keys stay the same so wires stay put.
+   */
+  outputsFor?(params: Params): PortDef[];
+  /**
+   * On Render, outputs whole files one after another (an EachValue) for these settings: the nodes
+   * after it run once per file.
+   */
+  each?(params: Params): boolean;
   /** frame = runs during live preview; job = runs only on Render. */
   kind: "frame" | "job";
   /** A job node that, fed a list (Several images), runs once per item on Render, like a frame node does. */
