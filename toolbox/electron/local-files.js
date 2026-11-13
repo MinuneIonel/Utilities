@@ -20,12 +20,17 @@ export function pathsInGraph(text) {
   return [...found];
 }
 
-/** The question asked before a graph may read the files it names. */
-export function consentText(paths, shown = 8) {
+/** The question asked before a graph may read the files (and folders, see folder-list.js) it names. */
+export function consentText(paths, shown = 8, folders = []) {
   const n = paths.length;
-  const more = n > shown ? `\n…and ${n - shown} more` : "";
+  const k = folders.length;
+  const all = [...folders, ...paths];
+  const more = all.length > shown ? `\n…and ${all.length - shown} more` : "";
+  const files = n === 1 ? "a file" : `${n} files`;
+  const dirs = k === 1 ? "a folder" : `${k} folders`;
+  const what = n && k ? `${files} and ${dirs}` : k ? dirs : files;
   return {
-    message: `This graph uses ${n === 1 ? "a file" : `${n} files`} on this computer`,
-    detail: `${paths.slice(0, shown).join("\n")}${more}\n\nOpen ${n === 1 ? "it" : "them"} only if you trust where the graph came from.`,
+    message: `This graph uses ${what} on this computer`,
+    detail: `${all.slice(0, shown).join("\n")}${more}\n\nOpen ${all.length === 1 ? "it" : "them"} only if you trust where the graph came from.`,
   };
 }

@@ -20,6 +20,7 @@ npm run check:save -w toolbox     # Save replacing its own file, keeping both, s
 npm run check:local -w toolbox    # graph files asking before they read files on this computer
 npm run check:buttons -w toolbox  # Render & save, Run on job nodes, Save again, the out-of-date dot
 npm run check:bigfile -w toolbox  # big results stay on disk: encodes, downloads, converted inputs (TOOLBOX_E2E_BIG=1 adds a 3 GB video)
+npm run check:headless -w toolbox # Toolbox --run: a saved graph runs from the command line, with exit codes
 npm run check:web -w toolbox      # the browser build (no desktop app) renders the starter graph and downloads its file; needs Google Chrome
 npm run toolbox:dmg       # on a Mac: release/Toolbox-<version>-mac-arm64.dmg
 npm run toolbox:exe       # on Windows: release/Toolbox-<version>-win-x64.exe
@@ -35,6 +36,43 @@ git tag toolbox-v0.2.0 && git push origin toolbox-v0.2.0
 Or run the workflow from the Actions tab with a version (`0.2.0`) filled in, which creates the tag itself.
 
 The installers aren't signed with a paid certificate (the Mac app is ad-hoc signed), so the first launch takes an extra click. [INSTALL.md](INSTALL.md) has the steps for friends; it's also the Release's description.
+
+## Run a graph without the window
+
+The desktop app can run a saved graph from the command line, for scheduled jobs and Shortcuts or Automator actions. It opens no window, writes the files and exits:
+
+```sh
+Toolbox --run graph.toolbox [--set <node>.<setting>=<value>]... [--input <node>=<file or folder>]... [--out <folder>] [--quiet]
+```
+
+- `--input` gives an input node its file: `--input "Image file=photo.jpg"`. For **Several images**, repeat it or name a folder, and every image in that folder goes in (not the folders inside it).
+- `--set` changes a setting: `--set Dither.size=pixels`, `--set "QR code.text=https://example.com"`. Values that read as JSON are JSON (`4`, `true`), the rest is text. A setting's name is its key in the graph file.
+- A node is named by its title when only one node has it (case doesn't matter), otherwise by its `id` from the graph file.
+- `--out` is the folder for Save nodes that have none. A Save node with no folder and no `--out` stops the run, as there's nobody to ask. When a file is already there, the Save node's **If the file exists** decides, as in the app: with *Replace my last save*, the next run replaces the file the last run wrote instead of adding `name (2).png` (Toolbox remembers what each run wrote in `run-saves.json`).
+- It prints each node as it runs (`[Encode video] 40%`), then `Saved <path>` for each file. `--quiet` prints only the saved files and errors.
+- Exit code `0` when it worked, `1` when a node failed (the message names the node), `2` for bad arguments or a graph file that can't be read.
+- The run may read the files on its command line and the files the graph names, for that run only: they're not added to the files the app remembers. Graphs with a Webcam need the window.
+- It runs beside an open Toolbox, and doesn't open the graph there. It never checks for updates.
+
+Where the program is:
+
+- **Mac**: `/Applications/Toolbox.app/Contents/MacOS/Toolbox`. A wrapper makes it a command: put `exec /Applications/Toolbox.app/Contents/MacOS/Toolbox --run "$@"` in `/usr/local/bin/toolbox-run` (after `#!/bin/sh`), then `chmod +x` it.
+- **Windows**: `"%LOCALAPPDATA%\Programs\Toolbox\Toolbox.exe" --run graph.toolbox …`. Not tried on Windows yet: Toolbox is a window app there, so a console may not show what it prints; the exit code (`echo %ERRORLEVEL%`) and the files are the same.
+- **Linux**: the AppImage, with the same flags. It needs a display: on a server, run it under `xvfb-run -a`.
+
+Every night at 2, shrink the day's photos (cron, `crontab -e`):
+
+```sh
+0 2 * * * /Applications/Toolbox.app/Contents/MacOS/Toolbox --run ~/Graphs/compress.toolbox --input "Several images=$HOME/Pictures/in" --out "$HOME/Pictures/out" --quiet >> ~/toolbox-run.log 2>&1
+```
+
+A Shortcuts (or Automator) action for files picked in the Finder: add **Run Shell Script**, set *Pass input* to **as arguments**, and use
+
+```sh
+for f in "$@"; do
+  /Applications/Toolbox.app/Contents/MacOS/Toolbox --run ~/Graphs/dither.toolbox --input "Image file=$f" --out "$(dirname "$f")" --quiet
+done
+```
 
 ## How it works
 
@@ -64,12 +102,13 @@ The installers aren't signed with a paid certificate (the Mac app is ad-hoc sign
 
 | Path | What |
 | --- | --- |
-| `electron/` | Main process: window, menus, file dialogs, the `app://` protocol that serves `dist/`, native ffmpeg and yt-dlp (`tools.js`). `local-files.js` (which files a graph names), `save-policy.js` (what Save does when a file exists) and `path-set.js` (the remembered lists of files) have no Electron in them, so `npm test` covers them |
+| `electron/` | Main process: window, menus, file dialogs, the `app://` protocol that serves `dist/`, native ffmpeg and yt-dlp (`tools.js`). `local-files.js` (which files a graph names), `save-policy.js` (what Save does when a file exists), `path-set.js` (the remembered lists of files) and `cli.js` (the `--run` command line) have no Electron in them, so `npm test` covers them |
 | `src/runtime/` | Graph types, evaluator + cache (DOM-free, tested in Node), the worker and its client |
 | `src/nodes/gpu.ts` | The WebGPU device shared by the GPU halves of the engines (`../dither/src/engine/gpu.ts`, `../media/src/engine/gpu-resize.ts`) |
 | `src/nodes/ffmpeg-video.ts` | Which ffmpeg encoder to use (hardware first where it's faster) and its arguments |
 | `src/nodes/` | Node definitions, one file per engine: image, dither, ascii, media, video, audio, text, pdf, qr, save. `qr-code.ts` is the QR engine (payloads, grid, RGBA and SVG drawing) on top of `qrcode-generator`, DOM-free so it's tested in Node. `remove-bg-core.ts` is the background-removal engine minus the model (model input, mask, guided-filter edge refinement, grow/shrink, cut-out or new background), also DOM-free; `remove-bg-model.ts` runs the model with ONNX Runtime Web (WebGPU, else WebAssembly on every core) and `electron/models.js` downloads each model once into Toolbox's folder, checked against a pinned SHA-256. The heavy libraries (Mediabunny, gifenc, ffmpeg.wasm, pdf-lib, pdf.js, jsquash) sit behind `import()` in `*-codec.ts`/`pdf-render.ts` or the engine itself, so the window only parses node metadata and the worker loads each library the first time a node needs it |
 | `src/App.tsx`, `src/app/` | The window: `App.tsx` wires the hooks in `app/` together and lays out the page. One hook per concern: `useRuntime` (worker, node status, previews), `useHistory` (undo), `useAssets` (files in input nodes), `useClipboard`, `useNodeMenu` (Add node menu, wiring rules, workflows), `useRender` (Render, Save, Outputs tray), `useDocuments` (tabs, autosave; the plain parts in `documents.ts`), `useGraphFile` (Open, Save, Save as, closing a tab), `useCommands` (menu and shortcuts), `useDrop`, `useView` (background preview, panel width), `useSimple` (Simple view's form, with its own graph and worker); `flow.ts` holds the shared helpers |
+| `src/headless.ts` | `Toolbox --run`: the hidden window runs the graph through the same worker and Save path as the app (no React); `headless-plan.ts` puts the command line's settings, inputs and folder into the graph |
 | `src/ui/` | React components: top bar, graph node card, inspector, Outputs tray, Dither Lab's stack editor, Simple view (`SimpleView`, `SimpleHome`, `SimpleForm`) |
 | `build/` | App icon: `icon.svg` is the source, `icon.png` (1024 px) and `icon.icns` are rendered from it |
 

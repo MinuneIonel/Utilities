@@ -2,7 +2,9 @@
 // settings panel and Outputs tray, or Simple view in its place.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Background, Controls, ReactFlow, useReactFlow, type Edge } from "@xyflow/react";
-import { WORKFLOWS } from "./graphs";
+import { workflowsFor } from "./graphs";
+import { doneKey } from "./folder-input";
+import { isDesktop } from "./platform";
 import { typingIn, type Point } from "./app/flow";
 import { DOCS_STORE, OLD_STORE } from "./app/documents";
 import { useAssets } from "./app/useAssets";
@@ -16,6 +18,7 @@ import { useNodeMenu } from "./app/useNodeMenu";
 import { usePlayback } from "./app/usePlayback";
 import { useRender } from "./app/useRender";
 import { useRuntime } from "./app/useRuntime";
+import { useTimeline } from "./app/useTimeline";
 import type { GivenFile } from "./app/useSimple";
 import { useUpdates } from "./app/useUpdates";
 import { useView } from "./app/useView";
@@ -28,6 +31,7 @@ import { NodeMenu } from "./ui/NodeMenu";
 import { OutputsTray } from "./ui/OutputsTray";
 import { Player, PlayerFrame } from "./ui/Player";
 import { TabStrip } from "./ui/TabStrip";
+import { Timeline } from "./ui/Timeline";
 import { SimpleView } from "./ui/SimpleView";
 import { TopBar } from "./ui/TopBar";
 import { Tutorial, tutorialSeen } from "./ui/Tutorial";
@@ -64,6 +68,9 @@ export function App() {
   const docs = useDocuments(flow, flash);
   const { nodes, edges, setNodes, setEdges, onNodesChange, onEdgesChange, activeId, openIds } = docs;
   const { runtime, setRuntimeOf, client, graph, graphRef, shapes, webcams, runKey } = useRuntime(nodes, edges, flash, activeId, openIds);
+  // A folder node's "Only new files" record follows the graph's file once it has one.
+  client.doneKeyOf = (s, n) => doneKey(docs.tabs.find((t) => t.id === s)?.path ?? s, n);
+  const forgetDone = (id: string) => void client.forgetDone(activeId, id).then(() => client.preview(graphRef.current));
   const { undo, redo, canUndo, canRedo, withoutHistory } = useHistory(graph, activeId, openIds, setNodes, setEdges, flash);
   const { setParams, setNodeFile, setNodeFiles, restoreFiles } = useAssets({ client, setNodes, withoutHistory, graphRef, docs });
   const { update, checkUpdate } = useUpdates(flash);
@@ -80,6 +87,12 @@ export function App() {
     shownBitmap: v.shown?.bitmap,
     scrubbed: v.scrubbed,
     show: (id) => v.shownId !== id && v.togglePreview(id),
+  });
+  const tl = useTimeline({
+    client, graph, runKey, nodes, runtime,
+    selectedId: nodes.find((n) => n.selected)?.id,
+    shownId: v.shownId,
+    enabled: mode === "graph" && !v.view.timelineHidden,
   });
   // A recording reads the cameras of the graph on screen, so it has to stop before another tab shows.
   const selectTab = (id: string) => (r.recording && id !== activeId ? flash("Stop the recording first.") : docs.switchTo(id));
@@ -258,7 +271,7 @@ export function App() {
                 {menu && (
                   <NodeMenu
                     defs={nodeMenu.menuDefs}
-                    workflows={menu.from ? undefined : WORKFLOWS}
+                    workflows={menu.from ? undefined : workflowsFor(isDesktop)}
                     x={menu.x}
                     y={menu.y}
                     title={menu.from ? "Add a node to this wire" : menu.workflows ? "Workflows: type to search" : undefined}
@@ -272,6 +285,9 @@ export function App() {
                   <p className="canvas-hint">Press Tab or right-click to add a node, or pick a ready-made one under Workflows. Drop images, videos, sound, PDFs or text anywhere.</p>
                 )}
               </div>
+              {tl.target && (
+                <Timeline tl={tl} playback={playback} scrubbed={scrubbed} shownId={v.shownId} setParams={setParams} collapsed={!!v.view.timelineHidden} onToggle={v.toggleTimeline} />
+              )}
             </section>
 
             <div className="inspector-wrap">
@@ -281,7 +297,7 @@ export function App() {
                 onDoubleClick={v.toggleInspector}
                 title="Drag to resize the settings panel; double-click to hide or show it"
               />
-              {!v.view.inspectorHidden && <Inspector node={selected} onParams={setParams} />}
+              {!v.view.inspectorHidden && <Inspector node={selected} onParams={setParams} onForgetDone={forgetDone} />}
             </div>
           </div>
 

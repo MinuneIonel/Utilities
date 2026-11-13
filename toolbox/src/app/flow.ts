@@ -38,6 +38,8 @@ export interface View {
   preview?: string;
   inspectorWidth: number;
   inspectorHidden: boolean;
+  /** The timeline under the canvas is folded down to its title bar. */
+  timelineHidden?: boolean;
 }
 
 export type Point = { x: number; y: number };

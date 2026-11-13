@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { audioFormatOf, clipNames, clipRanges, parseTime } from "../src/nodes/clips.ts";
+import { audioFormatOf, clipNames, clipRanges, formatMarks, formatParts, formatTime, parseMarks, parseParts, parseTime } from "../src/nodes/clips.ts";
 
 test("reads seconds and minutes:seconds", () => {
   assert.equal(parseTime("75"), 75);
@@ -72,4 +72,40 @@ test("keeps a sound's own format", () => {
   assert.equal(audioFormatOf("clip.webm"), "opus");
   assert.equal(audioFormatOf("podcast.aac"), "m4a");
   assert.equal(audioFormatOf("noext"), "m4a");
+});
+
+test("writes times as m:ss.d, which read back", () => {
+  assert.equal(formatTime(0), "0:00.0");
+  assert.equal(formatTime(65.5), "1:05.5");
+  assert.equal(formatTime(5), "0:05.0");
+  assert.equal(formatTime(3723.25), "1:02:03.25");
+  assert.equal(formatTime(1 / 30), "0:00.03");
+  assert.equal(formatTime(-3), "0:00.0");
+  for (const t of [0, 0.1, 1.5, 59.9, 60, 65.5, 599.95, 3599.9, 3600, 7322.4, 36000]) assert.equal(parseTime(formatTime(t)), t, formatTime(t));
+  assert.equal(parseTime("1:05.5"), 65.5);
+});
+
+test("cut times round-trip through Cut at text", () => {
+  const text = formatMarks([75, 30, 30, 2.5]);
+  assert.equal(text, "0:02.5, 0:30.0, 1:15.0");
+  assert.deepEqual(parseMarks(text), [2.5, 30, 75]);
+  assert.deepEqual(parseMarks("2, nonsense, 0:04.5"), [2, 4.5]);
+  assert.equal(formatMarks([]), "");
+  // What the timeline writes, Split cuts at.
+  assert.deepEqual(clipRanges(6, "at", { at: formatMarks([2, 4.5]) }).map((r) => r.end), [2, 4.5, 6]);
+});
+
+test("parts round-trip through Parts text", () => {
+  const parts = [
+    { start: 10, end: 25 },
+    { start: 60, end: 90.5 },
+  ];
+  const text = formatParts(parts);
+  assert.equal(text, "0:10.0-0:25.0, 1:00.0-1:30.5");
+  assert.deepEqual(parseParts(text, 100), parts);
+  assert.deepEqual(clipRanges(100, "parts", { parts: text }), parts);
+  assert.deepEqual(parseParts("0:10-end, junk, 5 to 6", 40), [
+    { start: 10, end: 40 },
+    { start: 5, end: 6 },
+  ]);
 });

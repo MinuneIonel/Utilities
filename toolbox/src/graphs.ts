@@ -158,7 +158,7 @@ export const WORKFLOWS: Workflow[] = [
       input: { node: 0, kind: "file", label: "Your video", accept: "video/*" },
       fields: [
         { node: 1, param: "mode", label: "Split" },
-        { node: 1, param: "every", label: "Clip length (seconds)" },
+        { node: 1, param: "every", label: "Clip length (1:30 or 90)" },
         { node: 1, param: "count", label: "Number of clips" },
         { node: 1, param: "at", label: "Cut at" },
       ],
@@ -180,8 +180,8 @@ export const WORKFLOWS: Workflow[] = [
       input: { node: 0, kind: "file", label: "Your sound", accept: "audio/*" },
       fields: [
         { node: 1, param: "mode", label: "This part" },
-        { node: 1, param: "start", label: "From (seconds)" },
-        { node: 1, param: "end", label: "To (seconds, 0 = the end)" },
+        { node: 1, param: "start", label: "From (1:05 or 65)" },
+        { node: 1, param: "end", label: "To (0 = the end)" },
       ],
       action: "Cut",
       topic: "sound",
@@ -289,6 +289,52 @@ export const WORKFLOWS: Workflow[] = [
         { node: 1, param: "position", label: "Where" },
         { node: 1, param: "size", label: "Text size (%)" },
         { node: 1, param: "color", label: "Colour" },
+      ],
+      preview: 1,
+      action: "Watermark",
+      topic: "image",
+    },
+  },
+  {
+    id: "compress-folder",
+    title: "Compress a folder of photos",
+    description: "Pick a folder once and save each photo in it as a JPEG under 500 KB. Run it again later and only the new photos are done.",
+    build: () =>
+      chain([
+        ["input.folder", { onlyNew: true }],
+        ["media.encode", { format: "jpeg", quality: 80, maxKB: 500 }],
+        ["output.save-file", { exists: "skip" }],
+      ]),
+    form: {
+      input: { node: 0, kind: "folder", label: "Your folder of photos" },
+      fields: [
+        { node: 1, param: "quality", label: "Quality" },
+        { node: 1, param: "maxKB", label: "Largest size (KB, 0 = no limit)" },
+        { node: 0, param: "onlyNew", label: "Only photos not done before" },
+        { node: 0, param: "subfolders", label: "Include sub-folders" },
+      ],
+      action: "Compress",
+      topic: "image",
+    },
+  },
+  {
+    id: "watermark-folder",
+    title: "Watermark a folder of photos",
+    description: "Pick a folder once, type your name, and save each photo with it in the corner. Run it again later and only the new photos are done.",
+    build: () =>
+      chain([
+        ["input.folder", { onlyNew: true }],
+        ["image.overlay", {}],
+        ["media.encode", { format: "jpeg", quality: 88 }],
+        ["output.save-file", { exists: "skip" }],
+      ]),
+    form: {
+      input: { node: 0, kind: "folder", label: "Your folder of photos" },
+      fields: [
+        { node: 1, param: "text", label: "Your text" },
+        { node: 1, param: "position", label: "Where" },
+        { node: 1, param: "size", label: "Text size (%)" },
+        { node: 0, param: "onlyNew", label: "Only photos not done before" },
       ],
       preview: 1,
       action: "Watermark",
@@ -470,6 +516,9 @@ export const WORKFLOWS: Workflow[] = [
     },
   },
 ];
+
+/** The workflows this app can run: a browser tab can't read folders on the computer. */
+export const workflowsFor = (desktop: boolean) => WORKFLOWS.filter((w) => desktop || w.form.input.kind !== "folder");
 
 /** A workflow's graph moved so its first node sits at `at`, with fresh ids so it can go next to anything. */
 export function placeWorkflow(w: Workflow, at: { x: number; y: number }): Graph {

@@ -5,6 +5,7 @@ import { addEdge, type Connection, type Edge, type FinalConnectionState, type Re
 import { newId, newNode, placeWorkflow, WORKFLOWS } from "../graphs";
 import { CONVERTERS, NODE_DEFS, REGISTRY } from "../nodes";
 import { canConnect, type outputShapes } from "../runtime/evaluate";
+import { isDesktop } from "../platform";
 import type { NodeDef } from "../runtime/types";
 import type { ToolFlowNode } from "../ui/context";
 import { inputPort, NODE_HALF_WIDTH, toFlow, type Flash, type MenuState, type Point, type SetEdges, type SetNodes } from "./flow";
@@ -106,7 +107,7 @@ export function useNodeMenu(
     [openMenu],
   );
 
-  const menuDefs = useMemo(() => NODE_DEFS.filter((d) => !d.hidden && (!menu?.from || portFor(d, menu.from))), [menu, portFor]);
+  const menuDefs = useMemo(() => NODE_DEFS.filter((d) => !d.hidden && (!d.desktopOnly || isDesktop) && (!menu?.from || portFor(d, menu.from))), [menu, portFor]);
 
   const pickFromMenu = useCallback(
     (type: string) => {

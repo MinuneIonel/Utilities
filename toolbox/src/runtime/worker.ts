@@ -4,8 +4,11 @@ import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
+import { videoCodec } from "../nodes/video";
 import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
-import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import type { DoneFiles } from "../folder-input";
+import { folderRuns, forgetFolders, refreshFolders, relistFolders } from "../nodes/folder";
+import { setFolderLister, setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type FolderAnswer, type FolderQuery, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { isDisk } from "../nodes/source";
 import { ResultCache, evaluate } from "./evaluate";
@@ -39,6 +42,11 @@ export type ToWorker =
   | { type: "scratch-result"; callId: string; result?: unknown; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string }
+  | { type: "folder-result"; callId: string; result?: FolderAnswer; error?: string }
+  /** The window got focus back, or files were marked done: folder nodes look in their folders again. */
+  | { type: "relist" }
+  /** Sent first, in the desktop app only (before the first run, unlike "tools", which waits on the tools). */
+  | { type: "desktop" }
   /**
    * Plays a node's output (its `port`) from `at` (0–1 of the way through): small frames paced to
    * the clock, and its sound. Render stops it.
@@ -46,7 +54,20 @@ export type ToWorker =
   | { type: "play"; reqId: number; graph: Graph; nodeId: string; port: string; at: number; scope: string }
   | { type: "play-stop" }
   /** The window drew a played frame. */
-  | { type: "play-ack"; reqId: number };
+  | { type: "play-ack"; reqId: number }
+  /**
+   * What the timeline draws: the length of `base` (the value a node's times are in), with a filmstrip
+   * of `source` (the video file it comes from) or the waveform of `base` if it's a sound. `whole`
+   * shows all of the source's file rather than just the part it keeps. `graph` is just what feeds `base`.
+   */
+  | { type: "strip"; reqId: number; graph: Graph; scope: string; source: { id: string; port: string }; base: { id: string; port: string }; whole: boolean };
+
+/** What the timeline gets: its length first, then the pictures one by one, so the strip fills in. */
+export type StripMessage =
+  | { type: "strip-info"; reqId: number; kind: "video" | "audio"; duration: number; fps: number; count: number }
+  | { type: "strip-thumb"; reqId: number; index: number; bitmap: ImageBitmap }
+  | { type: "strip-wave"; reqId: number; bitmap: ImageBitmap }
+  | { type: "strip-end"; reqId: number; error?: string };
 
 export interface SavedFile {
   name: string;
@@ -105,7 +126,9 @@ export type ToolRequest =
   /** A file written into the scratch folder chunk by chunk (an encoded video); answered with scratch-result. */
   | { type: "scratch-call"; callId: string; op: "open"; id: string; name: string }
   | { type: "scratch-call"; callId: string; op: "write"; id: string; chunk: Uint8Array; position: number }
-  | { type: "scratch-call"; callId: string; op: "close"; id: string };
+  | { type: "scratch-call"; callId: string; op: "close"; id: string }
+  /** A folder node's folder, listed by the desktop app; answered with folder-result. */
+  | { type: "folder-list"; callId: string; scope: string; nodeId: string; query: FolderQuery };
 
 /** What playback sends the window. */
 export type PlayMessage =
@@ -120,10 +143,12 @@ export type PlayMessage =
 
 export type FromWorker =
   | PlayMessage
+  | StripMessage
   | NodeUpdate
   | ProgressUpdate
   | ToolRequest
-  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string }
+  /** `folders`: after a Render, the files each folder node with "Only new files" worked on. */
+  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string; folders?: { nodeId: string; done: DoneFiles }[] }
   /** Scratch files no cached result holds any more: the desktop app deletes them. */
   | { type: "scratch-free"; paths: string[] };
 
@@ -221,6 +246,8 @@ function scratchCall<T>(msg: DistributiveOmit<Extract<ToolRequest, { type: "scra
     post({ ...msg, type: "scratch-call", callId } as ToolRequest, transfer);
   });
 }
+const folderCalls = new Map<string, { resolve(r: FolderAnswer): void; reject(e: Error): void }>();
+let folderN = 0;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /**
@@ -305,6 +332,24 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   } else if (msg.type === "forget") {
     forgetSent(msg.scope);
     cache.forget(msg.scope);
+    forgetFolders(msg.scope);
+  } else if (msg.type === "relist") relistFolders();
+  else if (msg.type === "desktop") {
+    // The desktop app lists folders for the folder nodes (through the window).
+    setFolderLister(
+      (scope, nodeId, query) =>
+        new Promise<FolderAnswer>((resolve, reject) => {
+          const callId = `d${WORKER}.${++folderN}`;
+          folderCalls.set(callId, { resolve, reject });
+          post({ type: "folder-list", callId, scope, nodeId, query });
+        }),
+    );
+  }
+  else if (msg.type === "folder-result") {
+    const call = folderCalls.get(msg.callId);
+    folderCalls.delete(msg.callId);
+    if (msg.result) call?.resolve(msg.result);
+    else call?.reject(new Error(msg.error ?? "Couldn't look in the folder"));
   }
   else if (msg.type === "stop-downloads") stopDownloads();
   else if (msg.type === "cancel") {
@@ -329,6 +374,16 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     playing = s;
     // Waits its turn behind a preview in progress (whose results it then gets from the cache).
     queue = queue.then(() => startPlay(s, msg));
+  } else if (msg.type === "strip") {
+    stripAbort.abort();
+    const abort = (stripAbort = new AbortController());
+    // Waits for a preview in progress (whose results it then finds in the cache), without holding up the ones after it.
+    void queue
+      .then(() => sendStrip(msg, abort.signal))
+      .then(
+        () => !abort.signal.aborted && post({ type: "strip-end", reqId: msg.reqId }),
+        (err) => !abort.signal.aborted && post({ type: "strip-end", reqId: msg.reqId, error: err instanceof Error ? err.message : String(err) }),
+      );
   } else if (msg.type === "play-stop") {
     stopPlay();
   } else if (msg.type === "play-ack") {
@@ -447,7 +502,7 @@ async function startPlay(s: PlaySession, msg: Extract<ToWorker, { type: "play" }
   let value: Value | undefined;
   try {
     // The preview that just ran left everything in the cache, so this is quick.
-    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras }, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => playing !== s });
+    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras, scope: msg.scope }, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => playing !== s });
     const r = results.get(msg.nodeId);
     value = r?.outputs[msg.port] ?? Object.values(r?.outputs ?? {})[0];
     if (!value) throw new Error(r?.error ?? "Nothing to play yet");
@@ -522,6 +577,66 @@ async function playValue(s: PlaySession, v: Value, at: number) {
   }
 }
 
+/** Pictures in the timeline's filmstrip: enough to tell the scenes apart, few enough to decode in a moment. */
+const STRIP_THUMBS = 24;
+let stripAbort = new AbortController();
+
+const imageBitmap = (img: ImageValue) => createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+
+async function sendStrip(msg: Extract<ToWorker, { type: "strip" }>, signal: AbortSignal) {
+  const { reqId } = msg;
+  const ctx = { mode: "preview" as const, assets, cameras };
+  // The preview that ran before left these in the cache, so this is quick.
+  const results = await evaluate(msg.graph, { registry: REGISTRY, ctx, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => signal.aborted });
+  if (signal.aborted) return;
+  const output = (p: { id: string; port: string }) => {
+    const r = results.get(p.id);
+    return { value: r?.outputs[p.port], error: r?.error };
+  };
+  const base = output(msg.base);
+  if (!base.value) throw new Error(base.error ?? "Nothing to show yet");
+  if (base.value.kind === "audio") {
+    const a = base.value;
+    const codec = await audioCodec();
+    const duration = a.duration ?? (await codec.duration(a.bytes)) ?? 0;
+    post({ type: "strip-info", reqId, kind: "audio", duration, fps: 0, count: 0 });
+    const img = await codec.waveform(a, 2000, 96);
+    if (!img || signal.aborted) return;
+    const bitmap = await imageBitmap(img);
+    post({ type: "strip-wave", reqId, bitmap }, [bitmap]);
+    return;
+  }
+  if (base.value.kind !== "video") throw new Error("Only videos and sounds have a timeline");
+  const src = output(msg.source).value;
+  if (src?.kind !== "video") throw new Error("Nothing to show yet");
+  const codec = await videoCodec();
+  let file = src.origin ?? src.audioSource;
+  // At another speed the value keeps no file of its own: the Video file node's file is still it.
+  const node = msg.graph.nodes.find((n) => n.id === msg.source.id);
+  const asset = node?.type === "input.video" ? assets.get(String(node.params.assetId)) : undefined;
+  if (!file && asset) file = await codec.readableFile(asset, ctx);
+  const timing = file ? await codec.fileTiming(file) : { duration: src.duration, fps: src.fps };
+  // The whole file, in its own seconds; or the part the source keeps, from 0.
+  const from = msg.whole ? 0 : (src.range?.start ?? 0);
+  const span = msg.whole ? timing.duration : src.range ? src.range.end - src.range.start : timing.duration;
+  const duration = msg.whole ? timing.duration : base.value.duration;
+  post({ type: "strip-info", reqId, kind: "video", duration, fps: timing.fps || src.fps, count: file ? STRIP_THUMBS : 0 });
+  if (!file || !(span > 0)) return;
+  const sends: Promise<void>[] = [];
+  await codec.stripFor(
+    file,
+    from,
+    span,
+    STRIP_THUMBS,
+    (index, img) =>
+      void sends.push(
+        imageBitmap(img).then((bitmap) => (signal.aborted ? bitmap.close() : post({ type: "strip-thumb", reqId, index, bitmap }, [bitmap]))),
+      ),
+    signal,
+  );
+  await Promise.all(sends);
+}
+
 async function run(reqId: number, mode: "preview" | "render", graph: Graph, scope: string) {
   // A newer preview makes this one pointless; a render only stops when asked to.
   const cancelled = () => (mode === "preview" ? reqId !== latestPreview : renderCancelled);
@@ -529,9 +644,11 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
   const pending: Promise<void>[] = [];
   const lastProgress = new Map<string, number>();
   try {
-    await evaluate(graph, {
+    // What's in the folders a graph reads from is part of its cache keys, so it's looked at first.
+    await refreshFolders(graph, scope, mode === "render");
+    const results = await evaluate(graph, {
       registry: REGISTRY,
-      ctx: { mode, assets, cameras, signal: mode === "render" ? renderAbort.signal : undefined },
+      ctx: { mode, assets, cameras, scope, signal: mode === "render" ? renderAbort.signal : undefined },
       cache,
       converters: CONVERTERS,
       cancelled,
@@ -551,7 +668,9 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
       },
     });
     await Promise.all(pending);
-    post({ type: "done", reqId, mode, error: cancelled() && mode === "render" ? "Render cancelled" : undefined });
+    const stopped = cancelled() && mode === "render";
+    const folders = mode === "render" && !stopped ? folderRuns(graph, scope, results) : [];
+    post({ type: "done", reqId, mode, error: stopped ? "Render cancelled" : undefined, ...(folders.length ? { folders } : {}) });
   } catch (err) {
     await Promise.all(pending);
     post({ type: "done", reqId, mode, error: err instanceof Error ? err.message : String(err) });
@@ -605,7 +724,7 @@ async function report(
     const parts = v.of === "file" && !v.width ? [] : [`${v.width}×${v.height}`];
     if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} item${v.duration === 1 ? "" : "s"}` : `${v.duration.toFixed(1)} s`);
     else if (v.duration === 0 && !v.origin) parts.push("live");
-    msg.info = parts.join(" · ");
+    msg.info = v.about ?? parts.join(" · ");
     first = v.poster;
   }
   if (first?.kind === "grid" && changed) first = gridToImage(first);

@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld("toolbox", {
   scratchDelete: (paths) => ipcRenderer.invoke("scratch-delete", paths),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
   defaultFolder: () => ipcRenderer.invoke("default-folder"),
+  chooseInputFolder: () => ipcRenderer.invoke("choose-input-folder"),
+  listFolder: (req) => ipcRenderer.invoke("list-folder", req),
+  folderRunsGet: (key) => ipcRenderer.invoke("folder-runs-get", key),
+  folderRunsAdd: (key, done) => ipcRenderer.invoke("folder-runs-add", key, done),
+  folderRunsClear: (key) => ipcRenderer.invoke("folder-runs-clear", key),
   openGraph: () => ipcRenderer.invoke("open-graph"),
   saveGraph: (text, suggestedName) => ipcRenderer.invoke("save-graph", text, suggestedName),
   saveGraphTo: (p, text) => ipcRenderer.invoke("save-graph-to", p, text),
@@ -47,4 +52,11 @@ contextBridge.exposeInMainWorld("toolbox", {
   cancelTool: (id) => ipcRenderer.invoke("tool-cancel", id),
   getModel: (id, file) => ipcRenderer.invoke("model-get", id, file),
   onToolProgress: (handler) => ipcRenderer.on("tool-progress", (_e, id, fraction, label) => handler(id, fraction, label)),
+  /** A run from the command line: the window says it's ready, and the main process sends the graph. */
+  onHeadlessRun: (handler) => {
+    ipcRenderer.once("headless-run", (_e, req) => handler(req));
+    ipcRenderer.send("headless-ready");
+  },
+  headlessLog: (line) => ipcRenderer.send("headless-log", line),
+  headlessDone: (result) => ipcRenderer.send("headless-done", result),
 });

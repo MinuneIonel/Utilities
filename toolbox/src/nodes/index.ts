@@ -4,6 +4,7 @@ import { AUDIO_CONVERTERS, audioConvert, audioCut, audioInput } from "./audio";
 import { ditherRecipe } from "./dither";
 import { download } from "./download";
 import { fileInput, imagesInput } from "./file";
+import { folderInput } from "./folder";
 import { imageEncode, imageTransform } from "./media";
 import { overlay } from "./overlay";
 import { imagesToPdf, PDF_CONVERTERS, pdfCompact, pdfInput, pdfMerge, pdfPages, pdfProtect, pdfStamp, pdfToImages } from "./pdf";
@@ -17,6 +18,7 @@ import { extractAudio, videoEncode, videoInput, webcam } from "./video";
 export const NODE_DEFS: NodeDef[] = [
   fileInput,
   imagesInput,
+  folderInput,
   videoInput,
   webcam,
   download,

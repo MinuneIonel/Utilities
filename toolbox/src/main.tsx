@@ -12,9 +12,12 @@ if (isDesktop && /Mac/.test(navigator.platform)) document.body.classList.add("ma
 // Mouse wheel over a slider nudges it (Shift = fine, ⌘/Ctrl = coarse).
 installWheelNudge();
 
-createRoot(document.getElementById("root")!).render(
-  // No StrictMode: its double effects would mount Dither Lab's stack editor twice.
-  <ReactFlowProvider>
-    <App />
-  </ReactFlowProvider>,
-);
+// Toolbox --run: a graph run from the command line in a hidden window, without the app.
+if (new URLSearchParams(location.search).has("headless")) void import("./headless").then((m) => m.runHeadless());
+else
+  createRoot(document.getElementById("root")!).render(
+    // No StrictMode: its double effects would mount Dither Lab's stack editor twice.
+    <ReactFlowProvider>
+      <App />
+    </ReactFlowProvider>,
+  );

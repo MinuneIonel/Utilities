@@ -103,6 +103,8 @@ export interface VideoValue {
   fps: number;
   /** The frame at the playhead: preview size during live preview. */
   poster: Value;
+  /** What the node's card says about it instead of its size and length ("128 images in Holiday"). */
+  about?: string;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
   audioSource?: MediaFile;
   /**
@@ -176,6 +178,8 @@ export type ParamDef = { advanced?: boolean } & (
   /** `commit` applies the value on Enter or blur instead of every keystroke. */
   | { key: string; label: string; kind: "text"; multiline?: boolean; commit?: boolean; placeholder?: string }
   | { key: string; label: string; kind: "toggle" }
+  /** A number of seconds, typed and shown as m:ss.d (it stays a number, so saved graphs keep working). */
+  | { key: string; label: string; kind: "time" }
   /** Edited by a node-specific inspector panel (e.g. Dither Lab's effect stack). */
   | { key: string; label: string; kind: "custom" }
 );
@@ -187,6 +191,8 @@ export interface RunContext {
   assets: ReadonlyMap<string, Blob>;
   /** The node being run. */
   nodeId?: string;
+  /** The open graph (tab) being run: node ids are only unique within one. */
+  scope?: string;
   /** Live frames from a Webcam node, by node id. */
   cameras?: ReadonlyMap<string, CameraFeed>;
   /** Reports progress of a long job, 0–1. */
@@ -204,6 +210,22 @@ export interface CameraFeed {
   record(signal?: AbortSignal): AsyncIterable<FrameItem>;
   /** The microphone's recording, when this Render records sound; resolves after Stop. */
   sound?: Promise<Blob | undefined>;
+}
+
+/** Which params the timeline under the canvas draws as handles, and how. */
+export interface NodeTimeline {
+  /** Start and End param keys (End 0 = to the end). */
+  range?: { start: string; end: string };
+  /** A param holding cut times as text, "0:30, 1:15" (Split's Cut at). */
+  marks?: string;
+  /** A param holding parts as text, "0:10-0:25, 1:00-1:30" (Split's Parts). */
+  parts?: string;
+  /** The range is taken out rather than kept (Cut audio's Take this part out). */
+  remove?: (p: Params) => boolean;
+  /** Which of the above these settings use (Split: marks or parts, by its mode); all of them when absent. */
+  uses?: (p: Params) => "range" | "marks" | "parts" | "cuts" | undefined;
+  /** Cut times worked out from the settings, drawn but not draggable (Split every … seconds, equal parts). */
+  cuts?: (p: Params, duration: number) => number[];
 }
 
 export interface NodeDef {
@@ -225,6 +247,8 @@ export interface NodeDef {
   saves?: boolean;
   /** Kept so older graphs still open, but no longer offered in the Add node menu. */
   hidden?: boolean;
+  /** Only offered in the desktop app (it reads folders on the computer). */
+  desktopOnly?: boolean;
   /**
    * Output changes on its own (a webcam's newest frame). Its results, and those of
    * every node after it, are never cached: they would only fill the cache with
@@ -241,6 +265,8 @@ export interface NodeDef {
    * is previewed). Render's result doesn't depend on them, so changing one never re-renders.
    */
   previewParams?: string[];
+  /** Time settings the timeline can show and edit, in seconds of this node's input. */
+  timeline?: NodeTimeline;
   run(inputs: Record<string, Value | undefined>, params: Params, ctx: RunContext): Promise<Record<string, Value>>;
 }
 

@@ -77,6 +77,11 @@ try {
 
   // Simple view in a browser: no folder to pick, and the button downloads the file.
   await page.click('.app .mode-switch button:has-text("Simple")');
+  await page.waitForSelector('.simple-tile[data-workflow="qr-code"]');
+  check(
+    "A browser tab offers no folder workflows (it can't read folders)",
+    !(await page.$('.simple-tile[data-workflow="compress-folder"]')) && !(await page.$('.simple-tile[data-workflow="watermark-folder"]')),
+  );
   await page.click('.simple-tile[data-workflow="qr-code"]');
   await page.fill(".simple-text", "https://example.com/from-the-browser");
   check(

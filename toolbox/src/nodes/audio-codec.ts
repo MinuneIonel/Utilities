@@ -164,14 +164,20 @@ async function encode(a: AudioValue, settings: AudioSettings, name: string | und
   }
 }
 
-const waveforms = new WeakMap<Uint8Array, Promise<ImageValue | undefined>>();
+const waveforms = new WeakMap<Uint8Array, Map<string, Promise<ImageValue | undefined>>>();
 
-/** A waveform picture of the sound, for node cards and the backdrop. Drawn once per audio. */
-export function waveform(a: AudioValue): Promise<ImageValue | undefined> {
-  let p = waveforms.get(a.bytes);
+/**
+ * A waveform picture of the sound, for node cards and the backdrop (640 × 160), or the timeline
+ * (wider). Drawn once per audio and size.
+ */
+export function waveform(a: AudioValue, width = 640, height = 160): Promise<ImageValue | undefined> {
+  let bySize = waveforms.get(a.bytes);
+  if (!bySize) waveforms.set(a.bytes, (bySize = new Map()));
+  const key = `${width}x${height}`;
+  let p = bySize.get(key);
   if (!p) {
-    p = drawWaveform(a);
-    waveforms.set(a.bytes, p);
+    p = drawWaveform(a, width, height);
+    bySize.set(key, p);
   }
   return p;
 }

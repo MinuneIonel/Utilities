@@ -23,14 +23,15 @@ export const videoInput: NodeDef = {
   outputs: [{ key: "video", label: "Video", type: "video" }],
   params: [
     { key: "at", label: "Playhead %", kind: "number", min: 0, max: 100, step: 0.5 },
-    { key: "start", label: "Start s", kind: "number", min: 0, max: 7200, step: 0.1 },
-    { key: "end", label: "End s (0 = to the end)", kind: "number", min: 0, max: 7200, step: 0.1 },
+    { key: "start", label: "Start", kind: "time" },
+    { key: "end", label: "End (0 = to the end)", kind: "time" },
     { key: "speed", label: "Speed ×", kind: "number", min: 0.25, max: 8, step: 0.25 },
   ],
   defaults: () => ({ assetId: "", name: "", at: 10, start: 0, end: 0, speed: 1 }),
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
   previewParams: ["at"],
+  timeline: { range: { start: "start", end: "end" } },
   async run(_inputs, params, ctx) {
     const blob = ctx.assets.get(String(params.assetId));
     if (!blob) throw new Error("Drop a video here");

@@ -1,5 +1,6 @@
 // What the Electron preload script exposes. In a plain browser tab it's
 // missing, and the functions below fall back to downloads and file pickers.
+import type { RunRequest, RunResult } from "./headless-plan";
 import type { Bytes } from "./runtime/types";
 
 interface ToolboxBridge {
@@ -15,6 +16,15 @@ interface ToolboxBridge {
   chooseFolder(): Promise<string | null>;
   /** The system's Downloads folder, where Simple view saves until another is picked. */
   defaultFolder(): Promise<string>;
+  /** A folder to read files from ("Folder of files"); choosing it lets the window list and read it. */
+  chooseInputFolder(): Promise<string | null>;
+  /** What's in a folder chosen with chooseInputFolder (or agreed to when a graph named it). */
+  listFolder(req: FolderRequest): Promise<FolderListing>;
+  /** The files a "Folder of files" node already did (path -> modified time), under its key. */
+  folderRunsGet(key: string): Promise<Record<string, number>>;
+  folderRunsAdd(key: string, done: Record<string, number>): Promise<void>;
+  /** "Forget what was done". */
+  folderRunsClear(key: string): Promise<void>;
   openGraph(): Promise<GraphFile | null>;
   /** Asks where to save; resolves with the path, or null if cancelled. */
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
@@ -52,6 +62,12 @@ interface ToolboxBridge {
   /** A model file kept in Toolbox's folder, downloaded (with progress under `id`) the first time. */
   getModel(id: string, file: string): Promise<Uint8Array>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
+  /** A run from the command line (Toolbox --run): the hidden window gets the graph to run here. */
+  onHeadlessRun?(handler: (req: RunRequest) => void): void;
+  /** A progress line for the command line. */
+  headlessLog(line: string): void;
+  /** The run is over; the main process prints the result and exits. */
+  headlessDone(result: RunResult): void;
 }
 
 /** A graph file's text, its file name, and (desktop app) where it is. */
@@ -76,6 +92,26 @@ export interface SaveOptions {
   exists?: ExistsPolicy;
   /** Files this Save node wrote before: the only ones it may replace. */
   own?: string[];
+  /** A sub-folder of the folder to save in ("2024/beach"); it can't lead out of the folder. */
+  sub?: string;
+}
+
+/** What a "Folder of files" node asks to list. */
+export interface FolderRequest {
+  folder: string;
+  kind: string;
+  pattern: string;
+  recursive: boolean;
+}
+
+/** A folder's files, sorted by name; `name` is relative to the folder, with "/" between sub-folders. */
+export interface FolderListing {
+  entries: { path: string; name: string; size: number; mtimeMs: number }[];
+  /** There were more files than a listing holds. */
+  more: boolean;
+  missing?: boolean;
+  /** Toolbox wasn't given this folder. */
+  refused?: boolean;
 }
 
 export interface SaveResult {

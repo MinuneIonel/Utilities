@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { REGISTRY } from "../nodes";
+import { formatTime, parseTime } from "../nodes/clips";
 import { bridge } from "../platform";
 import { hasPresets, matchingPreset, PRESET_STORE, presetParams, readPresets, withoutPreset, withPreset, type PresetBook } from "../presets";
 import type { NodeDef, ParamDef, Params } from "../runtime/types";
@@ -169,6 +170,36 @@ function NumberBox({ def, value, set }: { def: Extract<ParamDef, { kind: "number
   );
 }
 
+/**
+ * A time in seconds, shown as m:ss.d. Takes 65.5, 1:05.5 or 1:02:03 on Enter or blur; anything
+ * else goes back to the time it was.
+ */
+function TimeBox({ value, set }: { value: number; set: (v: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = formatTime(Number.isFinite(value) ? value : 0);
+  const commit = () => {
+    if (draft === null) return;
+    const v = parseTime(draft);
+    if (Number.isFinite(v) && v !== value && draft.trim() !== shown) set(v);
+    setDraft(null);
+  };
+  return (
+    <input
+      type="text"
+      className="time"
+      inputMode="decimal"
+      value={draft ?? shown}
+      title="Minutes:seconds (1:05.5) or seconds (65.5)"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setDraft(null);
+      }}
+    />
+  );
+}
+
 /** One setting, drawn from its ParamDef. Simple view's forms use it too. */
 export function Field({ def, value, set }: { def: ParamDef; value: unknown; set: (v: unknown) => void }) {
   switch (def.kind) {
@@ -178,6 +209,13 @@ export function Field({ def, value, set }: { def: ParamDef; value: unknown; set:
           <label>{def.label}</label>
           <input type="range" min={def.min} max={def.max} step={def.step} value={Number(value)} onChange={(e) => set(e.target.valueAsNumber)} />
           <NumberBox def={def} value={Number(value)} set={set} />
+        </div>
+      );
+    case "time":
+      return (
+        <div className="field">
+          <label>{def.label}</label>
+          <TimeBox value={Number(value)} set={set} />
         </div>
       );
     case "select":
@@ -221,7 +259,7 @@ export function Field({ def, value, set }: { def: ParamDef; value: unknown; set:
   }
 }
 
-export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; onParams: (id: string, patch: Params) => void }) {
+export function Inspector({ node, onParams, onForgetDone }: { node: ToolFlowNode | undefined; onParams: (id: string, patch: Params) => void; onForgetDone?: (id: string) => void }) {
   if (!node) return <aside className="inspector empty">Select a node to edit it.</aside>;
   const def = REGISTRY.get(node.data.type);
   if (!def) return <aside className="inspector empty">Unknown node.</aside>;
@@ -241,7 +279,18 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
       <h2>{def.title}</h2>
       <p className="hint">{def.description}</p>
       {hasPresets(def) && <PresetBar key={def.type} def={def} params={p} apply={(patch) => onParams(node.id, patch)} />}
+      {def.type === "input.folder" && (
+        <FolderField value={String(p.folder || "")} empty="None yet" browser="Folders work in the desktop app" choose={() => bridge!.chooseInputFolder()} set={(f) => onParams(node.id, { folder: f })} />
+      )}
       {shown.filter((d) => !d.advanced).map(field)}
+      {def.type === "input.folder" && bridge && !!p.onlyNew && !!onForgetDone && (
+        <div className="field">
+          <label />
+          <button className="forget-done" onClick={() => onForgetDone(node.id)} title="Count every file in the folder as new again">
+            Forget what was done
+          </button>
+        </div>
+      )}
       {advanced.length > 0 && (
         <details className="advanced">
           <summary>Advanced</summary>
@@ -249,28 +298,41 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
         </details>
       )}
       {def.saves && (
-        <div className="field">
-          <label>Folder</label>
-          {bridge ? (
-            <>
-              <span className="path" title={String(p.folder || "")}>
-                {p.folder ? String(p.folder) : "Ask each time"}
-              </span>
-              <button
-                onClick={async () => {
-                  const f = await bridge!.chooseFolder();
-                  if (f) onParams(node.id, { folder: f });
-                }}
-              >
-                Choose…
-              </button>
-              {!!p.folder && <button onClick={() => onParams(node.id, { folder: "" })}>Clear</button>}
-            </>
-          ) : (
-            <span className="path">Your browser's downloads folder</span>
-          )}
-        </div>
+        <FolderField
+          value={String(p.folder || "")}
+          empty="Ask each time"
+          browser="Your browser's downloads folder"
+          choose={() => bridge!.chooseFolder()}
+          set={(f) => onParams(node.id, { folder: f })}
+        />
       )}
     </aside>
+  );
+}
+
+/** A folder setting: where a Save node writes, or which folder a Folder of files reads (desktop app). */
+export function FolderField({ value, empty, browser, choose, set }: { value: string; empty: string; browser: string; choose: () => Promise<string | null>; set: (folder: string) => void }) {
+  return (
+    <div className="field">
+      <label>Folder</label>
+      {bridge ? (
+        <>
+          <span className="path" title={value}>
+            {value || empty}
+          </span>
+          <button
+            onClick={async () => {
+              const f = await choose();
+              if (f) set(f);
+            }}
+          >
+            Choose…
+          </button>
+          {!!value && <button onClick={() => set("")}>Clear</button>}
+        </>
+      ) : (
+        <span className="path">{browser}</span>
+      )}
+    </div>
   );
 }

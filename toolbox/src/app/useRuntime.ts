@@ -141,5 +141,16 @@ export function useRuntime(nodes: ToolFlowNode[], edges: Edge[], flash: Flash, s
     client.preview(graphRef.current);
   }, [runKey, client, scope]);
 
+  // Back in the window, a graph that reads a folder looks in it again: files may have come since.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!graphRef.current.nodes.some((n) => n.type === "input.folder")) return;
+      client.relist();
+      client.preview(graphRef.current);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [client]);
+
   return { runtime, setRuntime, setRuntimeOf, client, graph, graphRef, shapes, webcams, runKey };
 }

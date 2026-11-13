@@ -115,7 +115,9 @@ export const saveFile: NodeDef = {
       const f = item.value as FileValue;
       const n = batch.length + 1;
       if (n > MAX_BATCH) throw new Error(`That's more than ${MAX_BATCH} files. For a video, use Encode video before Save.`);
-      const stem = base ? `${base}-${n}` : item.name ? item.name.replace(/\.[^.]+$/, "") : `${f.name.replace(/\.[^.]+$/, "")}-${n}`;
+      // An image from a sub-folder ("2024/beach.jpg", from a Folder of files) keeps its sub-folder.
+      const dir = item.name?.includes("/") ? item.name.slice(0, item.name.lastIndexOf("/") + 1) : "";
+      const stem = base ? `${dir}${base}-${n}` : item.name ? item.name.replace(/\.[^./]+$/, "") : `${f.name.replace(/\.[^.]+$/, "")}-${n}`;
       batch.push({ ...f, name: stem + extOf(f.name) });
       if (v.duration > 0) ctx.progress?.(Math.min(0.99, item.timestamp / v.duration), `File ${n}`);
     }

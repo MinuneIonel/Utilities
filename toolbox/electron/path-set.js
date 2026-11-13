@@ -48,6 +48,8 @@ export function createPathSet(file, cap = 2000) {
       if (changed && file && !timer) timer = setTimeout(persist, 200);
     },
     has: (p) => typeof p === "string" && !!p && path.isAbsolute(p) && paths.has(key(p)),
+    /** Every path, oldest first. */
+    list: () => [...paths],
     get size() {
       return paths.size;
     },

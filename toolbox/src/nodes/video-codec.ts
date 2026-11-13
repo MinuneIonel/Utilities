@@ -824,3 +824,46 @@ export async function soundTrack(file: MediaFile, range?: TimeRange): Promise<Au
     input.dispose?.();
   }
 }
+
+/** A file as the video nodes read it: itself, or the copy native ffmpeg made of a file WebCodecs can't read. */
+export const readableFile = readableCopy;
+
+/** How long a video file is, and its frame rate (both cached per file). */
+export async function fileTiming(f: MediaFile): Promise<{ duration: number; fps: number }> {
+  const [i, fps] = await Promise.all([info(f), estimateFps(f)]);
+  return { duration: i.duration, fps };
+}
+
+const strips = new MediaCache<Map<string, ImageValue[]>>();
+/**
+ * `n` small frames, evenly spaced over `span` seconds of the file from `from`, for the timeline.
+ * Each goes to `onThumb` as soon as it's decoded, so the strip fills in; a finished set is kept per file.
+ */
+export async function stripFor(f: MediaFile, from: number, span: number, n: number, onThumb: (i: number, img: ImageValue) => void, signal?: AbortSignal): Promise<void> {
+  const key = `${from.toFixed(3)}:${span.toFixed(3)}:${n}`;
+  let byKey = strips.get(f);
+  const done = byKey?.get(key);
+  if (done) return done.forEach((img, i) => onThumb(i, img));
+  const { input, track } = await openTrack(f);
+  const thumbs: ImageValue[] = [];
+  try {
+    const first = await track.getFirstTimestamp();
+    const times = Array.from({ length: n }, (_, i) => Math.max(first, from + ((i + 0.5) * span) / n));
+    let i = 0;
+    for await (const sample of new VideoSampleSink(track).samplesAtTimestamps(times)) {
+      const at = i++;
+      if (!sample) continue;
+      try {
+        if (signal?.aborted) return;
+        thumbs[at] = sampleToImage(sample, 160);
+        onThumb(at, thumbs[at]);
+      } finally {
+        sample.close();
+      }
+    }
+  } finally {
+    input.dispose?.();
+  }
+  if (!byKey) strips.set(f, (byKey = new Map()));
+  byKey.set(key, thumbs);
+}

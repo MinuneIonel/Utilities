@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import type { Edge } from "@xyflow/react";
 import { WORKFLOWS, type Workflow } from "../graphs";
 import { REGISTRY } from "../nodes";
+import { doneKey } from "../folder-input";
 import { bridge } from "../platform";
 import type { Graph, Params } from "../runtime/types";
 import { inputProblem, previewNode, readSettings, settingsKey, settingsOf, settingsPatches } from "../simple-form";
@@ -97,9 +98,11 @@ export function useSimple(flash: Flash, active: boolean) {
       g.nodes.forEach((n, i) => {
         n.params = { ...n.params, ...patches.get(i) };
         // Each press keeps the files from before ("photo.jpg", "photo (2).jpg"), and a text box starts empty.
-        if (REGISTRY.get(n.type)?.saves) n.params = { ...n.params, exists: "number", folder: "" };
+        // A folder's photos done before are left as they are, so pressing again only adds the new ones.
+        if (REGISTRY.get(n.type)?.saves) n.params = { ...n.params, exists: w.form.input.kind === "folder" ? "skip" : "number", folder: "" };
       });
       const input = g.nodes[w.form.input.node];
+      if (input && w.form.input.kind === "folder" && saved.input) input.params = { ...input.params, folder: saved.input };
       if (input && w.form.input.kind === "text") input.params = { ...input.params, text: "" };
       if (input && w.form.input.kind === "link") input.params = { ...input.params, url: "" };
       const f = toFlow(g);
@@ -177,6 +180,25 @@ export function useSimple(flash: Flash, active: boolean) {
     [inputId, setParams],
   );
 
+  // What a folder workflow did is kept per workflow: its graph is made afresh each time it opens.
+  client.doneKeyOf = () => doneKey("simple", workflow?.id ?? "");
+
+  /** A folder workflow's folder, chosen in the system's dialog (which lets Toolbox read it). */
+  const chooseInput = useCallback(async () => {
+    const f = await bridge?.chooseInputFolder();
+    if (!f || !inputId || !workflow || !form) return;
+    setParams(inputId, { folder: f });
+    setRan(false);
+    remember(workflow, nodes.map((n, i) => (i === form.input.node ? { ...n, data: { ...n.data, params: { ...n.data.params, folder: f } } } : n)), picked);
+  }, [form, inputId, nodes, picked, remember, setParams, workflow]);
+
+  /** Every photo in the folder counts as new again. */
+  const forgetDone = useCallback(async () => {
+    if (!inputId) return;
+    await client.forgetDone(SCOPE, inputId);
+    client.preview(graphRef.current);
+  }, [client, graphRef, inputId]);
+
   const chooseFolder = useCallback(async () => {
     const f = await bridge?.chooseFolder();
     if (!f || !workflow) return;
@@ -235,6 +257,9 @@ export function useSimple(flash: Flash, active: boolean) {
     setLink,
     folder,
     chooseFolder,
+    chooseInput,
+    forgetDone,
+    inputId,
     inputParams,
     missing,
     previewId,

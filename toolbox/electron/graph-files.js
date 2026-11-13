@@ -50,8 +50,12 @@ export function createRecent(file, cap = 10) {
   };
 }
 
-/** Graph files named on a command line: arguments ending in .toolbox, made absolute against `cwd`. Switches are skipped. */
+/**
+ * Graph files named on a command line: arguments ending in .toolbox, made absolute against `cwd`.
+ * Switches are skipped, and a --run line names none: that graph runs without the window (cli.js).
+ */
 export function graphPathsIn(argv, cwd) {
+  if (argv.some((a) => a === "--run" || (typeof a === "string" && a.startsWith("--run=")))) return [];
   return argv.filter((a) => typeof a === "string" && !a.startsWith("-") && /\.toolbox$/i.test(a)).map((a) => path.resolve(cwd, a));
 }
 

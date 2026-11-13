@@ -15,6 +15,52 @@ export function parseTime(s: string): number {
 
 const list = (s: string) => s.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
 
+/**
+ * A time as m:ss.d (h:mm:ss.d past an hour), which parseTime reads back. Tenths, or hundredths
+ * when that's closer (a frame at 30 fps), so a time placed with the mouse keeps its frame.
+ */
+export function formatTime(seconds: number): string {
+  let cs = Math.round(Math.max(0, Number.isFinite(seconds) ? seconds : 0) * 100);
+  const tenths = cs % 10 === 0;
+  const h = Math.floor(cs / 360000);
+  cs -= h * 360000;
+  const m = Math.floor(cs / 6000);
+  cs -= m * 6000;
+  const sec = (cs / 100).toFixed(tenths ? 1 : 2).padStart(tenths ? 4 : 5, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+/** Cut times as Split's "Cut at" text: in order, without repeats. */
+export function formatMarks(times: number[]): string {
+  return [...new Set(times.map(formatTime))].sort((a, b) => parseTime(a) - parseTime(b)).join(", ");
+}
+
+/** Parts as Split's "Parts" text, in the order given. */
+export function formatParts(parts: TimeRange[]): string {
+  return parts.map((p) => `${formatTime(p.start)}-${formatTime(p.end)}`).join(", ");
+}
+
+/** The cut times in "Cut at" text, skipping what isn't a time (the timeline draws what it can). */
+export function parseMarks(s: string): number[] {
+  return list(s).map(parseTime).filter((t) => Number.isFinite(t));
+}
+
+/** The parts in "Parts" text, "end" being `duration`, skipping what isn't a part. */
+export function parseParts(s: string, duration: number): TimeRange[] {
+  const out: TimeRange[] = [];
+  for (const part of list(s)) {
+    const m = PART.exec(part);
+    if (!m) continue;
+    const start = parseTime(m[1]);
+    const e = m[2].trim();
+    const end = e === "" || /^end$/i.test(e) ? duration : parseTime(e);
+    if (Number.isFinite(start) && Number.isFinite(end)) out.push({ start, end });
+  }
+  return out;
+}
+
+const PART = /^(.*?)\s*(?:-|–|—|to)\s*(.*)$/;
+
 function time(s: string): number {
   const t = parseTime(s);
   if (!Number.isFinite(t)) throw new Error(`"${s}" isn't a time. Write seconds (75) or minutes:seconds (1:15).`);

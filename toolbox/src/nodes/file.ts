@@ -1,4 +1,4 @@
-import type { NodeDef, VideoValue } from "../runtime/types";
+import type { NodeDef, RunContext, VideoValue } from "../runtime/types";
 import { decodeImage } from "./image";
 import { lastError, nativeTools, toolFile } from "./native";
 
@@ -6,7 +6,7 @@ const isHeic = (b: Blob) => /^image\/hei[cf]/.test(b.type) || /\.hei[cf]$/i.test
 const heicCopies = new WeakMap<Blob, Promise<Blob>>();
 
 /** iPhone photos (HEIC) as JPEG, through macOS's sips: browsers can't decode HEIC. Other images as they are. */
-function readable(blob: Blob): Promise<Blob> {
+export function readable(blob: Blob): Promise<Blob> {
   if (!isHeic(blob)) return Promise.resolve(blob);
   let p = heicCopies.get(blob);
   if (!p) {
@@ -64,27 +64,41 @@ export const imagesInput: NodeDef = {
     const ids = Array.isArray(params.assetIds) ? params.assetIds.map(String) : [];
     const names = Array.isArray(params.names) ? params.names.map(String) : [];
     const found = ids.map((id, i) => ({ blob: ctx.assets.get(id), name: names[i] })).filter((x): x is { blob: Blob; name: string } => !!x.blob);
-    const blobs = found.map((x) => x.blob);
-    if (!blobs.length) throw new Error("Choose or drop images");
-    const at = Math.min(blobs.length, Math.max(1, Math.floor(Number(params.at) || 1))) - 1;
-    const poster = await decodeImage(await readable(blobs[at]), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
-    const full = poster.scale && poster.scale < 1 ? { w: Math.round(poster.width / poster.scale), h: Math.round(poster.height / poster.scale) } : { w: poster.width, h: poster.height };
-    const video: VideoValue = {
-      kind: "video",
-      of: "image",
-      width: full.w,
-      height: full.h,
-      duration: blobs.length,
-      fps: 1,
-      poster,
-      async *frames(signal, opts = {}) {
-        for (let i = Math.max(0, Math.floor(opts.from ?? 0)); i < blobs.length; i++) {
-          if (signal?.aborted) return;
-          if (opts.skipTo && i < opts.skipTo()) continue;
-          yield { value: await decodeImage(await readable(blobs[i]), opts.maxSide), timestamp: i, duration: 1, name: found[i].name };
-        }
-      },
-    };
-    return { images: video };
+    if (!found.length) throw new Error("Choose or drop images");
+    return { images: await listOfImages(found.map((x) => ({ name: x.name, read: async () => x.blob })), params.at, ctx) };
   },
 };
+
+/** One image of a list, read only when it's needed. */
+export interface ImageItem {
+  name: string;
+  read(): Promise<Blob>;
+}
+
+/**
+ * A list of images as a sequence, one a second: every frame node after it runs on each, and Save
+ * writes one file per image. Only the previewed image (`at`, from 1) is read up front; the others
+ * are read one at a time as the frames are asked for, and let go once used.
+ */
+export async function listOfImages(items: ImageItem[], at: unknown, ctx: RunContext, about?: string): Promise<VideoValue> {
+  const i = Math.min(items.length, Math.max(1, Math.floor(Number(at) || 1))) - 1;
+  const poster = await decodeImage(await readable(await items[i].read()), ctx.mode === "preview" ? PREVIEW_MAX : Infinity);
+  const full = poster.scale && poster.scale < 1 ? { w: Math.round(poster.width / poster.scale), h: Math.round(poster.height / poster.scale) } : { w: poster.width, h: poster.height };
+  return {
+    kind: "video",
+    of: "image",
+    width: full.w,
+    height: full.h,
+    duration: items.length,
+    fps: 1,
+    poster,
+    about,
+    async *frames(signal, opts = {}) {
+      for (let i = Math.max(0, Math.floor(opts.from ?? 0)); i < items.length; i++) {
+        if (signal?.aborted) return;
+        if (opts.skipTo && i < opts.skipTo()) continue;
+        yield { value: await decodeImage(await readable(await items[i].read()), opts.maxSide), timestamp: i, duration: 1, name: items[i].name };
+      }
+    },
+  };
+}
