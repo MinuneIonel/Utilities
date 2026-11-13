@@ -1,6 +1,6 @@
 import { bridge } from "../platform";
 import type { Bytes, Graph } from "./types";
-import type { FromWorker, NodeUpdate, PlayMessage, ProgressUpdate, SavedFile, ToWorker } from "./worker";
+import type { FromWorker, NodeUpdate, PlayMessage, ProgressUpdate, SavedFile, StripMessage, ToWorker } from "./worker";
 import RuntimeWorker from "./worker?worker";
 
 export interface RenderOutcome {
@@ -30,6 +30,8 @@ export class RuntimeClient {
   private renders = new Map<number, { files: RenderOutcome["files"]; resolve: (r: RenderOutcome) => void }>();
   /** Gets what playback sends (see play). */
   onPlay?: (msg: PlayMessage) => void;
+  /** Gets the timeline's pictures (see strip). */
+  onStrip?: (msg: StripMessage) => void;
 
   constructor(
     private onUpdate: (u: NodeUpdate) => void,
@@ -103,6 +105,16 @@ export class RuntimeClient {
     return reqId;
   }
 
+  /**
+   * Asks for what the timeline draws (see the strip message) and returns the request's id. A newer
+   * request stops the one before.
+   */
+  strip(graph: Graph, source: { id: string; port: string }, base: { id: string; port: string }, whole: boolean, scope = this.scope): number {
+    const reqId = ++this.reqId;
+    this.send({ type: "strip", reqId, graph, scope, source, base, whole });
+    return reqId;
+  }
+
   stopPlay() {
     this.send({ type: "play-stop" });
   }
@@ -139,6 +151,11 @@ export class RuntimeClient {
     if (msg.type === "play-info" || msg.type === "play-frame" || msg.type === "play-end") {
       if (this.onPlay) this.onPlay(msg);
       else if (msg.type === "play-frame") msg.bitmap.close();
+      return;
+    }
+    if (msg.type === "strip-info" || msg.type === "strip-thumb" || msg.type === "strip-wave" || msg.type === "strip-end") {
+      if (this.onStrip) this.onStrip(msg);
+      else if (msg.type === "strip-thumb" || msg.type === "strip-wave") msg.bitmap.close();
       return;
     }
     if (msg.type === "progress") {

@@ -4,6 +4,7 @@ import { CONVERTERS, REGISTRY } from "../nodes";
 import { gridToImage } from "../nodes/ascii";
 import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
+import { videoCodec } from "../nodes/video";
 import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
 import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
@@ -46,7 +47,20 @@ export type ToWorker =
   | { type: "play"; reqId: number; graph: Graph; nodeId: string; port: string; at: number; scope: string }
   | { type: "play-stop" }
   /** The window drew a played frame. */
-  | { type: "play-ack"; reqId: number };
+  | { type: "play-ack"; reqId: number }
+  /**
+   * What the timeline draws: the length of `base` (the value a node's times are in), with a filmstrip
+   * of `source` (the video file it comes from) or the waveform of `base` if it's a sound. `whole`
+   * shows all of the source's file rather than just the part it keeps. `graph` is just what feeds `base`.
+   */
+  | { type: "strip"; reqId: number; graph: Graph; scope: string; source: { id: string; port: string }; base: { id: string; port: string }; whole: boolean };
+
+/** What the timeline gets: its length first, then the pictures one by one, so the strip fills in. */
+export type StripMessage =
+  | { type: "strip-info"; reqId: number; kind: "video" | "audio"; duration: number; fps: number; count: number }
+  | { type: "strip-thumb"; reqId: number; index: number; bitmap: ImageBitmap }
+  | { type: "strip-wave"; reqId: number; bitmap: ImageBitmap }
+  | { type: "strip-end"; reqId: number; error?: string };
 
 export interface SavedFile {
   name: string;
@@ -120,6 +134,7 @@ export type PlayMessage =
 
 export type FromWorker =
   | PlayMessage
+  | StripMessage
   | NodeUpdate
   | ProgressUpdate
   | ToolRequest
@@ -329,6 +344,16 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     playing = s;
     // Waits its turn behind a preview in progress (whose results it then gets from the cache).
     queue = queue.then(() => startPlay(s, msg));
+  } else if (msg.type === "strip") {
+    stripAbort.abort();
+    const abort = (stripAbort = new AbortController());
+    // Waits for a preview in progress (whose results it then finds in the cache), without holding up the ones after it.
+    void queue
+      .then(() => sendStrip(msg, abort.signal))
+      .then(
+        () => !abort.signal.aborted && post({ type: "strip-end", reqId: msg.reqId }),
+        (err) => !abort.signal.aborted && post({ type: "strip-end", reqId: msg.reqId, error: err instanceof Error ? err.message : String(err) }),
+      );
   } else if (msg.type === "play-stop") {
     stopPlay();
   } else if (msg.type === "play-ack") {
@@ -520,6 +545,66 @@ async function playValue(s: PlaySession, v: Value, at: number) {
     // Round again from the start.
     from = 0;
   }
+}
+
+/** Pictures in the timeline's filmstrip: enough to tell the scenes apart, few enough to decode in a moment. */
+const STRIP_THUMBS = 24;
+let stripAbort = new AbortController();
+
+const imageBitmap = (img: ImageValue) => createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+
+async function sendStrip(msg: Extract<ToWorker, { type: "strip" }>, signal: AbortSignal) {
+  const { reqId } = msg;
+  const ctx = { mode: "preview" as const, assets, cameras };
+  // The preview that ran before left these in the cache, so this is quick.
+  const results = await evaluate(msg.graph, { registry: REGISTRY, ctx, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => signal.aborted });
+  if (signal.aborted) return;
+  const output = (p: { id: string; port: string }) => {
+    const r = results.get(p.id);
+    return { value: r?.outputs[p.port], error: r?.error };
+  };
+  const base = output(msg.base);
+  if (!base.value) throw new Error(base.error ?? "Nothing to show yet");
+  if (base.value.kind === "audio") {
+    const a = base.value;
+    const codec = await audioCodec();
+    const duration = a.duration ?? (await codec.duration(a.bytes)) ?? 0;
+    post({ type: "strip-info", reqId, kind: "audio", duration, fps: 0, count: 0 });
+    const img = await codec.waveform(a, 2000, 96);
+    if (!img || signal.aborted) return;
+    const bitmap = await imageBitmap(img);
+    post({ type: "strip-wave", reqId, bitmap }, [bitmap]);
+    return;
+  }
+  if (base.value.kind !== "video") throw new Error("Only videos and sounds have a timeline");
+  const src = output(msg.source).value;
+  if (src?.kind !== "video") throw new Error("Nothing to show yet");
+  const codec = await videoCodec();
+  let file = src.origin ?? src.audioSource;
+  // At another speed the value keeps no file of its own: the Video file node's file is still it.
+  const node = msg.graph.nodes.find((n) => n.id === msg.source.id);
+  const asset = node?.type === "input.video" ? assets.get(String(node.params.assetId)) : undefined;
+  if (!file && asset) file = await codec.readableFile(asset, ctx);
+  const timing = file ? await codec.fileTiming(file) : { duration: src.duration, fps: src.fps };
+  // The whole file, in its own seconds; or the part the source keeps, from 0.
+  const from = msg.whole ? 0 : (src.range?.start ?? 0);
+  const span = msg.whole ? timing.duration : src.range ? src.range.end - src.range.start : timing.duration;
+  const duration = msg.whole ? timing.duration : base.value.duration;
+  post({ type: "strip-info", reqId, kind: "video", duration, fps: timing.fps || src.fps, count: file ? STRIP_THUMBS : 0 });
+  if (!file || !(span > 0)) return;
+  const sends: Promise<void>[] = [];
+  await codec.stripFor(
+    file,
+    from,
+    span,
+    STRIP_THUMBS,
+    (index, img) =>
+      void sends.push(
+        imageBitmap(img).then((bitmap) => (signal.aborted ? bitmap.close() : post({ type: "strip-thumb", reqId, index, bitmap }, [bitmap]))),
+      ),
+    signal,
+  );
+  await Promise.all(sends);
 }
 
 async function run(reqId: number, mode: "preview" | "render", graph: Graph, scope: string) {
