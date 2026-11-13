@@ -2,14 +2,12 @@
 // read again from where they are on disk.
 import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import { newId } from "../graphs";
-import { bridge, reopenFile } from "../platform";
+import { bridge } from "../platform";
 import type { RuntimeClient } from "../runtime/client";
 import type { Graph, Params } from "../runtime/types";
 import type { SetNodes } from "./flow";
+import { readGraphFiles, type FilePatch as Patch } from "./read-files";
 import type { Documents } from "./useDocuments";
-
-/** Files read back for one node, and the path (or paths) they were read for. */
-type Patch = { for: string | string[]; params: Params };
 
 interface AssetDeps {
   client: RuntimeClient;
@@ -57,33 +55,8 @@ export function useAssets({ client, setNodes, withoutHistory, graphRef, docs, la
   const readBack = useCallback(
     async (g: Graph, docId: string) => {
       if (!bridge) return 0;
-      let missing = 0;
-      const patches = await Promise.all(
-        g.nodes.map(async (n): Promise<[string, Patch] | undefined> => {
-          const p = n.params;
-          if (typeof p.path === "string" && p.path && !p.assetId) {
-            const f = await reopenFile(p.path, String(p.name ?? ""));
-            if (!f) return void missing++;
-            const assetId = newId("a");
-            client.addAsset(assetId, f, p.path);
-            return [n.id, { for: p.path, params: { assetId } }];
-          }
-          const paths = Array.isArray(p.paths) ? (p.paths as string[]) : [];
-          if (paths.length && !(p.assetIds as unknown[] | undefined)?.length) {
-            const names = Array.isArray(p.names) ? (p.names as string[]) : [];
-            const files = await Promise.all(paths.map((path, i) => reopenFile(path, names[i] ?? "")));
-            if (files.some((f) => !f)) return void missing++;
-            const assetIds = files.map((f, i) => {
-              const id = newId("a");
-              client.addAsset(id, f!, paths[i]);
-              return id;
-            });
-            return [n.id, { for: paths, params: { assetIds } }];
-          }
-          return undefined;
-        }),
-      );
-      const found = new Map(patches.filter((x): x is [string, Patch] => !!x));
+      const { found, missing: gone } = await readGraphFiles(g, (id, blob, path) => client.addAsset(id, blob, path));
+      const missing = gone.length;
       if (!found.size) return missing;
       // Reading takes a while, and the node may have changed meanwhile. A file only goes back into a
       // node that still names it and hasn't got it already, in the tab it was read for, even if
