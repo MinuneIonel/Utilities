@@ -292,6 +292,64 @@ if (process.platform !== "win32") {
   check("…and are gone after quitting", !existsSync(scratchDir), scratchDir);
 }
 
+// ---------------------------------------------------------------- a playlist
+// The stand-in yt-dlp lists a playlist of four: one private (left out by the list), one that won't
+// download (left out on Render) and two that do, saved in a folder named after the playlist.
+if (process.platform !== "win32") {
+  const clip = path.join(tmp, "song.mp4");
+  execFileSync(ffmpeg, ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-f", "lavfi", "-i", "sine=frequency=550", "-t", "2", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip]);
+  const list = [
+    ["1", "aaa", "First"],
+    ["2", "ppp", "[Private video]"],
+    ["3", "bad", "Blocked"],
+    ["4", "ccc", "Fourth"],
+  ]
+    .map(([i, id, title]) => `${i}\\t${id}\\thttps://www.youtube.com/watch?v=${id}\\tRoad trip\\t${title}\\n`)
+    .join("");
+  const script = [
+    "#!/bin/sh",
+    'for a; do last="$a"; done',
+    `case " $* " in *" --flat-playlist "*) printf '${list}' > playlist.txt; echo listed >> '${path.join(tmp, "ytdlp-calls.txt")}'; exit 0;; esac`,
+    'id="${last##*v=}"',
+    `echo "$id" >> '${path.join(tmp, "ytdlp-calls.txt")}'`,
+    // Exits 0 without a file, so Toolbox doesn't fetch a newer yt-dlp over this stand-in.
+    'if [ "$id" = bad ]; then echo "ERROR: [youtube] bad: Video unavailable in your country" >&2; exit 0; fi',
+    `cp '${clip}' "Song $id [$id].mp4"`,
+    "",
+  ].join("\n");
+  writeFileSync(path.join(tmp, "profile", "bin", "yt-dlp"), script, { mode: 0o755 });
+  const out = folder("playlist");
+  const graph = {
+    version: 1,
+    nodes: [
+      { id: "d", type: "input.download", params: { url: "https://www.youtube.com/playlist?list=PLtest", quality: "1080", item: 1 }, position: { x: 40, y: 40 } },
+      { id: "s", type: "output.save-file", params: { folder: out }, position: { x: 640, y: 40 } },
+    ],
+    edges: [{ id: "e1", source: "d", sourceHandle: "file", target: "s", targetHandle: "file" }],
+  };
+  const t = await launch();
+  try {
+    await t.open(graph);
+    const calls = () => (existsSync(path.join(tmp, "ytdlp-calls.txt")) ? readFileSync(path.join(tmp, "ytdlp-calls.txt"), "utf8").trim().split("\n").filter((c) => c !== "abc123") : []);
+    // Pasting the link previews the video Show video picks (the first), and no other. (The tab from the
+    // download check above opens again too, asking for its own link, abc123.)
+    for (let i = 0; i < 60 && calls().length < 2; i++) await t.win.waitForTimeout(250);
+    await t.win.waitForTimeout(1000);
+    check("A preview reads the playlist and downloads only the video it shows", JSON.stringify(calls()) === JSON.stringify(["listed", "aaa"]), calls().join(", "));
+    const dir = path.join(out, "Road trip");
+    const want = ["01 Song aaa [aaa].mp4", "04 Song ccc [ccc].mp4"];
+    await t.menu("render");
+    for (let i = 0; i < 240 && !(existsSync(dir) && want.every((f) => existsSync(path.join(dir, f)))); i++) await t.win.waitForTimeout(250);
+    await t.win.waitForTimeout(1000);
+    const got = existsSync(dir) ? readdirSync(dir).sort() : [];
+    check("Render saves every video that downloads, numbered, in the playlist's folder", JSON.stringify(got) === JSON.stringify(want), `${got.join(", ")} | ${await t.status("d")} | ${t.errors.join(" | ")}`);
+    check("…as they came", got.length === 2 && readFileSync(path.join(dir, want[0])).equals(readFileSync(clip)));
+    check("…downloading each video once, the list once", JSON.stringify(calls()) === JSON.stringify(["listed", "aaa", "bad", "ccc"]), calls().join(", "));
+  } finally {
+    await t.app.close();
+  }
+}
+
 // ---------------------------------------------------------------- the big case (TOOLBOX_E2E_BIG=1)
 if (process.env.TOOLBOX_E2E_BIG === "1" || process.env.TOOLBOX_E2E_BIG_SECONDS) {
   const seconds = Number(process.env.TOOLBOX_E2E_BIG_SECONDS) || 600;
