@@ -1,3 +1,4 @@
+import { doneKey, type DoneFiles } from "../folder-input";
 import { bridge } from "../platform";
 import type { Bytes, Graph } from "./types";
 import type { FromWorker, NodeUpdate, PlayMessage, ProgressUpdate, SavedFile, StripMessage, ToWorker } from "./worker";
@@ -10,6 +11,8 @@ export interface RenderOutcome {
    */
   files: { nodeId: string; name: string; mime: string; data: Bytes; size: number; key?: string }[];
   error?: string;
+  /** The files each folder node with "Only new files" worked on (see useRender). */
+  folders?: { nodeId: string; done: DoneFiles }[];
 }
 
 const outcomeFile = (nodeId: string, f: SavedFile): RenderOutcome["files"][number] => ({
@@ -28,6 +31,11 @@ export class RuntimeClient {
   private previewBusy = false;
   private nextPreview: { graph: Graph; scope: string } | null = null;
   private renders = new Map<number, { files: RenderOutcome["files"]; resolve: (r: RenderOutcome) => void }>();
+  /**
+   * Where a folder node's "Only new files" record is kept: by default its tab and node. The canvas
+   * uses the graph's file once it has one, so the record follows the file.
+   */
+  doneKeyOf: (scope: string, nodeId: string) => string = doneKey;
   /** Gets what playback sends (see play). */
   onPlay?: (msg: PlayMessage) => void;
   /** Gets the timeline's pictures (see strip). */
@@ -42,6 +50,7 @@ export class RuntimeClient {
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.handle(e.data);
     // Native ffmpeg and yt-dlp, when running in the desktop app.
     if (bridge) {
+      this.send({ type: "desktop" });
       bridge.onToolProgress((callId, fraction, label) => this.send({ type: "tool-progress", callId, fraction, label }));
       void bridge.toolsInfo().then((t) => this.send({ type: "tools", ...t }));
     }
@@ -143,6 +152,23 @@ export class RuntimeClient {
     this.send({ type: "cancel" });
   }
 
+  /** Folder nodes look in their folders again on the next run (the window got focus back). */
+  relist() {
+    this.send({ type: "relist" });
+  }
+
+  /** Remembers files a folder node with "Only new files" did, so the next Render leaves them out. */
+  async markDone(scope: string, nodeId: string, done: DoneFiles) {
+    await bridge?.folderRunsAdd(this.doneKeyOf(scope, nodeId), done);
+    this.relist();
+  }
+
+  /** "Forget what was done": every file in the folder counts as new again. */
+  async forgetDone(scope: string, nodeId: string) {
+    await bridge?.folderRunsClear(this.doneKeyOf(scope, nodeId));
+    this.relist();
+  }
+
   private send(msg: ToWorker) {
     this.worker.postMessage(msg);
   }
@@ -202,6 +228,19 @@ export class RuntimeClient {
       void bridge?.cancelTool(msg.callId);
       return;
     }
+    if (msg.type === "folder-list") {
+      const { callId, query } = msg;
+      const listing = !bridge
+        ? Promise.reject(new Error("Folders work in the desktop app"))
+        : Promise.all([
+            bridge.listFolder({ folder: query.folder, kind: query.kind, pattern: query.pattern, recursive: query.recursive }),
+            query.onlyNew ? bridge.folderRunsGet(this.doneKeyOf(msg.scope, msg.nodeId)) : undefined,
+          ]).then(([r, done]) => ({ ...r, done }));
+      listing
+        .then((result) => this.send({ type: "folder-result", callId, result }))
+        .catch((e: Error) => this.send({ type: "folder-result", callId, error: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }));
+      return;
+    }
     if (msg.type === "scratch-free") {
       void bridge?.scratchDelete(msg.paths).catch(() => undefined);
       return;
@@ -228,7 +267,7 @@ export class RuntimeClient {
     if (msg.mode === "render") {
       const r = this.renders.get(msg.reqId);
       this.renders.delete(msg.reqId);
-      r?.resolve({ files: r.files, error: msg.error });
+      r?.resolve({ files: r.files, error: msg.error, folders: msg.folders });
       return;
     }
     this.previewBusy = false;

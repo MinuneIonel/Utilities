@@ -6,7 +6,9 @@ import { pruneDownloads, stopDownloads } from "../nodes/download";
 import { audioCodec } from "../nodes/audio";
 import { videoCodec } from "../nodes/video";
 import { asBlob, fromBytes, fromDisk, READ_LIMIT, sizeOf } from "../nodes/bytes";
-import { setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
+import type { DoneFiles } from "../folder-input";
+import { folderRuns, forgetFolders, refreshFolders, relistFolders } from "../nodes/folder";
+import { setFolderLister, setLocalPath, setModelFetcher, setNativeTools, setScratchFiles, type FolderAnswer, type FolderQuery, type KeptFile, type KeptResult, type NativeTool, type NativeTools, type ToolFile, type ToolOptions, type ToolResult, type ToolStream } from "../nodes/native";
 import { pdfRender } from "../nodes/pdf";
 import { isDisk } from "../nodes/source";
 import { ResultCache, evaluate } from "./evaluate";
@@ -40,6 +42,11 @@ export type ToWorker =
   | { type: "scratch-result"; callId: string; result?: unknown; error?: string }
   | { type: "tool-written"; writeId: number; error?: string }
   | { type: "tool-progress"; callId: string; fraction: number; label?: string }
+  | { type: "folder-result"; callId: string; result?: FolderAnswer; error?: string }
+  /** The window got focus back, or files were marked done: folder nodes look in their folders again. */
+  | { type: "relist" }
+  /** Sent first, in the desktop app only (before the first run, unlike "tools", which waits on the tools). */
+  | { type: "desktop" }
   /**
    * Plays a node's output (its `port`) from `at` (0–1 of the way through): small frames paced to
    * the clock, and its sound. Render stops it.
@@ -119,7 +126,9 @@ export type ToolRequest =
   /** A file written into the scratch folder chunk by chunk (an encoded video); answered with scratch-result. */
   | { type: "scratch-call"; callId: string; op: "open"; id: string; name: string }
   | { type: "scratch-call"; callId: string; op: "write"; id: string; chunk: Uint8Array; position: number }
-  | { type: "scratch-call"; callId: string; op: "close"; id: string };
+  | { type: "scratch-call"; callId: string; op: "close"; id: string }
+  /** A folder node's folder, listed by the desktop app; answered with folder-result. */
+  | { type: "folder-list"; callId: string; scope: string; nodeId: string; query: FolderQuery };
 
 /** What playback sends the window. */
 export type PlayMessage =
@@ -138,7 +147,8 @@ export type FromWorker =
   | NodeUpdate
   | ProgressUpdate
   | ToolRequest
-  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string }
+  /** `folders`: after a Render, the files each folder node with "Only new files" worked on. */
+  | { type: "done"; reqId: number; mode: "preview" | "render"; error?: string; folders?: { nodeId: string; done: DoneFiles }[] }
   /** Scratch files no cached result holds any more: the desktop app deletes them. */
   | { type: "scratch-free"; paths: string[] };
 
@@ -236,6 +246,8 @@ function scratchCall<T>(msg: DistributiveOmit<Extract<ToolRequest, { type: "scra
     post({ ...msg, type: "scratch-call", callId } as ToolRequest, transfer);
   });
 }
+const folderCalls = new Map<string, { resolve(r: FolderAnswer): void; reject(e: Error): void }>();
+let folderN = 0;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /**
@@ -320,6 +332,24 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   } else if (msg.type === "forget") {
     forgetSent(msg.scope);
     cache.forget(msg.scope);
+    forgetFolders(msg.scope);
+  } else if (msg.type === "relist") relistFolders();
+  else if (msg.type === "desktop") {
+    // The desktop app lists folders for the folder nodes (through the window).
+    setFolderLister(
+      (scope, nodeId, query) =>
+        new Promise<FolderAnswer>((resolve, reject) => {
+          const callId = `d${WORKER}.${++folderN}`;
+          folderCalls.set(callId, { resolve, reject });
+          post({ type: "folder-list", callId, scope, nodeId, query });
+        }),
+    );
+  }
+  else if (msg.type === "folder-result") {
+    const call = folderCalls.get(msg.callId);
+    folderCalls.delete(msg.callId);
+    if (msg.result) call?.resolve(msg.result);
+    else call?.reject(new Error(msg.error ?? "Couldn't look in the folder"));
   }
   else if (msg.type === "stop-downloads") stopDownloads();
   else if (msg.type === "cancel") {
@@ -472,7 +502,7 @@ async function startPlay(s: PlaySession, msg: Extract<ToWorker, { type: "play" }
   let value: Value | undefined;
   try {
     // The preview that just ran left everything in the cache, so this is quick.
-    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras }, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => playing !== s });
+    const results = await evaluate(msg.graph, { registry: REGISTRY, ctx: { mode: "preview", assets, cameras, scope: msg.scope }, cache, converters: CONVERTERS, scope: msg.scope, cancelled: () => playing !== s });
     const r = results.get(msg.nodeId);
     value = r?.outputs[msg.port] ?? Object.values(r?.outputs ?? {})[0];
     if (!value) throw new Error(r?.error ?? "Nothing to play yet");
@@ -614,9 +644,11 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
   const pending: Promise<void>[] = [];
   const lastProgress = new Map<string, number>();
   try {
-    await evaluate(graph, {
+    // What's in the folders a graph reads from is part of its cache keys, so it's looked at first.
+    await refreshFolders(graph, scope, mode === "render");
+    const results = await evaluate(graph, {
       registry: REGISTRY,
-      ctx: { mode, assets, cameras, signal: mode === "render" ? renderAbort.signal : undefined },
+      ctx: { mode, assets, cameras, scope, signal: mode === "render" ? renderAbort.signal : undefined },
       cache,
       converters: CONVERTERS,
       cancelled,
@@ -636,7 +668,9 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
       },
     });
     await Promise.all(pending);
-    post({ type: "done", reqId, mode, error: cancelled() && mode === "render" ? "Render cancelled" : undefined });
+    const stopped = cancelled() && mode === "render";
+    const folders = mode === "render" && !stopped ? folderRuns(graph, scope, results) : [];
+    post({ type: "done", reqId, mode, error: stopped ? "Render cancelled" : undefined, ...(folders.length ? { folders } : {}) });
   } catch (err) {
     await Promise.all(pending);
     post({ type: "done", reqId, mode, error: err instanceof Error ? err.message : String(err) });
@@ -690,7 +724,7 @@ async function report(
     const parts = v.of === "file" && !v.width ? [] : [`${v.width}×${v.height}`];
     if (v.duration > 0) parts.push(v.fps === 1 ? `${v.duration} item${v.duration === 1 ? "" : "s"}` : `${v.duration.toFixed(1)} s`);
     else if (v.duration === 0 && !v.origin) parts.push("live");
-    msg.info = parts.join(" · ");
+    msg.info = v.about ?? parts.join(" · ");
     first = v.poster;
   }
   if (first?.kind === "grid" && changed) first = gridToImage(first);

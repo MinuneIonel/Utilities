@@ -134,6 +134,21 @@ test("values are checked against their ParamDef", () => {
   assert.equal(validValue({ key: "c", label: "C", kind: "custom" }, null), false);
 });
 
+test("a folder workflow: the folder is its input, and it's remembered with the settings", () => {
+  const folderDef: FormNodeDef = { kind: "frame", params: [{ key: "onlyNew", label: "Only new files", kind: "toggle" }], defaults: () => ({ folder: "", onlyNew: false }) };
+  const defs = (t: string) => (t === "input.folder" ? folderDef : defOf(t));
+  const form: WorkflowForm = { input: { node: 0, kind: "folder" }, fields: [{ node: 0, param: "onlyNew" }], action: "Compress", topic: "image" };
+  assert.deepEqual(formProblems(form, ["input.folder", "media.encode", "output.save-file"], defs), []);
+  assert.match(formProblems({ ...form, fields: [] }, chain, defs).join(" "), /to have folder/);
+  assert.equal(inputProblem("folder", {}), "Choose a folder first.");
+  assert.equal(inputProblem("folder", { folder: "/Users/me/Holiday" }), undefined);
+  const params = [{ folder: "/Users/me/Holiday", onlyNew: true }, {}, {}];
+  const saved = settingsOf(form, (i) => params[i], "/Users/me/Out");
+  assert.deepEqual(saved, { fields: { "0.onlyNew": true }, folder: "/Users/me/Out", input: "/Users/me/Holiday" });
+  assert.deepEqual(readSettings(JSON.stringify(saved)), saved);
+  assert.deepEqual(readSettings('{"fields":{},"input":7}'), { fields: {} });
+});
+
 test("new people start in Simple view; people with a graph stay in Graph view; then the last view wins", () => {
   assert.equal(startMode(null, false), "simple");
   assert.equal(startMode(null, true), "graph");

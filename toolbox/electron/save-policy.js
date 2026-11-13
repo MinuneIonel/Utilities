@@ -32,3 +32,20 @@ export function numberedOwn(own, folder, name) {
   const dir = path.resolve(folder);
   return own.find((p) => path.dirname(path.resolve(p)) === dir && numbered.test(path.basename(p)));
 }
+
+/**
+ * Where a file of a batch goes when it keeps its sub-folder ("2024/beach" from a "Folder of files"
+ * node with sub-folders): inside `folder`, never above it. Throws for a sub-folder that would leave
+ * it (".." or an absolute path). An empty one is `folder` itself.
+ */
+export function subFolder(folder, sub) {
+  const s = String(sub ?? "").trim();
+  if (!s) return folder;
+  const parts = s.split(/[\\/]+/).filter(Boolean);
+  const leaves = () => new Error("A sub-folder must stay inside the Save folder");
+  if (path.isAbsolute(s) || /^[a-zA-Z]:/.test(s) || parts.some((p) => p === ".." || p === ".")) throw leaves();
+  const target = path.join(folder, ...parts);
+  const r = path.relative(path.resolve(folder), path.resolve(target));
+  if (!r || r.startsWith("..") || path.isAbsolute(r)) throw leaves();
+  return target;
+}

@@ -185,6 +185,7 @@ function convertVideo(v: VideoValue, conv: Converter, poster: Value): VideoValue
     ...v,
     of: conv.to as VideoValue["of"],
     poster,
+    about: undefined,
     async *frames(signal, opts) {
       for await (const f of v.frames(signal, opts)) yield { ...f, value: await conv.convert(f.value) };
     },
@@ -510,7 +511,9 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
           stopped = true;
           return;
         }
-        finish(node.id, { status: "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
+        // A node can say it's waiting for something (an empty folder) rather than failing.
+        const waiting = !!(err as { waiting?: unknown } | null)?.waiting;
+        finish(node.id, { status: waiting ? "waiting" : "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
       }
     };
     const task = (async () => {

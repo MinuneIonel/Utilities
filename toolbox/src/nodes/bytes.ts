@@ -20,6 +20,9 @@ export function scratchUrl(path: string): string {
   return `app://toolbox/@scratch/${encodeURIComponent(path.split(/[\\/]/).pop() ?? "")}`;
 }
 
+/** Where the desktop app serves a file the person gave Toolbox (or one in a folder they chose), by its path. */
+export const localUrl = (path: string) => `app://toolbox/@local/${encodeURIComponent(path)}`;
+
 const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
 
 /** The file as a Blob. A disk file is fetched from the scratch folder. */

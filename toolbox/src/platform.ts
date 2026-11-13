@@ -16,6 +16,15 @@ interface ToolboxBridge {
   chooseFolder(): Promise<string | null>;
   /** The system's Downloads folder, where Simple view saves until another is picked. */
   defaultFolder(): Promise<string>;
+  /** A folder to read files from ("Folder of files"); choosing it lets the window list and read it. */
+  chooseInputFolder(): Promise<string | null>;
+  /** What's in a folder chosen with chooseInputFolder (or agreed to when a graph named it). */
+  listFolder(req: FolderRequest): Promise<FolderListing>;
+  /** The files a "Folder of files" node already did (path -> modified time), under its key. */
+  folderRunsGet(key: string): Promise<Record<string, number>>;
+  folderRunsAdd(key: string, done: Record<string, number>): Promise<void>;
+  /** "Forget what was done". */
+  folderRunsClear(key: string): Promise<void>;
   openGraph(): Promise<GraphFile | null>;
   /** Asks where to save; resolves with the path, or null if cancelled. */
   saveGraph(text: string, suggestedName: string): Promise<string | null>;
@@ -83,6 +92,26 @@ export interface SaveOptions {
   exists?: ExistsPolicy;
   /** Files this Save node wrote before: the only ones it may replace. */
   own?: string[];
+  /** A sub-folder of the folder to save in ("2024/beach"); it can't lead out of the folder. */
+  sub?: string;
+}
+
+/** What a "Folder of files" node asks to list. */
+export interface FolderRequest {
+  folder: string;
+  kind: string;
+  pattern: string;
+  recursive: boolean;
+}
+
+/** A folder's files, sorted by name; `name` is relative to the folder, with "/" between sub-folders. */
+export interface FolderListing {
+  entries: { path: string; name: string; size: number; mtimeMs: number }[];
+  /** There were more files than a listing holds. */
+  more: boolean;
+  missing?: boolean;
+  /** Toolbox wasn't given this folder. */
+  refused?: boolean;
 }
 
 export interface SaveResult {

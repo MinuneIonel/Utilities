@@ -259,7 +259,7 @@ export function Field({ def, value, set }: { def: ParamDef; value: unknown; set:
   }
 }
 
-export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; onParams: (id: string, patch: Params) => void }) {
+export function Inspector({ node, onParams, onForgetDone }: { node: ToolFlowNode | undefined; onParams: (id: string, patch: Params) => void; onForgetDone?: (id: string) => void }) {
   if (!node) return <aside className="inspector empty">Select a node to edit it.</aside>;
   const def = REGISTRY.get(node.data.type);
   if (!def) return <aside className="inspector empty">Unknown node.</aside>;
@@ -279,7 +279,18 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
       <h2>{def.title}</h2>
       <p className="hint">{def.description}</p>
       {hasPresets(def) && <PresetBar key={def.type} def={def} params={p} apply={(patch) => onParams(node.id, patch)} />}
+      {def.type === "input.folder" && (
+        <FolderField value={String(p.folder || "")} empty="None yet" browser="Folders work in the desktop app" choose={() => bridge!.chooseInputFolder()} set={(f) => onParams(node.id, { folder: f })} />
+      )}
       {shown.filter((d) => !d.advanced).map(field)}
+      {def.type === "input.folder" && bridge && !!p.onlyNew && !!onForgetDone && (
+        <div className="field">
+          <label />
+          <button className="forget-done" onClick={() => onForgetDone(node.id)} title="Count every file in the folder as new again">
+            Forget what was done
+          </button>
+        </div>
+      )}
       {advanced.length > 0 && (
         <details className="advanced">
           <summary>Advanced</summary>
@@ -287,28 +298,41 @@ export function Inspector({ node, onParams }: { node: ToolFlowNode | undefined; 
         </details>
       )}
       {def.saves && (
-        <div className="field">
-          <label>Folder</label>
-          {bridge ? (
-            <>
-              <span className="path" title={String(p.folder || "")}>
-                {p.folder ? String(p.folder) : "Ask each time"}
-              </span>
-              <button
-                onClick={async () => {
-                  const f = await bridge!.chooseFolder();
-                  if (f) onParams(node.id, { folder: f });
-                }}
-              >
-                Choose…
-              </button>
-              {!!p.folder && <button onClick={() => onParams(node.id, { folder: "" })}>Clear</button>}
-            </>
-          ) : (
-            <span className="path">Your browser's downloads folder</span>
-          )}
-        </div>
+        <FolderField
+          value={String(p.folder || "")}
+          empty="Ask each time"
+          browser="Your browser's downloads folder"
+          choose={() => bridge!.chooseFolder()}
+          set={(f) => onParams(node.id, { folder: f })}
+        />
       )}
     </aside>
+  );
+}
+
+/** A folder setting: where a Save node writes, or which folder a Folder of files reads (desktop app). */
+export function FolderField({ value, empty, browser, choose, set }: { value: string; empty: string; browser: string; choose: () => Promise<string | null>; set: (folder: string) => void }) {
+  return (
+    <div className="field">
+      <label>Folder</label>
+      {bridge ? (
+        <>
+          <span className="path" title={value}>
+            {value || empty}
+          </span>
+          <button
+            onClick={async () => {
+              const f = await choose();
+              if (f) set(f);
+            }}
+          >
+            Choose…
+          </button>
+          {!!value && <button onClick={() => set("")}>Clear</button>}
+        </>
+      ) : (
+        <span className="path">{browser}</span>
+      )}
+    </div>
   );
 }

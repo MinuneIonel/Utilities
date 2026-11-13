@@ -103,6 +103,8 @@ export interface VideoValue {
   fps: number;
   /** The frame at the playhead: preview size during live preview. */
   poster: Value;
+  /** What the node's card says about it instead of its size and length ("128 images in Holiday"). */
+  about?: string;
   /** Where the sound comes from, kept through every frame node so Encode video can add it back. */
   audioSource?: MediaFile;
   /**
@@ -189,6 +191,8 @@ export interface RunContext {
   assets: ReadonlyMap<string, Blob>;
   /** The node being run. */
   nodeId?: string;
+  /** The open graph (tab) being run: node ids are only unique within one. */
+  scope?: string;
   /** Live frames from a Webcam node, by node id. */
   cameras?: ReadonlyMap<string, CameraFeed>;
   /** Reports progress of a long job, 0–1. */
@@ -243,6 +247,8 @@ export interface NodeDef {
   saves?: boolean;
   /** Kept so older graphs still open, but no longer offered in the Add node menu. */
   hidden?: boolean;
+  /** Only offered in the desktop app (it reads folders on the computer). */
+  desktopOnly?: boolean;
   /**
    * Output changes on its own (a webcam's newest frame). Its results, and those of
    * every node after it, are never cached: they would only fill the cache with

@@ -3,8 +3,8 @@
 // and what a form remembers between launches (settings and folder, never files or links).
 import type { ParamDef, Params } from "./runtime/types";
 
-/** What the person gives a workflow: a file, several, a link, some text, the camera, or nothing. */
-export type InputKind = "file" | "files" | "link" | "text" | "camera" | "none";
+/** What the person gives a workflow: a file, several, a folder (desktop app), a link, some text, the camera, or nothing. */
+export type InputKind = "file" | "files" | "folder" | "link" | "text" | "camera" | "none";
 
 /** What a workflow is about, for the icon on its tile. */
 export type Topic = "video" | "sound" | "image" | "pdf" | "text" | "link" | "camera";
@@ -30,6 +30,7 @@ export const MAX_FIELDS = 4;
 export const INPUT_PARAM: Record<InputKind, string | undefined> = {
   file: "assetId",
   files: "assetIds",
+  folder: "folder",
   link: "url",
   text: "text",
   camera: undefined,
@@ -101,6 +102,8 @@ export function inputProblem(kind: InputKind, params: Params | undefined, link =
       return p.assetId ? undefined : "Choose a file first.";
     case "files":
       return Array.isArray(p.assetIds) && p.assetIds.length ? undefined : "Choose your files first.";
+    case "folder":
+      return typeof p.folder === "string" && p.folder ? undefined : "Choose a folder first.";
     case "link": {
       const t = link.trim();
       if (!t) return "Paste a link first.";
@@ -133,10 +136,14 @@ export function validValue(def: ParamDef, v: unknown): boolean {
 
 // ------------------------------------------------------------ what a form remembers
 
-/** Per workflow in localStorage: the fields' values by "node.param", and the folder if one was picked. */
+/**
+ * Per workflow in localStorage: the fields' values by "node.param", the folder to save in if one was
+ * picked, and for a folder workflow the folder it reads (so next week it's the same folder again).
+ */
 export interface SimpleSettings {
   fields: Record<string, unknown>;
   folder?: string;
+  input?: string;
 }
 
 export const settingsKey = (workflowId: string) => `toolbox.simple.${workflowId}`;
@@ -146,7 +153,10 @@ export function readSettings(text: string | null | undefined): SimpleSettings {
     const raw = text ? JSON.parse(text) : undefined;
     if (!raw || typeof raw !== "object") return { fields: {} };
     const fields = raw.fields && typeof raw.fields === "object" && !Array.isArray(raw.fields) ? raw.fields : {};
-    return typeof raw.folder === "string" && raw.folder ? { fields, folder: raw.folder } : { fields };
+    const out: SimpleSettings = { fields };
+    if (typeof raw.folder === "string" && raw.folder) out.folder = raw.folder;
+    if (typeof raw.input === "string" && raw.input) out.input = raw.input;
+    return out;
   } catch {
     return { fields: {} };
   }
@@ -159,7 +169,11 @@ export function settingsOf(form: WorkflowForm, paramsAt: (node: number) => Param
     const v = paramsAt(f.node)?.[f.param];
     if (v !== undefined) fields[`${f.node}.${f.param}`] = v;
   }
-  return folder ? { fields, folder } : { fields };
+  const out: SimpleSettings = { fields };
+  if (folder) out.folder = folder;
+  const input = form.input.kind === "folder" ? paramsAt(form.input.node)?.folder : undefined;
+  if (typeof input === "string" && input) out.input = input;
+  return out;
 }
 
 /**

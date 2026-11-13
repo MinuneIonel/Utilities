@@ -62,8 +62,9 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const multiple = def.type === "input.images";
   const empty = !!accept && !(multiple ? (data.params.assetIds as unknown[] | undefined)?.length : data.params.assetId);
   // An input waiting for its file or link is a normal state, not an error.
-  const waitingForInput = def.category === "input" && (empty || (def.type === "input.download" && !String(data.params.url ?? "").trim()));
-  const status = waitingForInput ? (accept ? "" : "Paste a link in the inspector") : statusLine(rt);
+  const noFolder = def.type === "input.folder" && !data.params.folder;
+  const waitingForInput = def.category === "input" && (empty || noFolder || (def.type === "input.download" && !String(data.params.url ?? "").trim()));
+  const status = waitingForInput ? (accept ? "" : noFolder ? "Choose a folder in the inspector" : "Paste a link in the inspector") : statusLine(rt);
   // Job nodes only run on Render. A Save node offers to save again once it has saved; others can be run on their own.
   const job = def.kind === "job";
   const savedOnce = !!rt?.savedTo || (Array.isArray(data.params.lastSaved) && data.params.lastSaved.length > 0);

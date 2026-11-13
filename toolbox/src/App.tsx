@@ -2,7 +2,9 @@
 // settings panel and Outputs tray, or Simple view in its place.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Background, Controls, ReactFlow, useReactFlow, type Edge } from "@xyflow/react";
-import { WORKFLOWS } from "./graphs";
+import { workflowsFor } from "./graphs";
+import { doneKey } from "./folder-input";
+import { isDesktop } from "./platform";
 import { typingIn, type Point } from "./app/flow";
 import { DOCS_STORE, OLD_STORE } from "./app/documents";
 import { useAssets } from "./app/useAssets";
@@ -66,6 +68,9 @@ export function App() {
   const docs = useDocuments(flow, flash);
   const { nodes, edges, setNodes, setEdges, onNodesChange, onEdgesChange, activeId, openIds } = docs;
   const { runtime, setRuntimeOf, client, graph, graphRef, shapes, webcams, runKey } = useRuntime(nodes, edges, flash, activeId, openIds);
+  // A folder node's "Only new files" record follows the graph's file once it has one.
+  client.doneKeyOf = (s, n) => doneKey(docs.tabs.find((t) => t.id === s)?.path ?? s, n);
+  const forgetDone = (id: string) => void client.forgetDone(activeId, id).then(() => client.preview(graphRef.current));
   const { undo, redo, canUndo, canRedo, withoutHistory } = useHistory(graph, activeId, openIds, setNodes, setEdges, flash);
   const { setParams, setNodeFile, setNodeFiles, restoreFiles } = useAssets({ client, setNodes, withoutHistory, graphRef, docs });
   const { update, checkUpdate } = useUpdates(flash);
@@ -266,7 +271,7 @@ export function App() {
                 {menu && (
                   <NodeMenu
                     defs={nodeMenu.menuDefs}
-                    workflows={menu.from ? undefined : WORKFLOWS}
+                    workflows={menu.from ? undefined : workflowsFor(isDesktop)}
                     x={menu.x}
                     y={menu.y}
                     title={menu.from ? "Add a node to this wire" : menu.workflows ? "Workflows: type to search" : undefined}
@@ -292,7 +297,7 @@ export function App() {
                 onDoubleClick={v.toggleInspector}
                 title="Drag to resize the settings panel; double-click to hide or show it"
               />
-              {!v.view.inspectorHidden && <Inspector node={selected} onParams={setParams} />}
+              {!v.view.inspectorHidden && <Inspector node={selected} onParams={setParams} onForgetDone={forgetDone} />}
             </div>
           </div>
 

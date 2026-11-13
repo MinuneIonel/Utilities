@@ -2,7 +2,8 @@
 // Simple | Graph switch. It keeps its own graph and worker; the canvas is never touched.
 import { useCallback, useState } from "react";
 import { useSimple, type GivenFile } from "../app/useSimple";
-import { WORKFLOWS } from "../graphs";
+import { workflowsFor } from "../graphs";
+import { isDesktop } from "../platform";
 import type { Graph } from "../runtime/types";
 import type { ViewMode } from "../simple-form";
 import { ModeSwitch } from "./ModeSwitch";
@@ -45,7 +46,7 @@ export function SimpleView({ active, onMode, openAsGraph }: SimpleViewProps) {
             }}
           />
         ) : (
-          <SimpleHome workflows={WORKFLOWS} onPick={s.open} />
+          <SimpleHome workflows={workflowsFor(isDesktop)} onPick={s.open} />
         )}
       </main>
     </div>

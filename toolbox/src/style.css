@@ -398,6 +398,10 @@ kbd { font: 10px var(--mono); padding: 1px 4px; margin-left: 4px; border: 1px so
 .simple-error, .simple-broken { color: var(--danger); margin: 12px 0 0; }
 .simple-folder { display: flex; gap: 10px; align-items: center; }
 .simple-folder .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.simple-input-folder { display: flex; flex-direction: column; gap: 8px; }
+.simple-input-folder-row { display: flex; gap: 10px; align-items: center; }
+.simple-input-folder-row .path, .simple-folder-about { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-input-folder-row .path { font-family: var(--mono); font-size: 12px; }
 .simple-go { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
 .simple-go .simple-action { height: 38px; padding: 0 22px; font-size: 14px; }
 .simple-status { color: var(--accent); font-size: 12px; }

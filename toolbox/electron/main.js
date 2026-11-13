@@ -2,17 +2,18 @@
 // browser tab doesn't have. The UI itself is the Vite build in dist/.
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
 import { existsSync } from "node:fs";
-import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { USAGE, commandLinePaths, createRunSaves, findInputs, isRun, parseRunArgs, runAllowList } from "./cli.js";
+import { foldersInGraph, isInside, KIND_EXTS, listFolder, runFileName } from "./folder-list.js";
 import { createRecent, graphPathsIn, recentLabel } from "./graph-files.js";
 import { consentText, pathsInGraph } from "./local-files.js";
 import { registerModels } from "./models.js";
 import { createPathSet } from "./path-set.js";
 import { serveRange } from "./range.js";
-import { numberedOwn, saveAction } from "./save-policy.js";
+import { numberedOwn, saveAction, subFolder } from "./save-policy.js";
 import { createScratch } from "./scratch.js";
 import { registerTools } from "./tools.js";
 import { registerUpdater } from "./updater.js";
@@ -47,6 +48,8 @@ function noDialogs() {
 
 /** Files a run from the command line may read, for that run only: the ones its command line and graph name. */
 let runAllowed = (_p) => false;
+/** In a --run: the folders it may list (given with --input, or named by the graph's Folder of files nodes). */
+let runFolders = [];
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -202,8 +205,9 @@ const scratch = () => (scratchFolder ??= createScratch(app.getPath("temp")));
  * Writes a file for a Save node: `data` is its bytes, or `{ fromPath }` for a result waiting in the
  * scratch folder, which is copied (not moved: the same result can feed another Save node, and stays
  * cached). With a folder, `opts.exists` says what happens when the name is taken (see save-policy.js);
- * `opts.own` lists the files this Save node wrote before, the only ones it may replace. Returns where
- * the file is and whether the old one was kept, or null if cancelled.
+ * `opts.own` lists the files this Save node wrote before, the only ones it may replace. `opts.sub` is
+ * a sub-folder of `folder` the file goes in (a batch from a folder with sub-folders), never above it.
+ * Returns where the file is and whether the old one was kept, or null if cancelled.
  */
 ipcMain.handle("save-file", async (_e, name, data, folder, opts = {}) => {
   const from = data && typeof data === "object" && !ArrayBuffer.isView(data) && "fromPath" in data ? data.fromPath : undefined;
@@ -212,6 +216,7 @@ ipcMain.handle("save-file", async (_e, name, data, folder, opts = {}) => {
   const put = (to) => (from !== undefined ? copyFile(from, to) : writeFile(to, data));
   let target;
   if (folder) {
+    folder = subFolder(folder, opts.sub);
     await mkdir(folder, { recursive: true });
     target = path.join(folder, path.basename(name));
     const own = Array.isArray(opts.own) ? opts.own.filter((p) => typeof p === "string" && writtenFiles().has(p)).map((p) => path.resolve(p)) : [];
@@ -265,6 +270,70 @@ ipcMain.handle("choose-folder", async () => {
   const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
   return r.canceled ? null : r.filePaths[0];
 });
+
+/**
+ * Folders the person chose for a "Folder of files" node, or agreed to when a graph named them: the
+ * window may list them and read the files in them (and nothing above them). Kept across restarts.
+ */
+let allowedDirs;
+const allowedFolders = () => (allowedDirs ??= createPathSet(path.join(app.getPath("userData"), "allowed-folders.json"), 500));
+
+// A folder to read files from, chosen in the system's dialog: that choice is what lets the window read it.
+ipcMain.handle("choose-input-folder", async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });
+  const f = r.canceled ? undefined : r.filePaths[0];
+  if (!f) return null;
+  allowedFolders().add(f);
+  return f;
+});
+
+/** Whether the window may read `p`: it's inside a folder the person chose (links followed, so none lead out). */
+async function inAllowedFolder(p) {
+  if (typeof p !== "string" || !path.isAbsolute(p)) return false;
+  const real = await realpath(p).catch(() => null);
+  if (!real) return false;
+  for (const dir of allowedFolders().list()) {
+    const realDir = await realpath(dir).catch(() => null);
+    if (realDir && isInside(realDir, real)) return true;
+  }
+  return false;
+}
+
+/**
+ * What's in a folder the person chose: the files of one kind, filtered by name, sorted. A folder
+ * that isn't there is `missing`; one Toolbox wasn't given is `refused`, and listed for nobody.
+ */
+ipcMain.handle("list-folder", async (_e, req = {}) => {
+  const folder = typeof req?.folder === "string" ? req.folder : "";
+  if (!folder || !path.isAbsolute(folder) || !(allowedFolders().has(folder) || runFolders.some((d) => path.resolve(d) === path.resolve(folder) || isInside(d, folder)))) return { entries: [], more: false, refused: true };
+  const s = await stat(folder).catch(() => null);
+  if (!s?.isDirectory()) return { entries: [], more: false, missing: true };
+  const exts = KIND_EXTS[req.kind] ?? KIND_EXTS.images;
+  return listFolder(folder, { exts, pattern: typeof req.pattern === "string" ? req.pattern : "", recursive: !!req.recursive });
+});
+
+/**
+ * Which files a "Folder of files" node already did, with "Only new files" on (path -> modified
+ * time), in userData/folder-runs/: one file per graph (or tab) and node.
+ */
+const runFile = (key) => path.join(app.getPath("userData"), "folder-runs", runFileName(String(key)));
+const readRuns = async (key) => {
+  try {
+    const done = JSON.parse(await readFile(runFile(key), "utf8"))?.done;
+    return done && typeof done === "object" ? done : {};
+  } catch {
+    return {};
+  }
+};
+ipcMain.handle("folder-runs-get", (_e, key) => readRuns(key));
+ipcMain.handle("folder-runs-add", async (_e, key, done) => {
+  const next = await readRuns(key);
+  for (const [p, t] of Object.entries(done && typeof done === "object" ? done : {})) if (path.isAbsolute(p) && typeof t === "number") next[p] = t;
+  const f = runFile(key);
+  await mkdir(path.dirname(f), { recursive: true });
+  await writeGraph(f, JSON.stringify({ key: String(key), done: next }));
+});
+ipcMain.handle("folder-runs-clear", (_e, key) => rm(runFile(key), { force: true }));
 
 /**
  * The files the window may read back by path: ones the person dropped or chose, or agreed to when a
@@ -321,15 +390,22 @@ async function readGraphFile(p) {
   const text = await readFile(p, "utf8");
   const named = pathsInGraph(text).filter((f) => !allowedFiles().has(f));
   const wanted = (await Promise.all(named.map(async (f) => ((await isFile(f)) ? f : null)))).filter(Boolean);
-  if (wanted.length) {
+  // A "Folder of files" node reads every file in its folder, so a folder is asked about the same way.
+  const dirs = foldersInGraph(text).filter((f) => !allowedFolders().has(f));
+  const isDir = (f) => stat(f).then((s) => s.isDirectory(), () => false);
+  const wantedDirs = (await Promise.all(dirs.map(async (f) => ((await isDir(f)) ? f : null)))).filter(Boolean);
+  if (wanted.length || wantedDirs.length) {
     const { response } = await dialog.showMessageBox(win, {
       type: "question",
-      ...consentText(wanted),
+      ...consentText(wanted, 8, wantedDirs),
       buttons: ["Use them", "Open without files"],
       defaultId: 0,
       cancelId: 1,
     });
-    if (response === 0) allowedFiles().add(...wanted);
+    if (response === 0) {
+      allowedFiles().add(...wanted);
+      allowedFolders().add(...wantedDirs);
+    }
   }
   rememberGraph(p);
   return { name: path.basename(p), path: p, text };
@@ -456,7 +532,7 @@ ipcMain.handle("edit-text", (e, command) => {
  * header only that part is sent, so a long video is read as it's needed rather than whole.
  */
 async function readLocal(p, range) {
-  if (!allowedFiles().has(p) && !runAllowed(p)) return new Response("Toolbox wasn't given this file", { status: 403 });
+  if (!allowedFiles().has(p) && !runAllowed(p) && !(await inAllowedFolder(p))) return new Response("Toolbox wasn't given this file", { status: 403 });
   if (!(await isFile(p))) return new Response("Not found", { status: 404 });
   return range ? serveRange(p, range) : net.fetch(pathToFileURL(p).toString());
 }
@@ -485,6 +561,7 @@ function serveApp(req) {
 function cleanUp() {
   written?.flush();
   allowed?.flush();
+  allowedDirs?.flush();
   graphFilesSet?.flush();
   scratchFolder?.clear();
 }
@@ -516,7 +593,9 @@ async function startRun(run) {
   if ("error" in checked) return fail(checked.error, 2);
   const { inputs } = checked;
   // The person chose to run this graph with these files: it may read them, this time only (nothing is added to allowed-files.json).
-  runAllowed = runAllowList([...commandLinePaths(run, inputs), ...pathsInGraph(graphText)], inputs.filter((i) => i.dir).map((i) => i.path));
+  // The run may read what its command line names, and what the graph it was told to run names.
+  runFolders = [...inputs.filter((i) => i.dir).map((i) => i.path), ...foldersInGraph(graphText)];
+  runAllowed = runAllowList([...commandLinePaths(run, inputs), ...pathsInGraph(graphText)], runFolders);
   const saves = createRunSaves(path.join(app.getPath("userData"), "run-saves.json"));
   const request = { graphText, graphPath: run.graph, sets: run.sets, inputs, out: run.out, own: saves.get(run.graph) };
 

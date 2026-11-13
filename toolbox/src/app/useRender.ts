@@ -1,6 +1,7 @@
 // Render: runs the graph at full size and writes what the Save nodes got, plus the Outputs tray.
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { Edge, ReactFlowInstance } from "@xyflow/react";
+import { splitSub } from "../folder-input";
 import { newId, newNode } from "../graphs";
 import { CONVERTERS, REGISTRY } from "../nodes";
 import { bridge, saveFile, type ExistsPolicy } from "../platform";
@@ -134,7 +135,9 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         let keptHere = 0;
         const paths: string[] = [];
         for (const f of files) {
-          const r = await saveFile(f.name, f.mime, f.data, folder, opts);
+          // An image from a sub-folder of a Folder of files goes into the same sub-folder of the Save folder.
+          const { sub, base } = splitSub(f.name);
+          const r = await saveFile(base, f.mime, f.data, folder, sub && folder ? { ...opts, sub } : opts);
           if (!r) continue;
           last = r.path;
           if (r.kept) {
@@ -152,12 +155,18 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
           written.current.set(mine, paths);
           rememberSaved(scope, nodeId, paths);
         }
-        const dir = last.split(/[\\/]/).slice(-2, -1)[0] ?? "the folder";
+        // The Save folder's name (a file may have gone into a sub-folder of it).
+        const dir = (folder ? folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : last.split(/[\\/]/).slice(-2, -1)[0]) || "the folder";
         const savedTo =
           keptHere === files.length ? (files.length > 1 ? `Kept the ${files.length} files already in ${dir}` : `Kept ${last.split(/[\\/]/).pop()}, already there`)
           : files.length > 1 ? `${files.length - keptHere} files in ${dir}${keptHere ? `, kept ${keptHere}` : ""}`
           : last;
         setRuntimeOf(scope)((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
+      }
+      // Folder nodes with "Only new files" leave out what this Render saved (or found already saved) next time.
+      if (!result.error && saved + kept > 0 && result.folders?.length) {
+        for (const f of result.folders) await client.markDone(scope, f.nodeId, f.done).catch(() => undefined);
+        client.preview(graphRef.current);
       }
       if (result.error) return;
       const count = (n: number) => `${n} file${n === 1 ? "" : "s"}`;

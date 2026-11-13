@@ -2,6 +2,7 @@
 // them in its main process; the worker reaches them through the window. In a
 // browser tab there are none, and nodes fall back to ffmpeg.wasm or explain why.
 import type { FfmpegLike } from "../../../audio/src/engine";
+import type { DoneFiles, FolderEntry } from "../folder-input";
 import type { Bytes, MediaFile } from "../runtime/types";
 
 export type NativeTool = "ffmpeg" | "yt-dlp" | "sips";
@@ -116,6 +117,35 @@ export function setScratchFiles(s: ScratchFiles | undefined) {
 }
 
 export const scratchFiles = () => scratch;
+
+/** What a "Folder of files" node asks for: a folder's files, and with `onlyNew` the ones it did before. */
+export interface FolderQuery {
+  folder: string;
+  kind: string;
+  pattern: string;
+  recursive: boolean;
+  onlyNew: boolean;
+}
+
+export interface FolderAnswer {
+  entries: FolderEntry[];
+  more: boolean;
+  missing?: boolean;
+  refused?: boolean;
+  done?: DoneFiles;
+}
+
+/** The desktop app lists folders for the worker, through the window. */
+export type FolderLister = (scope: string, nodeId: string, q: FolderQuery) => Promise<FolderAnswer>;
+
+let folders: FolderLister | undefined;
+
+/** Set by the worker in the desktop app; a browser tab can't see folders. */
+export function setFolderLister(f: FolderLister | undefined) {
+  folders = f;
+}
+
+export const folderLister = () => folders;
 
 /** Gets a model file by name (downloading it once, in the desktop app); progress is -1 while unknown. */
 export type ModelFetcher = (file: string, onProgress?: (fraction: number, label?: string) => void) => Promise<Uint8Array>;

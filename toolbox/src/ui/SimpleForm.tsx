@@ -78,6 +78,34 @@ function InputArea({ s }: { s: Simple }) {
       </div>
     );
   }
+  if (kind === "folder") {
+    const folder = typeof p.folder === "string" ? p.folder : "";
+    const rt = s.inputId ? s.runtime[s.inputId] : undefined;
+    // "12 new of 140 in Holiday", or why there's nothing to do yet.
+    const about = folder ? (rt?.info ?? rt?.error ?? "") : "";
+    return (
+      <div className="simple-input-folder">
+        <div className="simple-input-folder-row">
+          <button onClick={() => void s.chooseInput()} disabled={s.rendering}>
+            {folder ? "Choose another folder…" : "Choose a folder…"}
+          </button>
+          <span className="path" title={folder}>
+            {folder || "No folder yet"}
+          </span>
+        </div>
+        {(!!about || (!!folder && !!p.onlyNew)) && (
+          <div className="simple-input-folder-row">
+            <span className="muted simple-folder-about">{about}</span>
+            {!!p.onlyNew && (
+              <button className="link" onClick={() => void s.forgetDone()} disabled={s.rendering} title="Count every photo in the folder as new again">
+                Forget what was done
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
   if (kind === "link")
     return (
       <input
