@@ -31,6 +31,7 @@
     "check:play": "npm run build && node test/e2e/play.mjs",
     "check:web": "node test/e2e/web.mjs",
     "check:simple": "npm run build && node test/e2e/simple.mjs",
+    "check:headless": "npm run build && node test/e2e/headless.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {

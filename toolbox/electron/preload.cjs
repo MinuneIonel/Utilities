@@ -47,4 +47,11 @@ contextBridge.exposeInMainWorld("toolbox", {
   cancelTool: (id) => ipcRenderer.invoke("tool-cancel", id),
   getModel: (id, file) => ipcRenderer.invoke("model-get", id, file),
   onToolProgress: (handler) => ipcRenderer.on("tool-progress", (_e, id, fraction, label) => handler(id, fraction, label)),
+  /** A run from the command line: the window says it's ready, and the main process sends the graph. */
+  onHeadlessRun: (handler) => {
+    ipcRenderer.once("headless-run", (_e, req) => handler(req));
+    ipcRenderer.send("headless-ready");
+  },
+  headlessLog: (line) => ipcRenderer.send("headless-log", line),
+  headlessDone: (result) => ipcRenderer.send("headless-done", result),
 });

@@ -1,5 +1,6 @@
 // What the Electron preload script exposes. In a plain browser tab it's
 // missing, and the functions below fall back to downloads and file pickers.
+import type { RunRequest, RunResult } from "./headless-plan";
 import type { Bytes } from "./runtime/types";
 
 interface ToolboxBridge {
@@ -52,6 +53,12 @@ interface ToolboxBridge {
   /** A model file kept in Toolbox's folder, downloaded (with progress under `id`) the first time. */
   getModel(id: string, file: string): Promise<Uint8Array>;
   onToolProgress(handler: (id: string, fraction: number, label?: string) => void): void;
+  /** A run from the command line (Toolbox --run): the hidden window gets the graph to run here. */
+  onHeadlessRun?(handler: (req: RunRequest) => void): void;
+  /** A progress line for the command line. */
+  headlessLog(line: string): void;
+  /** The run is over; the main process prints the result and exits. */
+  headlessDone(result: RunResult): void;
 }
 
 /** A graph file's text, its file name, and (desktop app) where it is. */

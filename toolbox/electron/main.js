@@ -3,8 +3,10 @@
 import { BrowserWindow, Menu, app, dialog, ipcMain, net, protocol, session, shell, systemPreferences } from "electron";
 import { existsSync } from "node:fs";
 import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { USAGE, commandLinePaths, createRunSaves, findInputs, isRun, parseRunArgs, runAllowList } from "./cli.js";
 import { createRecent, graphPathsIn, recentLabel } from "./graph-files.js";
 import { consentText, pathsInGraph } from "./local-files.js";
 import { registerModels } from "./models.js";
@@ -29,10 +31,22 @@ protocol.registerSchemesAsPrivileged([
 // background's model then uses every CPU core on computers where it can't use the GPU.
 app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
 
+// Toolbox --run graph.toolbox: runs the graph in a hidden window and exits (see startRun and cli.js).
+const runArgs = isRun(process.argv) ? parseRunArgs(process.argv, process.cwd(), os.homedir()) : null;
+
 // One Toolbox at a time (per profile): opening a graph file while it runs shows it in a tab of
-// the running one (see second-instance below) instead of starting another.
-const firstInstance = app.requestSingleInstanceLock();
+// the running one (see second-instance below) instead of starting another. A --run isn't one:
+// it runs beside an open Toolbox, and never asks it to open the graph.
+const firstInstance = runArgs ? true : app.requestSingleInstanceLock();
 if (!firstInstance) app.quit();
+
+/** No dialogs in a run from the command line: nobody is there to answer them. */
+function noDialogs() {
+  if (runArgs) throw new Error("Toolbox can't ask anything in a run from the command line");
+}
+
+/** Files a run from the command line may read, for that run only: the ones its command line and graph name. */
+let runAllowed = (_p) => false;
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -225,6 +239,7 @@ ipcMain.handle("save-file", async (_e, name, data, folder, opts = {}) => {
       return { path: target, kept: false };
     }
   } else {
+    noDialogs();
     // The system's save dialog asks about replacing by itself.
     const r = await dialog.showSaveDialog(win, { defaultPath: name });
     if (r.canceled || !r.filePath) return null;
@@ -246,6 +261,7 @@ ipcMain.handle("scratch-delete", (_e, paths) => scratch().remove(paths));
 ipcMain.handle("default-folder", () => app.getPath("downloads"));
 
 ipcMain.handle("choose-folder", async () => {
+  noDialogs();
   const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
   return r.canceled ? null : r.filePaths[0];
 });
@@ -320,6 +336,7 @@ async function readGraphFile(p) {
 }
 
 ipcMain.handle("open-graph", async () => {
+  noDialogs();
   const r = await dialog.showOpenDialog(win, {
     properties: ["openFile"],
     filters: [{ name: "Toolbox graph", extensions: ["toolbox", "json"] }],
@@ -341,6 +358,7 @@ async function writeGraph(p, text) {
 }
 
 ipcMain.handle("save-graph", async (_e, text, suggestedName) => {
+  noDialogs();
   const r = await dialog.showSaveDialog(win, {
     defaultPath: suggestedName,
     filters: [{ name: "Toolbox graph", extensions: ["toolbox"] }],
@@ -360,6 +378,7 @@ ipcMain.handle("save-graph-to", async (_e, p, text) => {
 
 /** A question from the window, with its own answers; resolves with the index of the button pressed. */
 ipcMain.handle("ask", async (_e, message, detail, buttons) => {
+  noDialogs();
   const list = Array.isArray(buttons) && buttons.length ? buttons.slice(0, 4).map(String) : ["OK"];
   const { response } = await dialog.showMessageBox(win, {
     type: "question",
@@ -437,7 +456,7 @@ ipcMain.handle("edit-text", (e, command) => {
  * header only that part is sent, so a long video is read as it's needed rather than whole.
  */
 async function readLocal(p, range) {
-  if (!allowedFiles().has(p)) return new Response("Toolbox wasn't given this file", { status: 403 });
+  if (!allowedFiles().has(p) && !runAllowed(p)) return new Response("Toolbox wasn't given this file", { status: 403 });
   if (!(await isFile(p))) return new Response("Not found", { status: 404 });
   return range ? serveRange(p, range) : net.fetch(pathToFileURL(p).toString());
 }
@@ -449,25 +468,109 @@ async function readScratch(name, range) {
   return serveRange(p, range);
 }
 
+/** The app's own pages and files, and the files on disk it may read (app://toolbox/…). */
+function serveApp(req) {
+  const { pathname } = new URL(req.url);
+  // Files dropped into a graph earlier, read again from where they are on disk.
+  const range = req.headers.get("range");
+  if (pathname.startsWith("/@local/")) return readLocal(decodeURIComponent(pathname.slice("/@local/".length)), range);
+  // Big results waiting on disk (an encoded video, a download), read a piece at a time.
+  if (pathname.startsWith("/@scratch/")) return readScratch(decodeURIComponent(pathname.slice("/@scratch/".length)), range);
+  const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));
+  if (!file.startsWith(dist + path.sep)) return new Response("Not found", { status: 404 });
+  return net.fetch(pathToFileURL(file).toString());
+}
+
+/** Saves now what the app remembers, and removes the scratch folder. */
+function cleanUp() {
+  written?.flush();
+  allowed?.flush();
+  graphFilesSet?.flush();
+  scratchFolder?.clear();
+}
+
+/** Exits with `code` once what was printed has gone out. */
+function exitWith(code) {
+  cleanUp();
+  process.stdout.write("", () => process.stderr.write("", () => app.exit(code)));
+}
+
+/**
+ * Toolbox --run: the graph runs in a hidden window (src/headless.ts), which reports progress lines
+ * and the result here. Exit code 0 when it worked, 1 when a node failed, 2 for bad arguments or a
+ * graph file that can't be read. No menu, no updates, no dialogs.
+ */
+async function startRun(run) {
+  const fail = (message, code) => {
+    process.stderr.write(`${message}\n`);
+    exitWith(code);
+  };
+  if ("error" in run) return fail(`${run.error}\n\n${USAGE}`, 2);
+  let graphText;
+  try {
+    graphText = await readFile(run.graph, "utf8");
+  } catch {
+    return fail(`Can't read ${run.graph}`, 2);
+  }
+  const checked = findInputs(run.inputs);
+  if ("error" in checked) return fail(checked.error, 2);
+  const { inputs } = checked;
+  // The person chose to run this graph with these files: it may read them, this time only (nothing is added to allowed-files.json).
+  runAllowed = runAllowList([...commandLinePaths(run, inputs), ...pathsInGraph(graphText)], inputs.filter((i) => i.dir).map((i) => i.path));
+  const saves = createRunSaves(path.join(app.getPath("userData"), "run-saves.json"));
+  const request = { graphText, graphPath: run.graph, sets: run.sets, inputs, out: run.out, own: saves.get(run.graph) };
+
+  // Its own session, kept in memory: a run beside an open Toolbox doesn't share (or change) its storage.
+  const ses = session.fromPartition("toolbox-run");
+  ses.protocol.handle("app", serveApp);
+  ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  win = new BrowserWindow({
+    show: false,
+    webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, session: ses, backgroundThrottling: false },
+  });
+  const wc = win.webContents;
+  wc.on("will-navigate", (e) => e.preventDefault());
+  wc.setWindowOpenHandler(() => ({ action: "deny" }));
+  wc.on("render-process-gone", (_e, d) => fail(`Toolbox stopped unexpectedly (${d.reason})`, 1));
+  wc.on("did-fail-load", (_e, _code, desc) => fail(`Toolbox couldn't start (${desc})`, 1));
+  let sent = false;
+  ipcMain.on("headless-ready", (e) => {
+    if (e.sender !== wc || sent) return;
+    sent = true;
+    wc.send("headless-run", request);
+  });
+  ipcMain.on("headless-log", (e, line) => {
+    if (e.sender === wc && !run.quiet) process.stdout.write(`${String(line)}\n`);
+  });
+  ipcMain.on("headless-done", (e, result) => {
+    if (e.sender !== wc) return;
+    const files = Array.isArray(result?.files) ? result.files : [];
+    for (const f of files) process.stdout.write(f.kept ? `Kept ${f.path} (already there)\n` : `Saved ${f.path}\n`);
+    /** @type {Record<string, string[]>} */
+    const byNode = {};
+    for (const f of files) if (!f.kept) (byNode[f.nodeId] ??= []).push(f.path);
+    if (Object.keys(byNode).length) saves.set(run.graph, byNode);
+    const code = [0, 1, 2].includes(result?.code) ? result.code : 1;
+    if (code !== 0) process.stderr.write(`${result?.error || "The graph didn't run"}\n`);
+    exitWith(code);
+  });
+  win.loadURL(`${devUrl ?? "app://toolbox/index.html"}?headless=1`);
+}
+
 app.whenReady().then(() => {
   if (!firstInstance) return;
-  allowCamera();
   scratch();
   // Tools read the files the person gave Toolbox, and Toolbox's own results in the scratch folder.
-  registerTools((p) => allowedFiles().has(p) || scratch().inside(p), scratch());
+  registerTools((p) => allowedFiles().has(p) || runAllowed(p) || scratch().inside(p), scratch());
   registerModels();
+  if (runArgs) {
+    // No Dock icon for a run on a Mac.
+    app.dock?.hide();
+    return startRun(runArgs);
+  }
+  allowCamera();
   registerUpdater(() => win);
-  protocol.handle("app", (req) => {
-    const { pathname } = new URL(req.url);
-    // Files dropped into a graph earlier, read again from where they are on disk.
-    const range = req.headers.get("range");
-    if (pathname.startsWith("/@local/")) return readLocal(decodeURIComponent(pathname.slice("/@local/".length)), range);
-    // Big results waiting on disk (an encoded video, a download), read a piece at a time.
-    if (pathname.startsWith("/@scratch/")) return readScratch(decodeURIComponent(pathname.slice("/@scratch/".length)), range);
-    const file = path.normalize(path.join(dist, decodeURIComponent(pathname)));
-    if (!file.startsWith(dist + path.sep)) return new Response("Not found", { status: 404 });
-    return net.fetch(pathToFileURL(file).toString());
-  });
+  protocol.handle("app", serveApp);
   buildMenu();
   createWindow();
   // A graph file Toolbox was started with (Windows and Linux).
@@ -477,12 +580,7 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("will-quit", () => {
-  written?.flush();
-  allowed?.flush();
-  graphFilesSet?.flush();
-  scratchFolder?.clear();
-});
+app.on("will-quit", cleanUp);
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
