@@ -43,7 +43,7 @@ export function findTimeSource(graph: Graph, targetId: string, defOf: (type: str
   const target = node(targetId);
   if (!target) return undefined;
   if (TIME_SOURCES.has(target.type)) {
-    const port = target.type === "input.audio" || (target.type === "input.download" && target.params.quality === "audio") ? "audio" : "video";
+    const port = target.type === "input.audio" || (target.type === "input.download" && (target.params.quality === "audio" || target.params.quality === "mp3")) ? "audio" : "video";
     return { source: { id: target.id, port }, base: { id: target.id, port }, whole: true };
   }
   const seen = new Set<string>();

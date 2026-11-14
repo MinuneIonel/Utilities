@@ -84,25 +84,41 @@ export const WORKFLOWS: Workflow[] = [
   {
     id: "download-video",
     title: "Download a video",
-    description: "Paste a YouTube (or Vimeo, Instagram, TikTok…) link and save the video as it is.",
+    description: "Paste a YouTube (or Vimeo, Instagram, TikTok…) link and save the video as it is. A playlist link saves every video.",
     build: () =>
       chain([
         ["input.download", {}, undefined, "file"],
         ["output.save-file", {}],
       ]),
-    form: { input: { node: 0, kind: "link", label: "Link to the video" }, fields: [{ node: 0, param: "quality", label: "Quality" }], action: "Download", topic: "link" },
+    form: {
+      input: { node: 0, kind: "link", label: "Link to the video or playlist" },
+      fields: [
+        { node: 0, param: "playlist", label: "This link is in a playlist" },
+        { node: 0, param: "which", label: "Which videos" },
+        { node: 0, param: "quality", label: "Quality" },
+      ],
+      action: "Download",
+      topic: "link",
+    },
   },
   {
     id: "download-mp3",
     title: "Download the sound as MP3",
-    description: "Paste a YouTube or SoundCloud link and save just the sound, as an MP3.",
+    description: "Paste a YouTube or SoundCloud link and save just the sound, as an MP3. A playlist link saves one MP3 per video.",
     build: () =>
       chain([
-        ["input.download", { quality: "audio" }, undefined, "audio"],
-        ["audio.convert", { format: "mp3" }],
-        ["output.save-file", {}, "file"],
+        ["input.download", { quality: "mp3" }, undefined, "file"],
+        ["output.save-file", {}],
       ]),
-    form: { input: { node: 0, kind: "link", label: "Link to the video or song" }, fields: [], action: "Download", topic: "sound" },
+    form: {
+      input: { node: 0, kind: "link", label: "Link to the video, song or playlist" },
+      fields: [
+        { node: 0, param: "playlist", label: "This link is in a playlist" },
+        { node: 0, param: "which", label: "Which videos" },
+      ],
+      action: "Download",
+      topic: "sound",
+    },
   },
   {
     id: "extract-audio",
