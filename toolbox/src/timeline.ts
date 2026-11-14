@@ -22,6 +22,7 @@ export interface WalkDef {
   live?: boolean;
   inputs: PortDef[];
   outputs: PortDef[];
+  outputsFor?(params: Params): PortDef[];
 }
 
 export interface TimeSource {
@@ -76,7 +77,7 @@ export function findTimeSource(graph: Graph, targetId: string, defOf: (type: str
     const up = node(e.source);
     if (!up) continue;
     const upDef = defOf(up.type);
-    const type = upDef?.outputs.find((p) => p.key === e.sourceHandle)?.type;
+    const type = (upDef?.outputsFor?.(up.params) ?? upDef?.outputs)?.find((p) => p.key === e.sourceHandle)?.type;
     // Only what carries time: a video, a sound, or a frame node mapped over a video.
     if (type !== "video" && type !== "audio" && upDef?.kind !== "frame") continue;
     const source = TIME_SOURCES.has(up.type) ? { id: up.id, port: e.sourceHandle } : upDef?.kind === "frame" && !upDef.live ? sourceOf(up.id) : undefined;

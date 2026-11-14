@@ -107,7 +107,15 @@ export const saveFile: NodeDef = {
   async run(inputs, params, ctx) {
     const v = inputs.file as FileValue | VideoValue;
     const base = String(params.name ?? "").replace(/[\\/:*?"<>|]+/g, "-").trim();
-    if (v.kind === "file") return { file: base ? { ...v, name: base + extOf(v.name) } : v };
+    // One file of a Folder of videos, sounds or PDFs (the nodes before ran for it alone): named after
+    // it, in its sub-folder, so each file of the folder makes its own.
+    const one = ctx.item;
+    const itemDir = one?.name.includes("/") ? one.name.slice(0, one.name.lastIndexOf("/") + 1) : "";
+    const itemStem = one ? one.name.slice(itemDir.length).replace(/\.[^./]+$/, "") : "";
+    if (v.kind === "file") {
+      if (one) return { file: { ...v, name: `${itemDir}${base ? `${base}-${one.index + 1}` : itemStem}${extOf(v.name)}` } };
+      return { file: base ? { ...v, name: base + extOf(v.name) } : v };
+    }
     // A list (Several images, or each frame of a video): one file per item.
     const batch: FileValue[] = [];
     for await (const item of v.frames(ctx.signal)) {
@@ -117,7 +125,9 @@ export const saveFile: NodeDef = {
       if (n > MAX_BATCH) throw new Error(`That's more than ${MAX_BATCH} files. For a video, use Encode video before Save.`);
       // An image from a sub-folder ("2024/beach.jpg", from a Folder of files) keeps its sub-folder.
       const dir = item.name?.includes("/") ? item.name.slice(0, item.name.lastIndexOf("/") + 1) : "";
-      const stem = base ? `${dir}${base}-${n}` : item.name ? item.name.replace(/\.[^./]+$/, "") : `${f.name.replace(/\.[^.]+$/, "")}-${n}`;
+      let stem = base ? `${dir}${base}-${n}` : item.name ? item.name.replace(/\.[^./]+$/, "") : `${f.name.replace(/\.[^.]+$/, "")}-${n}`;
+      // Several files from one file of a folder (its clips): kept apart from the other files' by its name.
+      if (one) stem = `${itemDir}${stem.startsWith(itemStem) ? "" : `${itemStem}-`}${stem}`;
       batch.push({ ...f, name: stem + extOf(f.name) });
       if (v.duration > 0) ctx.progress?.(Math.min(0.99, item.timestamp / v.duration), `File ${n}`);
     }

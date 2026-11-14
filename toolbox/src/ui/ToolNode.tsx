@@ -138,7 +138,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
           ))}
         </div>
         <div>
-          {def.outputs.map((p) => (
+          {(def.outputsFor?.(data.params) ?? def.outputs).map((p) => (
             <div className="port out" key={p.key}>
               {p.label}
               <Handle type="source" position={Position.Right} id={p.key} className={`h h-${shapes.get(`${id}:${p.key}`)?.seq ? "video" : p.type}`} />

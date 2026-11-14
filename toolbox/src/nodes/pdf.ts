@@ -16,7 +16,7 @@ export const pdfRender = () => import("./pdf-render");
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const baseName = (n: string) => n.replace(/\.pdf$/i, "") || "document";
 
-async function documentOf(name: string, bytes: Uint8Array): Promise<DocumentValue> {
+export async function documentOf(name: string, bytes: Uint8Array): Promise<DocumentValue> {
   const { inspect, PasswordError } = await engine();
   try {
     const info = await inspect({ kind: "pdf", bytes });
@@ -113,7 +113,7 @@ export const pdfPages: NodeDef = {
     if (!picked.length) throw new Error("No pages picked");
     const rotate = num(params.rotate, 0) as 0 | 90 | 180 | 270;
     const bytes = await (await engine()).build([{ kind: "pdf", bytes: d.bytes }], { pages: picked.map((page) => ({ source: 0, page, rotate })) });
-    return { document: { ...d, bytes, pageCount: picked.length } };
+    return { document: { ...d, about: undefined, bytes, pageCount: picked.length } };
   },
 };
 
@@ -150,7 +150,7 @@ export const pdfStamp: NodeDef = {
         color: [0.2, 0.2, 0.2],
         start: 1,
       };
-    return { document: { ...d, bytes: await (await engine()).build([{ kind: "pdf", bytes: d.bytes }], plan) } };
+    return { document: { ...d, about: undefined, bytes: await (await engine()).build([{ kind: "pdf", bytes: d.bytes }], plan) } };
   },
 };
 
@@ -179,7 +179,7 @@ export const pdfProtect: NodeDef = {
       allowCopying: params.copy === true,
       allowModifying: params.modify === true,
     });
-    return { document: { ...d, bytes } };
+    return { document: { ...d, about: undefined, bytes } };
   },
 };
 
@@ -195,7 +195,7 @@ export const pdfCompact: NodeDef = {
   kind: "job",
   async run(inputs) {
     const d = inputs.document as DocumentValue;
-    return { document: { ...d, bytes: await (await engine()).compact(d.bytes) } };
+    return { document: { ...d, about: undefined, bytes: await (await engine()).compact(d.bytes) } };
   },
 };
 

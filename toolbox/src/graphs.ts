@@ -358,6 +358,50 @@ export const WORKFLOWS: Workflow[] = [
     },
   },
   {
+    id: "shrink-folder-videos",
+    title: "Shrink a folder of videos",
+    description: "Pick a folder once and save each video in it as a smaller 720p MP4. Run it again later and only the new videos are done.",
+    build: () =>
+      chain([
+        ["input.folder", { kind: "videos", onlyNew: true }],
+        ["media.transform", { resize: "long-edge", size: 1280 }],
+        ["video.encode", { container: "mp4", quality: "medium", name: "small" }],
+        ["output.save-file", { exists: "skip" }],
+      ]),
+    form: {
+      input: { node: 0, kind: "folder", label: "Your folder of videos" },
+      fields: [
+        { node: 1, param: "size", label: "Longest side (pixels)" },
+        { node: 2, param: "quality", label: "Quality" },
+        { node: 0, param: "onlyNew", label: "Only videos not done before" },
+        { node: 0, param: "subfolders", label: "Include sub-folders" },
+      ],
+      action: "Shrink",
+      topic: "video",
+    },
+  },
+  {
+    id: "convert-folder-sounds",
+    title: "Convert a folder of sounds",
+    description: "Pick a folder once and save each sound in it as an MP3 (or another format). Run it again later and only the new sounds are done.",
+    build: () =>
+      chain([
+        ["input.folder", { kind: "sounds", onlyNew: true }],
+        ["audio.convert", { format: "mp3" }],
+        ["output.save-file", { exists: "skip" }, "file"],
+      ]),
+    form: {
+      input: { node: 0, kind: "folder", label: "Your folder of sounds" },
+      fields: [
+        { node: 1, param: "format", label: "Format" },
+        { node: 0, param: "onlyNew", label: "Only sounds not done before" },
+        { node: 0, param: "subfolders", label: "Include sub-folders" },
+      ],
+      action: "Convert",
+      topic: "sound",
+    },
+  },
+  {
     id: "remove-background",
     title: "Remove the background",
     description: "Drop in a photo and save the subject as a PNG with a transparent background. Works offline after the first run.",

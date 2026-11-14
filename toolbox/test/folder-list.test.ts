@@ -138,6 +138,19 @@ test("what the card says", () => {
   assert.match(nothingToDo(abs("Holiday"), 140, true, ""), /Nothing new in Holiday/);
   assert.match(nothingToDo(abs("Holiday"), 0, false, "IMG_*"), /match IMG_\*/);
   assert.match(nothingToDo(abs("Holiday"), 0, true, ""), /No images in Holiday yet/);
+  // Videos, sounds and PDFs.
+  assert.equal(folderSummary(abs("Clips"), 3, 3, false, false, "videos"), "3 videos in Clips");
+  assert.equal(folderSummary(abs("Docs"), 1, 1, false, false, "pdfs"), "1 PDF in Docs");
+  assert.match(nothingToDo(abs("Docs"), 0, false, "", "pdfs"), /No PDFs in Docs yet/);
+  assert.match(nothingToDo(abs("Podcasts"), 4, true, "", "sounds"), /4 sounds done before/);
+});
+
+test("each kind of folder lists its own files", () => {
+  assert.ok(wanted("clip.MOV", KIND_EXTS.videos, ""));
+  assert.ok(!wanted("clip.mov", KIND_EXTS.sounds, ""));
+  assert.ok(wanted("song.flac", KIND_EXTS.sounds, ""));
+  assert.ok(wanted("invoice.pdf", KIND_EXTS.pdfs, ""));
+  assert.ok(!wanted("photo.jpg", KIND_EXTS.pdfs, ""));
 });
 
 test("a batch file's sub-folder travels apart from its name", () => {

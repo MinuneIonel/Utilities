@@ -34,6 +34,7 @@
     "check:headless": "npm run build && node test/e2e/headless.mjs",
     "check:timeline": "npm run build && node test/e2e/timeline.mjs",
     "check:folder": "npm run build && node test/e2e/folder.mjs",
+    "check:folder-files": "npm run build && node test/e2e/folder-files.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {

@@ -2,7 +2,8 @@ import { share, tee, type TeeSlot } from "./tee.ts";
 import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
 import type { Converter, FrameItem, FrameOptions, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
 
-type Rendered = { key: string; outputs: Record<string, Value> };
+/** `note`: what the live preview says while this render is out of date (some files of a folder failed). */
+type Rendered = { key: string; outputs: Record<string, Value>; note?: string };
 
 /** Every scratch file a node's outputs hold. */
 const pathsOf = (outputs: Record<string, Value>) => {
@@ -103,6 +104,9 @@ function sizeOfValue(v: Value): number {
     case "video":
       // Frames are decoded on demand; only the poster is held.
       return sizeOfValue(v.poster);
+    case "each":
+      // Files are opened one at a time, when their turn comes.
+      return 0;
     default:
       return v.text.length * 2;
   }
@@ -133,6 +137,9 @@ export function findConverter(converters: readonly Converter[], from: PortType, 
   return converters.find((c) => c.from === from && c.to === to);
 }
 
+/** A node's output ports for its settings (see NodeDef.outputsFor). */
+export const outputsOf = (def: NodeDef, params: Params): PortDef[] => def.outputsFor?.(params) ?? def.outputs;
+
 /** What a wire end carries: one value of `type`, or a video whose frames are `type`. */
 export interface Shape {
   type: PortType;
@@ -160,7 +167,7 @@ export function outputShapes(graph: Graph, registry: ReadonlyMap<string, NodeDef
       const e = graph.edges.find((x) => x.target === node.id && x.targetHandle === p.key);
       return !!e && !!shapes.get(`${e.source}:${e.sourceHandle}`)?.seq;
     });
-    for (const p of def.outputs) {
+    for (const p of outputsOf(def, node.params)) {
       shapes.set(`${node.id}:${p.key}`, p.type === "video" ? { type: "image", seq: true } : { type: p.type, seq: mapped });
     }
   }
@@ -177,7 +184,7 @@ export function canConnect(from: Shape, target: NodeDef, port: PortDef, converte
   return { ok: !!converter, converter };
 }
 
-const shapeOf = (v: Value): Shape => (v.kind === "video" ? { type: v.of, seq: true } : { type: v.kind, seq: false });
+const shapeOf = (v: Value): Shape => (v.kind === "video" ? { type: v.of, seq: true } : v.kind === "each" ? { type: v.of === "video" ? "image" : v.of, seq: v.of === "video" } : { type: v.kind, seq: false });
 
 /** A video whose frames have been converted (e.g. grid frames drawn as images). */
 function convertVideo(v: VideoValue, conv: Converter, poster: Value): VideoValue {
@@ -347,14 +354,24 @@ export interface EvaluateOptions {
    * twice, say), so each keeps its own last renders. "" (the default) keys them by node id alone.
    */
   scope?: string;
+  /** Results already known: these nodes aren't run or reported (see evaluateEach). */
+  given?: ReadonlyMap<string, NodeResult>;
+  /** Mixed into job nodes' cache keys (not their render keys): one file's run of a per-file Render. */
+  salt?: string;
 }
 
 /**
  * Runs a graph in dependency order. Unchanged nodes come from the cache;
- * in preview mode, job nodes only show their last rendered result.
+ * in preview mode, job nodes only show their last rendered result. On Render, the nodes after a
+ * node giving whole files one after another (a Folder of videos) run once per file.
  */
 export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
-  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [], scope = "" } = opts;
+  if (opts.ctx.mode === "render" && !opts.given && graph.nodes.some((n) => opts.registry.get(n.type)?.each?.(n.params))) return evaluateEach(graph, opts);
+  return evaluateOnce(graph, opts);
+}
+
+async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
+  const { registry, ctx, cache, onNode, onStart, onProgress, cancelled, converters = [], scope = "", given, salt } = opts;
   const lastOf = (id: string) => (scope ? `${scope}:${id}` : id);
   const results = new Map<string, NodeResult>();
   // Nodes fed, directly or not, by a live node.
@@ -401,6 +418,8 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
     const sources = graph.edges.filter((e) => e.target === node.id).map((e) => tasks.get(e.source));
     const together = sharing.has(node.id) || (ctx.mode === "render" && live.has(node.id));
     const runNode = async () => {
+      const known = given?.get(node.id);
+      if (known) return void results.set(node.id, known);
       if (stopped || cancelled?.()) {
         stopped = true;
         return;
@@ -471,14 +490,19 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
       // Job nodes only ever run on Render, so they are cached by what Render would make:
       // moving a playhead or picking another preview page doesn't encode the video again.
       const key =
-        def.kind === "job" ? renderKey : hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, nodeCtxKey) ?? "", ...inputKeys].join("|"));
+        def.kind === "job"
+          ? // One file's run of a per-file Render: keyed by that file's own chain (what it is, not what else is in its folder).
+            salt
+            ? hash([node.type, JSON.stringify(renderParams), def.cacheKey?.(node.params, { ...nodeCtxKey, mode: "render" }) ?? "", ...inputKeys, salt].join("|"))
+            : renderKey
+          : hash([node.type, JSON.stringify(node.params), def.cacheKey?.(node.params, nodeCtxKey) ?? "", ...inputKeys].join("|"));
 
       if (def.kind === "job" && ctx.mode === "preview") {
         const last = cache.lastRender.get(lastOf(node.id));
         if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
         // A recording can't be "out of date": every camera frame is new.
         else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
-        else finish(node.id, { status: "stale", outputs: last.outputs, key: last.key, renderKey, error: "Out of date: Render to update" });
+        else finish(node.id, { status: "stale", outputs: last.outputs, key: last.key, renderKey, error: last.note ?? "Out of date: Render to update" });
         return;
       }
 
@@ -533,5 +557,160 @@ export async function evaluate(graph: Graph, opts: EvaluateOptions): Promise<Map
     tasks.set(node.id, task);
   }
   await Promise.all(tasks.values());
+  return results;
+}
+
+/** Every node fed, directly or not, by `from`. */
+function downstreamOf(graph: Graph, from: string): Set<string> {
+  const out = new Set<string>();
+  const stack = [from];
+  while (stack.length) {
+    const id = stack.pop()!;
+    for (const e of graph.edges) if (e.source === id && !out.has(e.target) && e.target !== from) out.add(e.target), stack.push(e.target);
+  }
+  return out;
+}
+
+const plainError = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * A Render with nodes giving whole files one after another (EachValue, e.g. a Folder of videos).
+ * Everything not after such a node runs once, as usual. Then, for each of those nodes and each of
+ * its files in turn, the nodes after it run with that one file in its place (with the same render
+ * keys as the live preview, so a job is "up to date" afterwards, but cache keys of their own).
+ * Save nodes collect one batch from all the runs, written together at the end; a file that fails
+ * doesn't stop the others, and is left out of "Only new files" bookkeeping.
+ */
+export async function evaluateEach(graph: Graph, opts: EvaluateOptions): Promise<Map<string, NodeResult>> {
+  const { registry, ctx, cache, onNode, onProgress, cancelled, scope = "" } = opts;
+  const lastOf = (id: string) => (scope ? `${scope}:${id}` : id);
+  const results = new Map<string, NodeResult>();
+  const finish = (id: string, r: NodeResult) => {
+    results.set(id, r);
+    onNode?.(id, r);
+  };
+  const sources = graph.nodes.filter((n) => registry.get(n.type)?.each?.(n.params));
+  const after = new Map(sources.map((n) => [n.id, downstreamOf(graph, n.id)]));
+  // A node after two of them would need every pair of files: not supported.
+  const tangled = new Set<string>();
+  for (const a of sources) for (const b of sources) if (a !== b) for (const id of after.get(a.id)!) if (after.get(b.id)!.has(id) || b.id === id) tangled.add(id);
+  const later = new Set([...after.values()].flatMap((s) => [...s]));
+  const stop = () => !!ctx.signal?.aborted || !!cancelled?.();
+
+  // 1. Everything that runs once.
+  const once = await evaluateOnce({ ...graph, nodes: graph.nodes.filter((n) => !later.has(n.id)), edges: graph.edges.filter((e) => !later.has(e.target)) }, opts);
+  for (const [id, r] of once) results.set(id, r);
+  for (const id of tangled) finish(id, { status: "error", outputs: {}, error: "Two folders of files lead here: give each its own chain" });
+
+  for (const src of sources) {
+    const mine = graph.nodes.filter((n) => after.get(src.id)!.has(n.id) && !tangled.has(n.id));
+    if (!mine.length) continue;
+    const sub: Graph = { ...graph, nodes: graph.nodes.filter((n) => !later.has(n.id) || mine.includes(n)), edges: graph.edges.filter((e) => !later.has(e.target) || mine.some((n) => n.id === e.target)) };
+    const head = results.get(src.id);
+    const port = head && Object.keys(head.outputs).find((k) => head.outputs[k].kind === "each");
+    const each = port ? head.outputs[port] : undefined;
+    if (stop()) {
+      for (const n of mine) finish(n.id, { status: "error", outputs: {}, error: "Cancelled" });
+      continue;
+    }
+    // Nothing to go through (no folder, an error): the nodes after it just wait, as usual.
+    if (each?.kind !== "each" || !port || !head) {
+      const r = await evaluateOnce(sub, { ...opts, given: results });
+      for (const n of mine) if (r.has(n.id)) results.set(n.id, r.get(n.id)!);
+      continue;
+    }
+    const saves = new Set(mine.filter((n) => registry.get(n.type)?.saves).map((n) => n.id));
+    const runs = new Map<string, { item: number; r: NodeResult }[]>(mine.map((n) => [n.id, []]));
+    const failures: { item: number; node?: string; error: string }[] = [];
+    // What the runs made stays on disk until the batch is in lastRender, whatever the cache drops meanwhile.
+    const held: Set<string>[] = [];
+    let cancelledHere = false;
+    // The folder's result may come from the cache, marked by an earlier Render.
+    for (const item of each.items) item.failed = false;
+    for (let i = 0; i < each.items.length; i++) {
+      if (stop()) {
+        cancelledHere = true;
+        break;
+      }
+      const item = each.items[i];
+      onProgress?.(src.id, i / each.items.length, `File ${i + 1} of ${each.items.length}`);
+      let value: Value;
+      try {
+        value = await item.load();
+      } catch (e) {
+        item.failed = true;
+        failures.push({ item: i, error: plainError(e) });
+        continue;
+      }
+      const given = new Map(results);
+      // Keyed by the file alone, so files that were there last time come from the cache when one is added.
+      given.set(src.id, { status: "ok", outputs: { [port]: value }, key: hash(`${src.type}#${item.id}`), renderKey: head.renderKey });
+      const r = await evaluateOnce(sub, {
+        ...opts,
+        ctx: { ...ctx, item: { name: item.name, index: i } },
+        given,
+        salt: item.id,
+        // A Save node's files go once, together, at the end; the other cards follow along.
+        onNode: (id, res) => !saves.has(id) && onNode?.(id, res),
+      });
+      for (const n of mine) {
+        const res = r.get(n.id);
+        if (!res) continue;
+        runs.get(n.id)!.push({ item: i, r: res });
+        const paths = pathsOf(res.outputs);
+        cache.refs.retain(paths);
+        held.push(paths);
+        if (res.status === "error") {
+          if (res.error === "Cancelled") cancelledHere = true;
+          else failures.push({ item: i, node: n.id, error: res.error ?? "Failed" });
+          item.failed = true;
+        }
+      }
+    }
+    onProgress?.(src.id, 1, "");
+    const named = (f: { item: number; error: string }) => `${each.items[f.item].name}: ${f.error}`;
+    for (const n of mine) {
+      const def = registry.get(n.type);
+      const list = runs.get(n.id)!;
+      if (cancelledHere) {
+        finish(n.id, { status: "error", outputs: {}, error: "Cancelled" });
+        continue;
+      }
+      const ok = list.filter((x) => x.r.status === "ok" || x.r.status === "cached");
+      const fails = failures.filter((f) => f.node === n.id);
+      // A file that couldn't be opened fails at the folder; the nodes right after it say so.
+      const unopened = failures.filter((f) => !f.node);
+      const outputs: Record<string, Value> = {};
+      for (const k of new Set(ok.flatMap((x) => Object.keys(x.r.outputs)))) {
+        const vals = ok.map((x) => x.r.outputs[k]).filter((v): v is Value => !!v);
+        if (vals.length && vals.every((v) => v.kind === "file")) {
+          const batch = vals.flatMap((v) => (v.kind === "file" ? (v.batch ?? [v]) : []));
+          outputs[k] = batch.length > 1 ? { ...batch[0], batch } : batch[0];
+        } else if (vals.length) outputs[k] = vals[0];
+      }
+      const renderKey = list.find((x) => x.r.renderKey)?.r.renderKey;
+      const whole = !fails.length && !unopened.length && ok.length === list.length && ok.length > 0;
+      const key = whole && def?.kind === "job" && renderKey ? renderKey : hash(list.map((x) => x.r.key ?? "-").join("|") + `|${failures.length}`);
+      const problem = fails.length
+        ? `${fails.length} of ${each.items.length} files failed here. ${named(fails[0])}`
+        : saves.has(n.id) && failures.length
+          ? `${failures.length} of ${each.items.length} files failed, the rest are saved. ${named(failures[0])}`
+          : undefined;
+      // Not up to date while files failed, so Render tries them again; till then the preview says why.
+      if (def?.kind === "job" && ok.length) cache.lastRender.set(lastOf(n.id), whole && renderKey ? { key: renderKey, outputs } : { key: `partial:${key}`, outputs, note: problem });
+      if (problem) {
+        // What worked is still written; the card says what didn't.
+        finish(n.id, { status: "error", outputs, key, renderKey, error: problem });
+      } else if (ok.length) {
+        const status = ok.every((x) => x.r.status === "cached") ? "cached" : "ok";
+        finish(n.id, { status, outputs, key, renderKey, error: unopened.length ? `Couldn't open ${unopened.length} of ${each.items.length} files. ${named(unopened[0])}` : undefined });
+      } else {
+        // Waiting or skipped in every run (not connected, say): the last run says why.
+        const last = list[list.length - 1]?.r;
+        finish(n.id, last ?? { status: "waiting", outputs: {}, error: unopened.length ? named(unopened[0]) : "No files" });
+      }
+    }
+    for (const p of held) cache.refs.release(p);
+  }
   return results;
 }
