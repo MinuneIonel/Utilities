@@ -160,6 +160,8 @@ export function useNodeMenu(
         first.type === "input.download" ? "paste a link in the inspector, then Render"
         : first.type === "input.text" ? "type or paste your text, then Render"
         : first.type === "input.images" ? "drop in your photos, then Render"
+        : first.type === "input.videos" ? "drop in your videos, then Render"
+        : first.type === "input.folder" ? "choose a folder in the inspector, then Render"
         : first.type === "input.qr" ? "type your link or text in the inspector, then Render"
         : first.type === "input.webcam" ? "allow the camera, press Render to record and Stop to finish"
         : "drop in your file, then Render";

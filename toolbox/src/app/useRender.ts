@@ -164,12 +164,14 @@ export function useRender({ flow, client, webcams, graphRef, shapes, nodes, runt
         setRuntimeOf(scope)((prev) => ({ ...prev, [nodeId]: { ...prev[nodeId], savedTo } }));
       }
       // Folder nodes with "Only new files" leave out what this Render saved (or found already saved) next time.
-      if (!result.error && saved + kept > 0 && result.folders?.length) {
+      // (After Cancel too: the files finished before it were saved; the worker leaves out the rest.)
+      if (saved + kept > 0 && result.folders?.length) {
         for (const f of result.folders) await client.markDone(scope, f.nodeId, f.done).catch(() => undefined);
         client.preview(graphRef.current);
       }
-      if (result.error) return;
       const count = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
+      // Cancelled part way through a batch: what was finished before it is saved all the same.
+      if (result.error) return void (saved && flash(`${result.error}. The ${count(saved)} finished before it ${saved === 1 ? "is" : "are"} saved.`));
       if (unchanged && !saved && !kept) flash("Nothing changed since the last save. Press Save on a Save node to write it again.");
       else if (unchanged || kept) {
         const rest = [kept && `kept ${count(kept)} that ${kept === 1 ? "was" : "were"} already there`, unchanged && `${unchanged} unchanged since the last save`].filter(Boolean).join(", ");

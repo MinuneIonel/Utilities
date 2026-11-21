@@ -193,7 +193,7 @@ test("a node after two folders says it can't", async () => {
   assert.equal(r.get("v")?.status, "error");
 });
 
-test("cancelling stops before the next file and sends no files", async () => {
+test("cancelling before any file finishes sends no files", async () => {
   files = { "a.pdf": "A", "b.pdf": "B", "c.pdf": "C" };
   const ac = new AbortController();
   runs = [];
@@ -201,10 +201,54 @@ test("cancelling stops before the next file and sends no files", async () => {
     registry,
     cache: new ResultCache(),
     ctx: { ...render, signal: ac.signal },
+    // As the worker does: nothing more starts once Cancel is pressed.
+    cancelled: () => ac.signal.aborted,
     onNode: (id) => id === "p" && ac.abort(),
   });
   assert.equal(r.get("v")?.status, "error");
   assert.equal(r.get("v")?.error, "Cancelled");
   assert.deepEqual(r.get("v")?.outputs, {});
   assert.equal(runs.filter((x) => x.startsWith("pack:")).length, 1);
+  const each = r.get("f")?.outputs.docs as EachValue;
+  assert.deepEqual(each.items.map((i) => !!i.failed), [true, true, true]);
+});
+
+test("cancelling part way keeps the files finished before it, and only those count as done", async () => {
+  files = { "a.pdf": "A", "b.pdf": "B", "c.pdf": "C", "d.pdf": "D" };
+  const ac = new AbortController();
+  let packs = 0;
+  const r = await evaluate(graph(), {
+    registry,
+    cache: new ResultCache(),
+    ctx: { ...render, signal: ac.signal },
+    cancelled: () => ac.signal.aborted,
+    // Stop while the third file is being packed: the first two are finished.
+    onNode: (id) => id === "p" && ++packs === 3 && ac.abort(),
+  });
+  assert.equal(r.get("v")?.status, "error");
+  assert.match(r.get("v")?.error ?? "", /Cancelled after 2 of 4 files/);
+  assert.deepEqual(batchOf(r.get("v")), ["a.pdf=A+hi", "b.pdf=B+hi"]);
+  // Nodes that don't save just say they were cancelled.
+  assert.equal(r.get("p")?.error, "Cancelled");
+  const each = r.get("f")?.outputs.docs as EachValue;
+  assert.deepEqual(each.items.map((i) => !!i.failed), [false, false, true, true]);
+});
+
+test("each card's progress says which file it's on", async () => {
+  files = { "a.pdf": "A", "b.pdf": "B" };
+  const slow: NodeDef = {
+    ...registry.get("pack")!,
+    async run(i, p, ctx) {
+      ctx.progress?.(0.5, "50%");
+      return registry.get("pack")!.run(i, p, ctx);
+    },
+  };
+  const labels: string[] = [];
+  await evaluate(graph(), {
+    registry: new Map([...registry, ["pack", slow]]),
+    cache: new ResultCache(),
+    ctx: render,
+    onProgress: (id, _f, label) => id === "p" && labels.push(label ?? ""),
+  });
+  assert.deepEqual(labels.filter((l) => l.includes("50%")), ["File 1 of 2 · 50%", "File 2 of 2 · 50%"]);
 });

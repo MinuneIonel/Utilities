@@ -1,7 +1,7 @@
 // Files dropped on the canvas go into the right input nodes, or new ones.
 import { useCallback, useState, type DragEvent } from "react";
 import type { Edge, ReactFlowInstance } from "@xyflow/react";
-import { inputNodeFor } from "../nodes";
+import { inputNodeFor, MULTI_INPUTS } from "../nodes";
 import type { Params } from "../runtime/types";
 import type { ToolFlowNode } from "../ui/context";
 import type { Flash, Point } from "./flow";
@@ -28,19 +28,24 @@ export function useDrop({ flow, flash, addNode, setNodeFile, setNodeFiles, setPa
       // A file dropped onto an input node goes into that node.
       const onto = (e.target as HTMLElement).closest(".react-flow__node")?.getAttribute("data-id");
       const ontoNode = onto ? flow.getNode(onto) : undefined;
-      // An empty Images node (or the one dropped onto) takes all the dropped images at once,
-      // unless they were dropped onto an Image file node: then that node gets them.
-      const images = all.filter((f) => inputNodeFor(f) === "input.file");
-      const imagesNode =
-        ontoNode?.data.type === "input.images" ? ontoNode
-        : ontoNode?.data.type === "input.file" ? undefined
-        : flow.getNodes().find((n) => n.data.type === "input.images" && !(n.data.params.assetIds as unknown[] | undefined)?.length);
-      if (imagesNode && images.length) setNodeFiles(imagesNode.id, images);
+      // An empty Several images / Several videos node (or the one dropped onto) takes all the dropped
+      // files of its kind at once, unless they were dropped onto a single-file node of that kind.
+      const taken = new Set<File>();
+      for (const [multi, single] of Object.entries(MULTI_INPUTS)) {
+        const mine = all.filter((f) => inputNodeFor(f) === single);
+        const node =
+          ontoNode?.data.type === multi ? ontoNode
+          : ontoNode?.data.type === single ? undefined
+          : flow.getNodes().find((n) => n.data.type === multi && !(n.data.params.assetIds as unknown[] | undefined)?.length);
+        if (!node || !mine.length) continue;
+        setNodeFiles(node.id, mine);
+        for (const f of mine) taken.add(f);
+      }
       // Fill empty inputs of the right kind first, then add new ones.
-      const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !n.data.params.assetId);
-      if (ontoNode && ontoNode.data.type !== "input.images") empty.unshift(ontoNode);
+      const empty = flow.getNodes().filter((n) => n.data.type !== "input.text" && n.data.type.startsWith("input.") && !(n.data.type in MULTI_INPUTS) && !n.data.params.assetId);
+      if (ontoNode && !(ontoNode.data.type in MULTI_INPUTS)) empty.unshift(ontoNode);
       let row = 0;
-      for (const f of imagesNode && images.length ? all.filter((f) => !images.includes(f)) : all) {
+      for (const f of all.filter((f) => !taken.has(f))) {
         const type = inputNodeFor(f);
         if (!type) continue;
         const at = { x: pos.x, y: pos.y + row++ * 40 };

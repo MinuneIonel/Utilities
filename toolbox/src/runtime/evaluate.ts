@@ -573,6 +573,19 @@ function downstreamOf(graph: Graph, from: string): Set<string> {
 
 const plainError = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** One node's outputs over the files it ran for: files make one batch, anything else is the first file's. */
+function batchOutputs(ok: { r: NodeResult }[]): Record<string, Value> {
+  const outputs: Record<string, Value> = {};
+  for (const k of new Set(ok.flatMap((x) => Object.keys(x.r.outputs)))) {
+    const vals = ok.map((x) => x.r.outputs[k]).filter((v): v is Value => !!v);
+    if (vals.length && vals.every((v) => v.kind === "file")) {
+      const batch = vals.flatMap((v) => (v.kind === "file" ? (v.batch ?? [v]) : []));
+      outputs[k] = batch.length > 1 ? { ...batch[0], batch } : batch[0];
+    } else if (vals.length) outputs[k] = vals[0];
+  }
+  return outputs;
+}
+
 /**
  * A Render with nodes giving whole files one after another (EachValue, e.g. a Folder of videos).
  * Everything not after such a node runs once, as usual. Then, for each of those nodes and each of
@@ -610,6 +623,7 @@ export async function evaluateEach(graph: Graph, opts: EvaluateOptions): Promise
     const port = head && Object.keys(head.outputs).find((k) => head.outputs[k].kind === "each");
     const each = port ? head.outputs[port] : undefined;
     if (stop()) {
+      if (each?.kind === "each") for (const item of each.items) item.failed = true;
       for (const n of mine) finish(n.id, { status: "error", outputs: {}, error: "Cancelled" });
       continue;
     }
@@ -633,7 +647,8 @@ export async function evaluateEach(graph: Graph, opts: EvaluateOptions): Promise
         break;
       }
       const item = each.items[i];
-      onProgress?.(src.id, i / each.items.length, `File ${i + 1} of ${each.items.length}`);
+      const fileOf = `File ${i + 1} of ${each.items.length}`;
+      onProgress?.(src.id, i / each.items.length, fileOf);
       let value: Value;
       try {
         value = await item.load();
@@ -652,6 +667,8 @@ export async function evaluateEach(graph: Graph, opts: EvaluateOptions): Promise
         salt: item.id,
         // A Save node's files go once, together, at the end; the other cards follow along.
         onNode: (id, res) => !saves.has(id) && onNode?.(id, res),
+        // Each card says which file it's on, as well as how far into it.
+        onProgress: onProgress && ((id, fraction, label) => onProgress(id, fraction, label ? `${fileOf} · ${label}` : fileOf)),
       });
       for (const n of mine) {
         const res = r.get(n.id);
@@ -668,26 +685,31 @@ export async function evaluateEach(graph: Graph, opts: EvaluateOptions): Promise
       }
     }
     onProgress?.(src.id, 1, "");
+    // Stopped part way: the files not finished aren't done, so "Only new files" still has them next time.
+    const finished = new Set<number>();
+    if (cancelledHere) {
+      for (const [i, item] of each.items.entries()) {
+        const all = mine.map((n) => runs.get(n.id)!.find((x) => x.item === i)?.r);
+        if (all.every((x) => x && (x.status === "ok" || x.status === "cached"))) finished.add(i);
+        else item.failed = true;
+      }
+    }
     const named = (f: { item: number; error: string }) => `${each.items[f.item].name}: ${f.error}`;
     for (const n of mine) {
       const def = registry.get(n.type);
       const list = runs.get(n.id)!;
       if (cancelledHere) {
-        finish(n.id, { status: "error", outputs: {}, error: "Cancelled" });
+        // The files that were finished before Cancel are still saved; the rest aren't.
+        const outputs = saves.has(n.id) ? batchOutputs(list.filter((x) => finished.has(x.item))) : {};
+        const kept = Object.keys(outputs).length ? finished.size : 0;
+        finish(n.id, { status: "error", outputs, error: kept ? `Cancelled after ${kept} of ${each.items.length} files. Those ${kept} are saved` : "Cancelled" });
         continue;
       }
       const ok = list.filter((x) => x.r.status === "ok" || x.r.status === "cached");
       const fails = failures.filter((f) => f.node === n.id);
       // A file that couldn't be opened fails at the folder; the nodes right after it say so.
       const unopened = failures.filter((f) => !f.node);
-      const outputs: Record<string, Value> = {};
-      for (const k of new Set(ok.flatMap((x) => Object.keys(x.r.outputs)))) {
-        const vals = ok.map((x) => x.r.outputs[k]).filter((v): v is Value => !!v);
-        if (vals.length && vals.every((v) => v.kind === "file")) {
-          const batch = vals.flatMap((v) => (v.kind === "file" ? (v.batch ?? [v]) : []));
-          outputs[k] = batch.length > 1 ? { ...batch[0], batch } : batch[0];
-        } else if (vals.length) outputs[k] = vals[0];
-      }
+      const outputs = batchOutputs(ok);
       const renderKey = list.find((x) => x.r.renderKey)?.r.renderKey;
       const whole = !fails.length && !unopened.length && ok.length === list.length && ok.length > 0;
       const key = whole && def?.kind === "job" && renderKey ? renderKey : hash(list.map((x) => x.r.key ?? "-").join("|") + `|${failures.length}`);

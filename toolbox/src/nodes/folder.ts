@@ -85,9 +85,10 @@ export function forgetFolders(scope: string) {
 
 /**
  * After a Render: the files each folder node with "Only new files" worked on, to remember as done.
- * Only nodes that ran without a problem count.
+ * Only nodes that ran without a problem count. After Cancel (`stopped`), only the whole files
+ * finished before it.
  */
-export function folderRuns(graph: Graph, scope: string, results: Map<string, NodeResult>): { nodeId: string; done: DoneFiles }[] {
+export function folderRuns(graph: Graph, scope: string, results: Map<string, NodeResult>, stopped = false): { nodeId: string; done: DoneFiles }[] {
   const out: { nodeId: string; done: DoneFiles }[] = [];
   for (const n of graph.nodes) {
     if (n.type !== FOLDER_TYPE || !n.params.onlyNew) continue;
@@ -96,6 +97,8 @@ export function folderRuns(graph: Graph, scope: string, results: Map<string, Nod
     if (!l || l.problem || (r?.status !== "ok" && r?.status !== "cached")) continue;
     // Whole files (videos, sounds, PDFs) that failed on the way aren't done.
     const each = Object.values(r.outputs).find((v) => v.kind === "each");
+    // After Cancel, only whole files know which ones were finished (images are saved all together).
+    if (stopped && !each) continue;
     const failed = new Set(each?.kind === "each" ? each.items.filter((i) => i.failed).map((i) => i.id) : []);
     out.push({ nodeId: n.id, done: Object.fromEntries(l.entries.filter((e) => !failed.has(itemId(e))).map((e) => [e.path, e.mtimeMs])) });
   }

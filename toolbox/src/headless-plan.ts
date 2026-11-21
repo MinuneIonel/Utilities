@@ -81,11 +81,12 @@ function applyInput(node: GraphNode, input: RunInput, label: string, defaults: P
     if (!input.dir) throw new RunError(`${label} reads a folder, and ${input.path} is a file`, 2);
     return { ...p, folder: input.path };
   }
-  // Several images: each --input adds files; a folder adds its images.
+  // Several images (or videos): each --input adds files; a folder adds its images.
   if (Array.isArray(defaults.assetIds)) {
+    if (input.dir && node.type === "input.videos") throw new RunError(`${label} takes video files. For a folder of videos, use a Folder of files node`, 2);
     if (input.dir && !input.files.length) throw new RunError(`There are no images in ${input.path}`, 2);
     const paths = [...(already && Array.isArray(p.paths) ? (p.paths as string[]) : []), ...input.files];
-    return { ...p, paths, names: paths.map(baseName), assetIds: [], name: paths.length === 1 ? baseName(paths[0]) : `${paths.length} images` };
+    return { ...p, paths, names: paths.map(baseName), assetIds: [], name: paths.length === 1 ? baseName(paths[0]) : `${paths.length} files` };
   }
   if ("assetId" in defaults) {
     if (input.dir) throw new RunError(`${label} reads one file, and ${input.path} is a folder`, 2);

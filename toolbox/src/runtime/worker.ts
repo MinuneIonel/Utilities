@@ -669,7 +669,8 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
     });
     await Promise.all(pending);
     const stopped = cancelled() && mode === "render";
-    const folders = mode === "render" && !stopped ? folderRuns(graph, scope, results) : [];
+    // After Cancel too: the files finished before it were saved (the others are marked as failed).
+    const folders = mode === "render" ? folderRuns(graph, scope, results, stopped) : [];
     post({ type: "done", reqId, mode, error: stopped ? "Render cancelled" : undefined, ...(folders.length ? { folders } : {}) });
   } catch (err) {
     await Promise.all(pending);

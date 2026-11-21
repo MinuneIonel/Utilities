@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { INPUT_ACCEPT, REGISTRY } from "../nodes";
+import { INPUT_ACCEPT, MULTI_INPUTS, REGISTRY } from "../nodes";
 import { PlayIcon } from "./Player";
 import { ActionsContext, PlayingContext, PreviewContext, RuntimeContext, ShapesContext, type NodeRuntime, type ToolFlowNode } from "./context";
 
@@ -59,7 +59,7 @@ export function ToolNode({ id, data, selected }: NodeProps<ToolFlowNode>) {
   const fileRef = useRef<HTMLInputElement>(null);
   if (!def) return <div className="tnode error">Unknown node {data.type}</div>;
   const accept = INPUT_ACCEPT[def.type];
-  const multiple = def.type === "input.images";
+  const multiple = def.type in MULTI_INPUTS;
   const empty = !!accept && !(multiple ? (data.params.assetIds as unknown[] | undefined)?.length : data.params.assetId);
   // An input waiting for its file or link is a normal state, not an error.
   const noFolder = def.type === "input.folder" && !data.params.folder;

@@ -381,6 +381,50 @@ export const WORKFLOWS: Workflow[] = [
     },
   },
   {
+    id: "encode-videos",
+    title: "Encode a batch of videos",
+    description: "Drop in a pile of videos and save each one again in the format, codec and quality you pick (MP4, WebM, MOV, ProRes…), into one folder, named after the original. Cancel keeps the ones already finished.",
+    build: () =>
+      chain([
+        ["input.videos", {}],
+        ["video.encode", { container: "mp4", codec: "auto", quality: "high" }],
+        ["output.save-file", {}],
+      ]),
+    form: {
+      input: { node: 0, kind: "files", label: "Your videos", accept: "video/*,.mkv" },
+      fields: [
+        { node: 1, param: "container", label: "Format" },
+        { node: 1, param: "codec", label: "Codec" },
+        { node: 1, param: "quality", label: "Quality" },
+        { node: 1, param: "audio", label: "Keep sound" },
+      ],
+      action: "Encode",
+      topic: "video",
+    },
+  },
+  {
+    id: "encode-folder-videos",
+    title: "Encode a folder of videos",
+    description: "Pick a folder once and save each video in it in the format, codec and quality you pick. Run it again later and only the new videos are done.",
+    build: () =>
+      chain([
+        ["input.folder", { kind: "videos", onlyNew: true }],
+        ["video.encode", { container: "mp4", codec: "auto", quality: "high" }],
+        ["output.save-file", { exists: "skip" }],
+      ]),
+    form: {
+      input: { node: 0, kind: "folder", label: "Your folder of videos" },
+      fields: [
+        { node: 1, param: "container", label: "Format" },
+        { node: 1, param: "codec", label: "Codec" },
+        { node: 1, param: "quality", label: "Quality" },
+        { node: 0, param: "onlyNew", label: "Only videos not done before" },
+      ],
+      action: "Encode",
+      topic: "video",
+    },
+  },
+  {
     id: "convert-folder-sounds",
     title: "Convert a folder of sounds",
     description: "Pick a folder once and save each sound in it as an MP3 (or another format). Run it again later and only the new sounds are done.",
