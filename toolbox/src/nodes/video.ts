@@ -2,7 +2,7 @@
 // decoded with Mediabunny (WebCodecs), which works in the graph worker; that code
 // lives in video-codec.ts and loads on first use, so the window never parses it.
 import { VIDEO_CONTAINERS, type VideoCodecChoice, type VideoContainer } from "../../../media/src/engine/types";
-import type { AudioValue, ImageValue, MediaFile, NodeDef, Value, VideoValue } from "../runtime/types";
+import type { AudioValue, EachValue, ImageValue, MediaFile, NodeDef, Value, VideoValue } from "../runtime/types";
 import { asBytes } from "./bytes";
 import { gridToImage } from "./ascii";
 import { PRORES_LABEL, type ProresProfile } from "./ffmpeg-video";
@@ -36,6 +36,48 @@ export const videoInput: NodeDef = {
     const blob = ctx.assets.get(String(params.assetId));
     if (!blob) throw new Error("Drop a video here");
     return { video: await (await videoCodec()).videoFromFile(blob, params, ctx) };
+  },
+};
+
+export const VIDEOS_TYPE = "input.videos";
+
+/**
+ * Several videos chosen or dropped at once, for batch work: on Render everything after it runs once
+ * per video (like a Folder of files set to Videos), and Save writes one file for each, named after it.
+ * Works in the browser too, where there are no folders.
+ */
+export const videosInput: NodeDef = {
+  type: VIDEOS_TYPE,
+  title: "Several videos",
+  category: "input",
+  description:
+    "Several videos at once, for batch work. The preview shows one of them; on Render everything after it runs once per video, and Save writes one file for each, named after it. Cancel keeps the ones already finished.",
+  inputs: [],
+  outputs: [{ key: "video", label: "Videos", type: "video" }],
+  params: [{ key: "at", label: "Preview video", kind: "number", min: 1, max: 500, step: 1 }],
+  defaults: () => ({ assetIds: [], names: [], at: 1 }),
+  kind: "frame",
+  each: () => true,
+  cacheKey: (_p, ctx) => ctx.mode,
+  previewParams: ["at"],
+  async run(_inputs, params, ctx) {
+    const ids = Array.isArray(params.assetIds) ? params.assetIds.map(String) : [];
+    const names = Array.isArray(params.names) ? params.names.map(String) : [];
+    const found = ids.map((id, i) => ({ id, blob: ctx.assets.get(id), name: names[i] || `video-${i + 1}` })).filter((x): x is { id: string; blob: Blob; name: string } => !!x.blob);
+    if (!found.length) throw new Error("Choose or drop videos");
+    const about = `${found.length} video${found.length === 1 ? "" : "s"}`;
+    const codec = await videoCodec();
+    if (ctx.mode === "preview") {
+      const i = Math.min(found.length, Math.max(1, Math.floor(Number(params.at) || 1))) - 1;
+      return { video: { ...(await codec.videoFromFile(found[i].blob, videoInput.defaults(), ctx)), about } };
+    }
+    const each: EachValue = {
+      kind: "each",
+      of: "video",
+      about,
+      items: found.map((f) => ({ id: f.id, name: f.name, load: async () => codec.videoFromFile(f.blob, videoInput.defaults(), ctx) })),
+    };
+    return { video: each };
   },
 };
 

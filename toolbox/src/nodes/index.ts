@@ -13,13 +13,14 @@ import { qrCode } from "./qr";
 import { removeBackground } from "./remove-bg";
 import { splitClips } from "./split";
 import { diacritics, saveText, textInput } from "./text";
-import { extractAudio, videoEncode, videoInput, webcam } from "./video";
+import { extractAudio, videoEncode, videoInput, videosInput, webcam } from "./video";
 
 export const NODE_DEFS: NodeDef[] = [
   fileInput,
   imagesInput,
   folderInput,
   videoInput,
+  videosInput,
   webcam,
   download,
   audioInput,
@@ -68,11 +69,15 @@ export function inputNodeFor(file: { type: string; name: string }): string | und
   return undefined;
 }
 
+/** Input nodes that take several files at once (their params hold assetIds, paths and names), by the single-file node they stand for. */
+export const MULTI_INPUTS: Record<string, string> = { "input.images": "input.file", "input.videos": "input.video" };
+
 /** File chooser filter for each input node. */
 export const INPUT_ACCEPT: Record<string, string> = {
   "input.file": "image/*,.heic,.heif",
   "input.images": "image/*,.heic,.heif",
   "input.video": "video/*,.mkv",
+  "input.videos": "video/*,.mkv",
   "input.audio": "audio/*",
   "input.pdf": "application/pdf,.pdf",
 };

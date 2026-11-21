@@ -62,7 +62,7 @@ test("Several images takes every --input, and folders give their images", () => 
   const out = prepareRun(g, { sets: [], inputs: [folder("Several images", "/in", ["/in/a.png", "/in/b.png"]), file("i", "/x/c.jpg")], out: "" }, info);
   assert.deepEqual(out.nodes[0].params.paths, ["/in/a.png", "/in/b.png", "/x/c.jpg"]);
   assert.deepEqual(out.nodes[0].params.names, ["a.png", "b.png", "c.jpg"]);
-  assert.equal(out.nodes[0].params.name, "3 images");
+  assert.equal(out.nodes[0].params.name, "3 files");
   assert.equal(code(() => prepareRun(g, { sets: [], inputs: [folder("i", "/empty", [])], out: "" }, info)).code, 2);
 });
 

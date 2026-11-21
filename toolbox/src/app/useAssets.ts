@@ -46,7 +46,7 @@ export function useAssets({ client, setNodes, withoutHistory, graphRef, docs, la
         return id;
       });
       const paths = files.map((f) => bridge?.pathForFile(f) ?? "");
-      setParams(nodeId, { assetIds, paths, names: files.map((f) => f.name), name: files.length === 1 ? files[0].name : `${files.length} images` });
+      setParams(nodeId, { assetIds, paths, names: files.map((f) => f.name), name: files.length === 1 ? files[0].name : `${files.length} files` });
     },
     [client, setParams],
   );
