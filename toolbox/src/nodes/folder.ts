@@ -154,7 +154,7 @@ export const folderInput: NodeDef = {
     { key: "pattern", label: "Only names like", kind: "text", commit: true, placeholder: "e.g. IMG_*" },
     { key: "subfolders", label: "Include sub-folders", kind: "toggle" },
     { key: "onlyNew", label: "Only new files", kind: "toggle" },
-    { key: "at", label: "Preview file", kind: "number", min: 1, max: 500, step: 1 },
+    { key: "at", label: "Preview file", kind: "number", min: 1, max: 500, step: 1, pick: true },
   ],
   defaults: () => ({ folder: "", kind: "images", pattern: "", subfolders: false, onlyNew: false, at: 1 }),
   kind: "frame",
@@ -162,6 +162,11 @@ export const folderInput: NodeDef = {
   // What's in the folder now, not just which folder: a new file makes a new result.
   cacheKey: (_p, ctx) => `${ctx.mode}|${listings.get(keyOf(ctx.scope, ctx.nodeId))?.digest ?? ""}`,
   previewParams: ["at"],
+  // The files it found, by name (with their sub-folder), for Preview file.
+  facts(params, _inputs, ctx) {
+    const l = listings.get(keyOf(ctx.scope, ctx.nodeId));
+    return l && l.folder === folderQuery(params).folder && !l.problem ? { items: l.entries.map((e) => e.name) } : undefined;
+  },
   async run(_inputs, params, ctx) {
     const q = folderQuery(params);
     if (!folderLister()) throw waiting("Folders work in the desktop app");

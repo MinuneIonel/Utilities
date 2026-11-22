@@ -103,7 +103,7 @@ try {
   await win.mouse.move(box.x + box.width * 0.75, box.y + box.height / 2, { steps: 5 });
   await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
   await win.mouse.up();
-  const endBox = win.locator('.inspector .field:has(> label:text-is("End (0 = to the end)")) input');
+  const endBox = win.locator('.inspector .field:has(.field-top label:text-is("End")) input');
   const endText = await endBox.inputValue();
   check("The inspector's End reads about 0:02", /^0:0(1\.9|2\.0|2\.1)/.test(endText), endText);
   check("…and a kept part is drawn, with the rest hatched", (await win.locator(".tl-hatch").count()) === 1);
@@ -116,7 +116,7 @@ try {
   check("Render writes a video of about 2 s", Math.abs(d1 - 2) < 0.2, `${d1} s`);
 
   // A time box takes minutes:seconds.
-  const startBox = win.locator('.inspector .field:has(> label:text-is("Start")) input');
+  const startBox = win.locator('.inspector .field:has(.field-top label:text-is("Start")) input');
   await startBox.fill("1:05.5");
   await startBox.press("Enter");
   await win.waitForTimeout(200);
@@ -142,7 +142,7 @@ try {
   await win.waitForTimeout(200);
   const nodes = await win.locator(".react-flow__node").count();
   check("Delete removes the selected cut, not the node", (await win.locator(".tl-mark").count()) === 2 && nodes === 3, `${await win.locator(".tl-mark").count()} cuts, ${nodes} nodes`);
-  const at = await win.locator('.inspector .field:has(> label:text-is("Cut at")) input').inputValue();
+  const at = await win.locator('.inspector .field:has(.field-top label:text-is("Cut at")) input').inputValue();
   check("Cut at lists the two times", /^0:0[01]\.\d+, 0:0[12]\.\d+$/.test(at), at);
   await render();
   const clips = () => readdirSync(out2).filter((f) => f.endsWith(".mp4"));

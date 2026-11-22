@@ -13,7 +13,7 @@ import { pdfRender } from "../nodes/pdf";
 import { isDisk } from "../nodes/source";
 import { ResultCache, evaluate } from "./evaluate";
 import { AckWindow, LATE_MS, nextAction, PlayClock } from "./pacing";
-import type { Bytes, CameraFeed, FrameItem, FrameOptions, Graph, ImageValue, NodeStatus, Value, VideoValue } from "./types";
+import type { Bytes, CameraFeed, FrameItem, FrameOptions, Graph, ImageValue, NodeFacts, NodeStatus, Value, VideoValue } from "./types";
 
 export type ToWorker =
   /** A dropped file, and where it is on disk in the desktop app. */
@@ -99,6 +99,8 @@ export interface NodeUpdate {
   fileInfo?: { name: string; bytes: number };
   /** A short description of a video, audio or document output. */
   info?: string;
+  /** What the node found (names, length, size), so the inspector can fit its settings. */
+  facts?: NodeFacts;
   /** A waveform or page thumbnail sent after the node's update: only bitmap and size are set. */
   thumb?: boolean;
 }
@@ -642,7 +644,7 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
   const cancelled = () => (mode === "preview" ? reqId !== latestPreview : renderCancelled);
   if (cancelled()) return post({ type: "done", reqId, mode });
   const pending: Promise<void>[] = [];
-  const lastProgress = new Map<string, number>();
+  const lastProgress = new Map<string, { at: number; label?: string }>();
   try {
     // What's in the folders a graph reads from is part of its cache keys, so it's looked at first.
     await refreshFolders(graph, scope, mode === "render");
@@ -656,15 +658,17 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
       // Previews are quick and constant with a webcam; only Render shows nodes as running.
       onStart: (id) => mode === "render" && post({ type: "node", reqId, mode, scope, id, status: "running" }),
       onProgress: (id, fraction, label) => {
-        // At most ten updates a second per node.
+        // At most ten updates a second per node, but a new label always goes through: dropping
+        // one left a card showing a step that was long over (e.g. "Retrying with ffmpeg.wasm…").
         const now = Date.now();
-        if (now - (lastProgress.get(id) ?? 0) < 100) return;
-        lastProgress.set(id, now);
+        const last = lastProgress.get(id);
+        if (last && now - last.at < 100 && last.label === label) return;
+        lastProgress.set(id, { at: now, label });
         post({ type: "progress", reqId, scope, id, fraction, label });
       },
       onNode: (id, r) => {
         const saves = !!REGISTRY.get(graph.nodes.find((n) => n.id === id)?.type ?? "")?.saves;
-        pending.push(report(reqId, mode, scope, id, saves, r.status, r.outputs, r.key, r.ms, r.error));
+        pending.push(report(reqId, mode, scope, id, saves, r.status, r.outputs, r.key, r.ms, r.error, r.facts));
       },
     });
     await Promise.all(pending);
@@ -691,8 +695,9 @@ async function report(
   key: string | undefined,
   ms: number | undefined,
   error: string | undefined,
+  facts?: NodeFacts,
 ) {
-  const msg: NodeUpdate = { type: "node", reqId, mode, scope, id, status, ms, error };
+  const msg: NodeUpdate = { type: "node", reqId, mode, scope, id, status, ms, error, facts };
   const transfer: Transferable[] = [];
   let first: Value | undefined = Object.values(outputs)[0];
   const sent = `${scope}:${id}`;

@@ -6,6 +6,7 @@ import { lastError, nativeTools, scratchFiles } from "./native";
 import { ENTRY_TEMPLATE, entryFileName, hasOneVideo, isPlaylistLink, parsePlaylist, pickEntries, playlistFolder, type Playlist, type PlaylistEntry } from "./playlist";
 import { bytesOfDisk, diskMedia } from "./source";
 import { soundOf, videoCodec } from "./video";
+import { explainYtdlp, isBotCheck, pauseBefore, SIGN_IN_BROWSERS, signInArgs } from "./ytdlp-help";
 
 const MIME: Record<string, string> = {
   mp4: "video/mp4",
@@ -34,6 +35,22 @@ const playlists = new DownloadJobs<Playlist>();
 const knownPlaylists = new Map<string, Playlist>();
 
 const keyOf = (url: string, quality: string) => `${quality} ${url}`;
+
+/** A failed yt-dlp run as an error: in plain words when the person can fix it (sign in, a permission). */
+function ytdlpFailure(log: string, signIn: unknown): Error {
+  const last = lastError(log);
+  return new Error(explainYtdlp(log, signIn) ?? `yt-dlp: ${last}`);
+}
+
+/** Waits, unless the run is stopped first. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => (clearTimeout(t), signal?.removeEventListener("abort", done), resolve());
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
 
 /** Whether the node downloads a whole playlist: a playlist link, unless the link is also one video and "Just this video" is picked. */
 function wantsPlaylist(p: Params): boolean {
@@ -86,14 +103,14 @@ export function pruneDownloads(graph: Graph) {
  * Lists a playlist's videos without downloading them (yt-dlp --flat-playlist), once per link.
  * The list goes to a file rather than the log, which only keeps its last few thousand characters.
  */
-function listOnce(url: string, ctx: RunContext): Promise<Playlist> {
+function listOnce(url: string, signIn: unknown, ctx: RunContext): Promise<Playlist> {
   return playlists.get(url, ctx.mode, ctx.signal, async (signal) => {
     const tools = nativeTools();
     if (!tools?.ytdlp) throw new Error("Downloading needs the desktop app");
     ctx.progress?.(0, "Reading the playlist");
     const r = await tools.run(
       "yt-dlp",
-      ["--yes-playlist", "--flat-playlist", "--skip-download", "--ignore-errors", "--print-to-file", ENTRY_TEMPLATE, "playlist.txt", "--", url],
+      [...signInArgs(signIn), "--yes-playlist", "--flat-playlist", "--skip-download", "--ignore-errors", "--print-to-file", ENTRY_TEMPLATE, "playlist.txt", "--", url],
       {},
       { signal },
     );
@@ -101,7 +118,7 @@ function listOnce(url: string, ctx: RunContext): Promise<Playlist> {
     const out = r.files["playlist.txt"];
     const list = parsePlaylist(out ? new TextDecoder().decode(out) : "");
     if (!list.entries.length) {
-      if (r.code !== 0) throw new Error(`yt-dlp: ${lastError(r.log)}`);
+      if (r.code !== 0) throw ytdlpFailure(r.log, signIn);
       throw new Error(list.unavailable ? "None of the playlist's videos can be watched (private or deleted)" : "The playlist is empty");
     }
     knownPlaylists.set(url, list);
@@ -113,13 +130,13 @@ function listOnce(url: string, ctx: RunContext): Promise<Playlist> {
  * Downloads a link once. The file stays in the scratch folder, where yt-dlp wrote it, for the rest
  * of the session: the video is read from there a range at a time, and Save copies it from there.
  */
-function fetchOnce(url: string, quality: string, ctx: RunContext, label = "Downloading"): Promise<DiskMedia> {
+function fetchOnce(url: string, quality: string, signIn: unknown, ctx: RunContext, label = "Downloading", extra: string[] = []): Promise<DiskMedia> {
   return downloads.get(keyOf(url, quality), ctx.mode, ctx.signal, async (signal) => {
     const tools = nativeTools();
     if (!tools?.ytdlp) throw new Error("Downloading needs the desktop app");
     const r = await tools.run(
       "yt-dlp",
-      ["--no-playlist", "--newline", "--no-mtime", ...formatFor(quality), "-o", "%(title).80B [%(id)s].%(ext)s", "--", url],
+      [...signInArgs(signIn), ...extra, "--no-playlist", "--newline", "--no-mtime", ...formatFor(quality), "-o", "%(title).80B [%(id)s].%(ext)s", "--", url],
       {},
       { onProgress: (f, l) => ctx.progress?.(f, l ?? label), signal, keep: true },
     );
@@ -128,7 +145,7 @@ function fetchOnce(url: string, quality: string, ctx: RunContext, label = "Downl
       if (kept) scratchFiles()?.free([kept.path]);
       throw new Error("Cancelled");
     }
-    if (r.code !== 0 || !name || !kept) throw new Error(`yt-dlp: ${lastError(r.log)}`);
+    if (r.code !== 0 || !name || !kept) throw ytdlpFailure(r.log, signIn);
     scratchFiles()?.hold(kept.path);
     const ext = name.split(".").pop()!.toLowerCase();
     return diskMedia(kept.path, kept.size, name, MIME[ext] ?? "application/octet-stream");
@@ -173,34 +190,54 @@ async function mediaOutputs(file: DiskMedia, quality: string, params: Params, ct
  * this country, removed since the list was read) is left out instead of stopping the rest.
  */
 async function runPlaylist(url: string, quality: string, params: Params, ctx: RunContext): Promise<Record<string, Value>> {
-  const list = await listOnce(url, ctx);
+  const signIn = params.signIn;
+  const list = await listOnce(url, signIn, ctx);
   const { picked, shown } = chosen(list, params);
   const folder = playlistFolder(list.title);
   const last = picked[picked.length - 1].index;
   const named = (e: PlaylistEntry, f: DiskMedia) => asFile(f, entryFileName(folder, e.index, last, f.name));
   const name = list.title || "the playlist";
   if (ctx.mode === "preview") {
-    const file = await fetchOnce(picked[shown].url, quality, ctx, `Video ${shown + 1} of ${picked.length}: downloading`);
+    const file = await fetchOnce(picked[shown].url, quality, signIn, ctx, `Video ${shown + 1} of ${picked.length}: downloading`);
     const about = `Video ${shown + 1} of ${plural(picked.length, "video")} · ${name}`;
     return { ...(await mediaOutputs(file, quality, params, ctx, about)), file: fileList([named(picked[shown], file)], about) };
   }
   const files: FileValue[] = [];
   const failed: string[] = [];
   let shownFile: DiskMedia | undefined;
+  /** Set when YouTube asks to confirm this isn't a bot: every video after that would fail the same way. */
+  let botCheck: string | undefined;
+  let notTried = 0;
   for (let i = 0; i < picked.length; i++) {
     if (ctx.signal?.aborted) throw new Error("Cancelled");
     const e = picked[i];
     const step = (f: number, label?: string) => ctx.progress?.((i + Math.min(1, Math.max(0, f))) / picked.length, `Video ${i + 1} of ${picked.length}: ${(label ?? "downloading").toLowerCase()}`);
+    // Videos already downloaded this session come back at once; only real downloads are spaced out.
+    if (i > 0 && !downloads.has(keyOf(e.url, quality))) {
+      step(0, "Waiting a moment");
+      await pause(pauseBefore(i), ctx.signal);
+      if (ctx.signal?.aborted) throw new Error("Cancelled");
+    }
     try {
-      const file = await fetchOnce(e.url, quality, { ...ctx, progress: step });
+      // A short pause between yt-dlp's own requests too, for the same reason.
+      const file = await fetchOnce(e.url, quality, signIn, { ...ctx, progress: step }, "Downloading", ["--sleep-requests", "1"]);
       files.push(named(e, file));
       if (i === shown) shownFile = file;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       if (ctx.signal?.aborted || why === "Cancelled" || why === STOPPED) throw err;
+      if (isBotCheck(why) || why.startsWith("YouTube wants to check") || why.startsWith("YouTube still wants to check")) {
+        botCheck = why;
+        notTried = picked.length - i;
+        break;
+      }
       failed.push(`${e.index}. ${e.title}: ${why}`);
     }
   }
+  // Stopping says so, rather than saving part of the playlist quietly. The videos downloaded so far
+  // stay for the session, so the next Render carries on from the one YouTube stopped at.
+  if (botCheck)
+    throw new Error(files.length ? `${botCheck} ${files.length === 1 ? "The video downloaded so far is" : `The ${plural(files.length, "video")} downloaded so far are`} kept: Render again to carry on with the other ${notTried}.` : botCheck);
   if (!files.length) throw new Error(`None of the videos downloaded. ${failed[0] ?? ""}`.trim());
   const skipped = failed.length + list.unavailable;
   const about = `${plural(files.length, "video")} from ${name}${skipped ? ` · ${skipped} skipped` : ""}`;
@@ -214,7 +251,7 @@ export const download: NodeDef = {
   title: "Download from link",
   category: "input",
   description:
-    "Paste a link from YouTube, Vimeo, SoundCloud, Instagram and many more sites. Downloads with yt-dlp in the desktop app, once per link. File is the download as it came, for Save file. A playlist link downloads every video on Render: File is then one file per video, in a folder named after the playlist, and Video and Audio show the video picked under Show video.",
+    "Paste a link from YouTube, Vimeo, SoundCloud, Instagram and many more sites. Downloads with yt-dlp in the desktop app, once per link. File is the download as it came, for Save file. A playlist link downloads every video on Render: File is then one file per video, in a folder named after the playlist, and Video and Audio show the video picked under Show video. If YouTube asks to confirm you're not a bot, pick the browser you watch YouTube in under Use sign-in from.",
   inputs: [],
   outputs: [
     { key: "video", label: "Video", type: "video" },
@@ -233,7 +270,7 @@ export const download: NodeDef = {
       ],
     },
     { key: "which", label: "Which videos", kind: "text", commit: true, placeholder: "All, or 1-10, 15, 20-" },
-    { key: "item", label: "Show video", kind: "number", min: 1, max: 5000, step: 1 },
+    { key: "item", label: "Show video", kind: "number", min: 1, max: 5000, step: 1, pick: true },
     {
       key: "quality",
       label: "Quality",
@@ -247,9 +284,22 @@ export const download: NodeDef = {
         { value: "mp3", label: "Sound only, as MP3" },
       ],
     },
-    { key: "at", label: "Preview at %", kind: "number", min: 0, max: 100, step: 0.5 },
+    { key: "at", label: "Preview at", kind: "number", min: 0, max: 100, step: 0.5, time: true },
+    // YouTube sometimes asks to confirm you're not a bot; a browser where you're signed in answers for you.
+    { key: "signIn", label: "Use sign-in from", kind: "select", options: SIGN_IN_BROWSERS.map((o) => ({ ...o })) },
   ],
-  defaults: () => ({ url: "", playlist: "all", which: "", item: 1, quality: "1080", at: 10 }),
+  defaults: () => ({ url: "", playlist: "all", which: "", item: 1, quality: "1080", at: 10, signIn: "" }),
+  // The playlist's videos that "Which videos" keeps, by title, for Show video.
+  facts(p) {
+    if (!wantsPlaylist(p)) return undefined;
+    const list = knownPlaylists.get(String(p.url ?? "").trim());
+    if (!list) return undefined;
+    try {
+      return { items: pickEntries(list.entries, String(p.which ?? "")).map((e) => `${e.index}. ${e.title || e.id}`) };
+    } catch {
+      return { items: [] };
+    }
+  },
   visible: (key, p) => {
     if (key === "at") return !soundOnly(p.quality);
     if (key === "playlist") return isPlaylistLink(String(p.url ?? "")) && hasOneVideo(String(p.url ?? ""));
@@ -265,7 +315,7 @@ export const download: NodeDef = {
     if (!/^https?:\/\//i.test(url)) throw new Error("Links start with http:// or https://");
     const quality = String(params.quality || "1080");
     if (wantsPlaylist(params)) return runPlaylist(url, quality, params, ctx);
-    const file = await fetchOnce(url, quality, ctx);
+    const file = await fetchOnce(url, quality, params.signIn, ctx);
     // The download as it came, still on disk: Save copies it from there.
     return { ...(await mediaOutputs(file, quality, params, ctx)), file: asFile(file) };
   },

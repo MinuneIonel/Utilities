@@ -1,5 +1,6 @@
 import { share, tee, type TeeSlot } from "./tee.ts";
 import { diskPaths, ScratchRefs, sizeOf as bytesSize } from "../nodes/bytes.ts";
+import { nodeFacts } from "./facts.ts";
 import type { Converter, FrameItem, FrameOptions, Graph, GraphNode, NodeDef, NodeResult, Params, PortDef, PortType, RunContext, Value, VideoValue } from "./types";
 
 /** `note`: what the live preview says while this render is out of date (some files of a folder failed). */
@@ -436,6 +437,8 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
       const toConvert: [string, Converter, Value][] = [];
       const seqKeys: string[] = [];
       const frameConvs: Record<string, Converter | undefined> = {};
+      // The values as they arrive, for the node's facts (before any conversion).
+      const seen: Record<string, Value | undefined> = {};
       let missing: string | undefined;
       for (const port of def.inputs) {
         const edge = graph.edges.find((e) => e.target === node.id && e.targetHandle === port.key);
@@ -453,6 +456,7 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
           missing ??= edge ? `Waiting for ${port.label.toLowerCase()}` : `Connect ${port.label.toLowerCase()}`;
           continue;
         }
+        seen[port.key] = raw;
         const from = shapeOf(value);
         const check = canConnect(from, def, port, converters);
         if (!check.ok) {
@@ -483,6 +487,16 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
         return;
       }
 
+      // Every result from here on says what the node found, for the inspector.
+      const done = (r: NodeResult) => {
+        let facts: NodeResult["facts"];
+        try {
+          facts = nodeFacts(def, node.params, seen, r.outputs, { ...ctx, nodeId: node.id, scope });
+        } catch {
+          facts = undefined;
+        }
+        finish(node.id, facts ? { ...r, facts } : r);
+      };
       const nodeCtxKey = { ...ctx, nodeId: node.id };
       const previewOnly = def.previewParams ?? [];
       const renderParams = previewOnly.length ? Object.fromEntries(Object.entries(node.params).filter(([k]) => !previewOnly.includes(k))) : node.params;
@@ -499,10 +513,10 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
 
       if (def.kind === "job" && ctx.mode === "preview") {
         const last = cache.lastRender.get(lastOf(node.id));
-        if (!last) finish(node.id, { status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
+        if (!last) done({ status: "skipped", outputs: {}, error: "Runs on Render", renderKey });
         // A recording can't be "out of date": every camera frame is new.
-        else if (last.key === renderKey || live.has(node.id)) finish(node.id, { status: "cached", outputs: last.outputs, key: last.key, renderKey });
-        else finish(node.id, { status: "stale", outputs: last.outputs, key: last.key, renderKey, error: last.note ?? "Out of date: Render to update" });
+        else if (last.key === renderKey || live.has(node.id)) done({ status: "cached", outputs: last.outputs, key: last.key, renderKey });
+        else done({ status: "stale", outputs: last.outputs, key: last.key, renderKey, error: last.note ?? "Out of date: Render to update" });
         return;
       }
 
@@ -510,7 +524,7 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
       const hit = cache.get(key) ?? (last?.key === key ? last.outputs : undefined);
       if (hit) {
         if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs: hit });
-        finish(node.id, { status: "cached", outputs: hit, key, renderKey });
+        done({ status: "cached", outputs: hit, key, renderKey });
         return;
       }
 
@@ -528,16 +542,16 @@ async function evaluateOnce(graph: Graph, opts: EvaluateOptions): Promise<Map<st
           : await def.run(inputs, node.params, nodeCtx);
         if (!live.has(node.id)) cache.set(key, outputs);
         if (def.kind === "job") cache.lastRender.set(lastOf(node.id), { key, outputs });
-        finish(node.id, { status: "ok", outputs, key, renderKey, ms: Date.now() - t0 });
+        done({ status: "ok", outputs, key, renderKey, ms: Date.now() - t0 });
       } catch (err) {
         if (ctx.signal?.aborted) {
-          finish(node.id, { status: "error", outputs: {}, error: "Cancelled" });
+          done({ status: "error", outputs: {}, error: "Cancelled" });
           stopped = true;
           return;
         }
         // A node can say it's waiting for something (an empty folder) rather than failing.
         const waiting = !!(err as { waiting?: unknown } | null)?.waiting;
-        finish(node.id, { status: waiting ? "waiting" : "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
+        done({ status: waiting ? "waiting" : "error", outputs: {}, error: err instanceof Error ? err.message : String(err) });
       }
     };
     const task = (async () => {

@@ -350,6 +350,64 @@ if (process.platform !== "win32") {
   }
 }
 
+// ---------------------------------------------------------------- YouTube's bot check
+// The second video answers "Sign in to confirm you're not a bot": Render stops there instead of
+// asking for the third (which would only fail the same way) and says what to do. Once that's done,
+// the next Render carries on without downloading the first again.
+if (process.platform !== "win32") {
+  const clip = path.join(tmp, "song.mp4");
+  const callsFile = path.join(tmp, "ytdlp-bot-calls.txt");
+  const list = ["b1", "b2", "b3"].map((id, i) => `${i + 1}\\t${id}\\thttps://www.youtube.com/watch?v=${id}\\tBot test\\tSong ${id}\\n`).join("");
+  const script = [
+    "#!/bin/sh",
+    'for a; do last="$a"; done',
+    // Only this check's playlist is listed; the tabs from the checks above open again and ask for theirs.
+    `case " $* " in *" --flat-playlist "*) case "$last" in *PLbot*) printf '${list}' > playlist.txt; echo listed >> '${callsFile}';; esac; exit 0;; esac`,
+    'id="${last##*v=}"',
+    `case "$id" in b?) echo "$id $*" >> '${callsFile}';; esac`,
+    // Exits 0 without a file, so Toolbox doesn't fetch a newer yt-dlp over this stand-in.
+    `if [ "$id" = b2 ]; then echo "ERROR: [youtube] b2: Sign in to confirm you’re not a bot. This helps protect our community. Use --cookies-from-browser or --cookies for the authentication." >&2; exit 0; fi`,
+    `cp '${clip}' "Song $id [$id].mp4"`,
+    "",
+  ].join("\n");
+  writeFileSync(path.join(tmp, "profile", "bin", "yt-dlp"), script, { mode: 0o755 });
+  const out = folder("bot");
+  const graph = {
+    version: 1,
+    nodes: [
+      { id: "d", type: "input.download", params: { url: "https://www.youtube.com/playlist?list=PLbot", quality: "1080", item: 1, signIn: "firefox" }, position: { x: 40, y: 40 } },
+      { id: "s", type: "output.save-file", params: { folder: out }, position: { x: 640, y: 40 } },
+    ],
+    edges: [{ id: "e1", source: "d", sourceHandle: "file", target: "s", targetHandle: "file" }],
+  };
+  const t = await launch();
+  try {
+    await t.open(graph);
+    const calls = () => (existsSync(callsFile) ? readFileSync(callsFile, "utf8").trim().split("\n") : []);
+    for (let i = 0; i < 60 && calls().length < 2; i++) await t.win.waitForTimeout(250);
+    const dir = path.join(out, "Bot test");
+    await t.menu("render");
+    for (let i = 0; i < 240 && !/isn.t a bot/.test(await t.status("d")) && calls().length < 4; i++) await t.win.waitForTimeout(250);
+    await t.win.waitForTimeout(1500);
+    const got = existsSync(dir) ? readdirSync(dir).sort() : [];
+    const status = await t.status("d");
+    const ids = () => calls().map((c) => c.split(" ")[0]);
+    check("A bot check stops the playlist, instead of asking for every video left", JSON.stringify(ids()) === JSON.stringify(["listed", "b1", "b2"]) && !got.length, `${ids().join(", ")} | ${got.join(", ")}`);
+    check("…saying YouTube asked to confirm this isn't a bot, and how to carry on", /isn't a bot/.test(status) && /Render again/.test(status), status);
+    check("The browser picked under Use sign-in from goes to yt-dlp", calls().slice(1).every((c) => c.includes("--cookies-from-browser firefox")), calls().join(" / "));
+    // YouTube lets this computer in again (a sign-in did it): Render downloads only what's missing.
+    writeFileSync(path.join(tmp, "profile", "bin", "yt-dlp"), script.replace('[ "$id" = b2 ]', "false"), { mode: 0o755 });
+    await t.menu("render");
+    const want = ["01 Song b1 [b1].mp4", "02 Song b2 [b2].mp4", "03 Song b3 [b3].mp4"];
+    for (let i = 0; i < 240 && !(existsSync(dir) && want.every((f) => existsSync(path.join(dir, f)))); i++) await t.win.waitForTimeout(250);
+    await t.win.waitForTimeout(1000);
+    const again = existsSync(dir) ? readdirSync(dir).sort() : [];
+    check("…and the next Render carries on, without downloading the first video again", JSON.stringify(again) === JSON.stringify(want) && JSON.stringify(ids()) === JSON.stringify(["listed", "b1", "b2", "b2", "b3"]), `${again.join(", ")} | ${ids().join(", ")} | ${await t.status("d")}`);
+  } finally {
+    await t.app.close();
+  }
+}
+
 // ---------------------------------------------------------------- the big case (TOOLBOX_E2E_BIG=1)
 if (process.env.TOOLBOX_E2E_BIG === "1" || process.env.TOOLBOX_E2E_BIG_SECONDS) {
   const seconds = Number(process.env.TOOLBOX_E2E_BIG_SECONDS) || 600;

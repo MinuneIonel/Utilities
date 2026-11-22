@@ -108,25 +108,27 @@ try {
   check("Save says what it saved", /Saved/.test(await status("s")), await status("s"));
 
   await select("v");
-  await field("Playhead %").locator("input.num").fill("60");
-  await field("Playhead %").locator("input.num").press("Enter");
+  // The playhead reads as a time once the video's length is known.
+  await field("Playhead").locator("input.num").fill("0:01");
+  await field("Playhead").locator("input.num").press("Enter");
   await win.waitForTimeout(2500);
   check("Moving the playhead keeps Encode current (bug 2)", /^cached/.test(await status("e")), await status("e"));
   await render(2);
   check("…and Render doesn't write a duplicate (bug 2)", files().length === 1, files().join(", "));
 
   await select("r");
-  await field("Flip horizontal").locator("input").check();
+  await win.locator(".inspector .toggle-field:has-text(\"Flip horizontal\") input").check();
   await win.waitForTimeout(2500);
   check("Changing something upstream marks Encode out of date (bug 1)", /^stale/.test(await status("e")), await status("e"));
   check("…and Save too, without its Saved label (bug 1)", /^stale/.test(await status("s")) && !/Saved/.test(await status("s")), await status("s"));
 
   await select("v");
-  await field("Playhead %").locator("input.num").fill("5000");
-  await field("Playhead %").locator("input.num").press("Enter");
+  await field("Playhead").locator("input.num").fill("5000");
+  await field("Playhead").locator("input.num").press("Enter");
   await win.waitForTimeout(500);
-  const at = await field("Playhead %").locator("input.num").inputValue();
-  check("A number box pulls 5000 back into its 0–100 range (bug 6)", at === "100", `box shows ${at}`);
+  const at = await field("Playhead").locator("input.num").inputValue();
+  const end = await field("Playhead").locator(".ticks span").last().textContent();
+  check("A time past the end goes to the end (bug 6)", at === end, `box shows ${at}, video ends at ${end}`);
 
   // New opens a tab of its own now; closing it shows this graph again, which must bring its pictures back.
   const before = await thumbs();

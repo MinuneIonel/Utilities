@@ -40,6 +40,7 @@ const CASES = [
   { name: "ProRes HQ, dithered frames", chain: [input, dither, encode({ container: "mov", codec: "prores", prores: "hq" })], expect: /prores \(HQ\)/ },
   { name: "ProRes 4444, straight from the file", chain: [input, encode({ container: "mov", codec: "prores", prores: "4444" })], expect: /prores \(4444\)/ },
   { name: "HEVC, dithered frames (WebCodecs, else ffmpeg)", chain: [input, dither, encode({ container: "mp4", codec: "hevc" })], expect: /hevc/ },
+  { name: "H.264, straight from the file (WebCodecs, else native ffmpeg)", chain: [input, encode({ container: "mp4", codec: "avc" })], expect: /h264/ },
   { name: "H.264, dithered frames, WebCodecs", chain: [input, dither, encode({ container: "mp4", codec: "avc" })], expect: /h264/ },
 ];
 

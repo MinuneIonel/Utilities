@@ -52,6 +52,11 @@ export interface RunOptions {
    * The ffmpeg.wasm fallback ignores it and returns bytes as usual.
    */
   target?: () => Target;
+  /**
+   * Called instead of the ffmpeg.wasm fallback when Mediabunny fails. Return a result to use it,
+   * or undefined to fall back to ffmpeg.wasm as usual (e.g. Toolbox's desktop app uses native ffmpeg).
+   */
+  fallback?: (error: unknown) => Promise<EncodedFile | undefined>;
 }
 
 export async function probeVideo(file: Blob): Promise<VideoInfo> {
@@ -109,7 +114,10 @@ export async function processVideo(file: Blob | (() => Source), info: VideoInfo,
   try {
     return await mediabunnyVideo(file, info, job, opts);
   } catch (e) {
-    if (e instanceof ConversionCanceledError || opts.signal?.aborted || !blob) throw e;
+    if (e instanceof ConversionCanceledError || opts.signal?.aborted) throw e;
+    const other = await opts.fallback?.(e);
+    if (other) return other;
+    if (!blob) throw e;
     console.warn("Mediabunny failed, falling back to ffmpeg.wasm:", e);
     opts.onProgress?.({ fraction: -1, label: "Retrying with ffmpeg.wasm…" });
     return ffmpegVideo(blob, info, job, opts);
