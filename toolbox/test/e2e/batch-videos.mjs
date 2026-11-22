@@ -76,6 +76,15 @@ async function open(g) {
 const busy = () => win.evaluate(() => [...document.querySelectorAll(".topbar button")].some((b) => b.textContent === "Cancel"));
 /** Renders; `during` is called while it runs (with the cards' text) until it returns true. */
 async function render(during) {
+  // Every text a card shows is recorded in the page, so a step that lasts less than a poll still counts.
+  await win.evaluate(() => {
+    const w = window;
+    w.__cardTexts = new Set();
+    w.__cardObs?.disconnect();
+    const grab = () => document.querySelectorAll(".react-flow__node .tnode-status").forEach((el) => w.__cardTexts.add(el.textContent ?? ""));
+    w.__cardObs = new MutationObserver(grab);
+    w.__cardObs.observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send("menu", "render"));
   await win.waitForTimeout(300);
   const seen = new Set();
@@ -87,6 +96,7 @@ async function render(during) {
     await win.waitForTimeout(100);
   }
   await win.waitForTimeout(1500);
+  for (const c of await win.evaluate(() => { window.__cardObs?.disconnect(); return [...window.__cardTexts]; })) seen.add(c);
   return seen;
 }
 
