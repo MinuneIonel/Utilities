@@ -96,6 +96,7 @@ export const WORKFLOWS: Workflow[] = [
         { node: 0, param: "playlist", label: "This link is in a playlist" },
         { node: 0, param: "which", label: "Which videos" },
         { node: 0, param: "quality", label: "Quality" },
+        { node: 0, param: "signIn", label: "Use sign-in from" },
       ],
       action: "Download",
       topic: "link",
@@ -115,6 +116,7 @@ export const WORKFLOWS: Workflow[] = [
       fields: [
         { node: 0, param: "playlist", label: "This link is in a playlist" },
         { node: 0, param: "which", label: "Which videos" },
+        { node: 0, param: "signIn", label: "Use sign-in from" },
       ],
       action: "Download",
       topic: "sound",
@@ -240,6 +242,7 @@ export const WORKFLOWS: Workflow[] = [
       fields: [
         { node: 1, param: "size", label: "Longest side (pixels)" },
         { node: 2, param: "fps", label: "Frames per second" },
+        { node: 0, param: "signIn", label: "Use sign-in from" },
       ],
       action: "Make GIF",
       topic: "link",

@@ -57,6 +57,11 @@ export class DownloadJobs<T> {
     return result;
   }
 
+  /** Whether `key` was fetched, or is being fetched, this session. */
+  has(key: string): boolean {
+    return this.jobs.has(key);
+  }
+
   /** Stops every fetch still running (the Stop download button). */
   stop() {
     for (const [key, job] of this.jobs) {
