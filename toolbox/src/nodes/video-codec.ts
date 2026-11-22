@@ -708,12 +708,30 @@ export async function encodeVideo(v: VideoValue, params: Params, ctx: RunContext
     };
     // In the desktop app the file streams to disk as it's made.
     const disk = await diskTarget(`${base}.${meta.ext}`);
+    // If WebCodecs fails on the file, the desktop app re-encodes it with native ffmpeg rather than
+    // ffmpeg.wasm, which is single-threaded, holds the whole file in memory and can stall on big files.
+    const nativeCodec: NativeCodec | undefined = container === "webm" ? undefined : choice === "hevc" ? "hevc" : choice === "auto" || choice === "avc" ? "avc" : undefined;
+    let native: Bytes | undefined;
+    const fallback =
+      tools?.ffmpeg && nativeCodec && encodersFor(nativeCodec, tools.encoders).length
+        ? async (e: unknown) => {
+            console.warn("WebCodecs failed, re-encoding with native ffmpeg:", e);
+            const nativeJob: NativeJob = { codec: nativeCodec, container, level, prores: "hq", fps, audio: params.audio !== false };
+            native = await encodeNative(tools, v, nativeJob, ctx);
+            return { bytes: new Uint8Array(0), mime: meta.mime, ext: meta.ext, width: v.width, height: v.height, via: "ffmpeg" };
+          }
+        : undefined;
     let r;
     try {
-      r = await processVideo(processable(v.origin), i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label), target: disk && (() => disk.target) });
+      r = await processVideo(processable(v.origin), i, job, { signal: ctx.signal, onProgress: (p) => ctx.progress?.(p.fraction, p.label), target: disk && (() => disk.target), fallback });
     } catch (e) {
       await disk?.file.abort();
       throw e;
+    }
+    // Native ffmpeg's file already has AAC sound and its index up front.
+    if (native) {
+      await disk?.file.abort();
+      return file(native);
     }
     // The ffmpeg.wasm fallback ignores the target and returns bytes.
     const streamed = !!(disk && r.streamed);

@@ -642,7 +642,7 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
   const cancelled = () => (mode === "preview" ? reqId !== latestPreview : renderCancelled);
   if (cancelled()) return post({ type: "done", reqId, mode });
   const pending: Promise<void>[] = [];
-  const lastProgress = new Map<string, number>();
+  const lastProgress = new Map<string, { at: number; label?: string }>();
   try {
     // What's in the folders a graph reads from is part of its cache keys, so it's looked at first.
     await refreshFolders(graph, scope, mode === "render");
@@ -656,10 +656,12 @@ async function run(reqId: number, mode: "preview" | "render", graph: Graph, scop
       // Previews are quick and constant with a webcam; only Render shows nodes as running.
       onStart: (id) => mode === "render" && post({ type: "node", reqId, mode, scope, id, status: "running" }),
       onProgress: (id, fraction, label) => {
-        // At most ten updates a second per node.
+        // At most ten updates a second per node, but a new label always goes through: dropping
+        // one left a card showing a step that was long over (e.g. "Retrying with ffmpeg.wasm…").
         const now = Date.now();
-        if (now - (lastProgress.get(id) ?? 0) < 100) return;
-        lastProgress.set(id, now);
+        const last = lastProgress.get(id);
+        if (last && now - last.at < 100 && last.label === label) return;
+        lastProgress.set(id, { at: now, label });
         post({ type: "progress", reqId, scope, id, fraction, label });
       },
       onNode: (id, r) => {
