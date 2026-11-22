@@ -1,7 +1,7 @@
 import { createContext } from "react";
 import type { Node } from "@xyflow/react";
 import type { Shape } from "../runtime/evaluate";
-import type { NodeStatus, Params } from "../runtime/types";
+import type { NodeFacts, NodeStatus, Params } from "../runtime/types";
 
 export type ToolNodeData = { type: string; params: Params };
 export type ToolFlowNode = Node<ToolNodeData, "tool">;
@@ -20,6 +20,8 @@ export interface NodeRuntime {
   savedTo?: string;
   /** Video, audio or document summary. */
   info?: string;
+  /** What the node found when it last ran, for the inspector. */
+  facts?: NodeFacts;
   /** While running: 0–1, or -1 when unknown. */
   progress?: number;
   progressLabel?: string;

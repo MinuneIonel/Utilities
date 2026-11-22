@@ -36,6 +36,7 @@
     "check:folder": "npm run build && node test/e2e/folder.mjs",
     "check:folder-files": "npm run build && node test/e2e/folder-files.mjs",
     "check:batch-videos": "npm run build && node test/e2e/batch-videos.mjs",
+    "check:inspector": "npm run build && node test/e2e/inspector.mjs",
     "check:all": "npm run build && node test/e2e/run-all.mjs"
   },
   "devDependencies": {

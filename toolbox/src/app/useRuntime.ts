@@ -68,6 +68,8 @@ export function useRuntime(nodes: ToolFlowNode[], edges: Edge[], flash: Flash, s
             text: u.text,
             fileInfo: u.fileInfo,
             info: u.info ?? (u.status === "running" ? old?.info : undefined),
+            // Kept while it runs again, so pickers and sliders don't jump.
+            facts: u.facts ?? (u.status === "running" ? old?.facts : undefined),
             savedTo: u.mode === "preview" && u.status === "cached" ? old?.savedTo : undefined,
           },
         };
