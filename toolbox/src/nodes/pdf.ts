@@ -209,8 +209,25 @@ export const imagesToPdf: NodeDef = {
   params: [
     { key: "dpi", label: "Resolution DPI", kind: "number", min: 36, max: 600, step: 1 },
     { key: "quality", label: "JPEG quality", kind: "number", min: 10, max: 100, step: 1 },
-    { key: "every", label: "Every n-th frame", kind: "number", min: 1, max: 1000, step: 1 },
-    { key: "max", label: "Most pages", kind: "number", min: 1, max: 2000, step: 1 },
+    {
+      key: "every",
+      label: "Every n-th frame",
+      kind: "number",
+      min: 1,
+      max: 1000,
+      step: 1,
+      fit: (f, p) => (f.frames && f.frames > 1 ? { max: Math.min(1000, f.frames), note: `${Math.min(num(p.max, 200), Math.ceil(f.frames / Math.max(1, num(p.every, 1))))} pages` } : undefined),
+    },
+    {
+      key: "max",
+      label: "Most pages",
+      kind: "number",
+      min: 1,
+      max: 2000,
+      step: 1,
+      // No more than the frames there are to make pages of.
+      fit: (f, p) => (f.frames && f.frames > 1 ? { max: Math.min(2000, Math.ceil(f.frames / Math.max(1, num(p.every, 1)))) } : undefined),
+    },
     { key: "name", label: "File name", kind: "text" },
   ],
   defaults: () => ({ dpi: 150, quality: 85, every: 1, max: 200, name: "images" }),
@@ -248,10 +265,14 @@ export const pdfToImages: NodeDef = {
   inputs: [{ key: "document", label: "Document", type: "document" }],
   outputs: [{ key: "pages", label: "Pages", type: "video" }],
   params: [
-    { key: "page", label: "Preview page", kind: "number", min: 1, max: 999, step: 1 },
+    { key: "page", label: "Preview page", kind: "number", min: 1, max: 999, step: 1, pick: true },
     { key: "dpi", label: "Resolution DPI", kind: "number", min: 36, max: 600, step: 1 },
   ],
   defaults: () => ({ page: 1, dpi: 150 }),
+  facts: (_p, inputs) => {
+    const d = inputs.document;
+    return d?.kind === "document" && d.pageCount > 0 ? { items: Array.from({ length: d.pageCount }, (_, i) => `Page ${i + 1}`) } : undefined;
+  },
   kind: "frame",
   cacheKey: (_p, ctx) => ctx.mode,
   previewParams: ["page"],

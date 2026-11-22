@@ -199,9 +199,56 @@ export interface PortDef {
   sequence?: boolean;
 }
 
+/**
+ * What a node found the last time it ran, so its settings can fit it: the names of the things it
+ * previews one of, and the size, length or pages of what it works on. Worked out by the runtime from
+ * the node's input (or, for a source node, its own output), plus NodeDef.facts for the names.
+ */
+export interface NodeFacts {
+  /** What a `pick` setting chooses from, in order (playlist videos, files, pages). */
+  items?: string[];
+  /** Seconds of the video or sound. */
+  duration?: number;
+  /** Frames in the video (images in a list), when known. */
+  frames?: number;
+  /** Full-size picture size (not the smaller live-preview frame). */
+  width?: number;
+  height?: number;
+  /** Pages in the document. */
+  pages?: number;
+}
+
+/** A slider's range for what the node has seen; typed values may still go to the setting's own min and max. */
+export interface NumberFit {
+  min?: number;
+  max?: number;
+  /** One-click values (e.g. 720, 1080, Original). */
+  picks?: { label: string; value: number }[];
+  /** A word on what the value means here ("0:25 each"). */
+  note?: string;
+}
+
+/** A number setting. Its value stays a plain number whatever the inspector draws for it. */
+export interface NumberParam {
+  key: string;
+  label: string;
+  kind: "number";
+  min: number;
+  max: number;
+  step: number;
+  /** Picks one of the node's items, counting from 1: shown as a list of their names once known (NodeFacts.items). */
+  pick?: boolean;
+  /** A % of the way through the video or sound: shown and typed as a time once its length is known. */
+  time?: boolean;
+  /** The slider moves in proportion (10 → 100 takes as long as 100 → 1000), for wide ranges. A min of 0 stays the first stop. */
+  log?: boolean;
+  /** The slider's range and quick picks for what the node has seen (its image's size, its video's length). */
+  fit?(facts: NodeFacts, params: Params): NumberFit | undefined;
+}
+
 /** `advanced` settings sit folded away under Advanced in the inspector. */
 export type ParamDef = { advanced?: boolean } & (
-  | { key: string; label: string; kind: "number"; min: number; max: number; step: number }
+  | NumberParam
   | { key: string; label: string; kind: "select"; options: { value: string; label: string }[] }
   /** `commit` applies the value on Enter or blur instead of every keystroke. */
   | { key: string; label: string; kind: "text"; multiline?: boolean; commit?: boolean; placeholder?: string }
@@ -308,6 +355,12 @@ export interface NodeDef {
    * is previewed). Render's result doesn't depend on them, so changing one never re-renders.
    */
   previewParams?: string[];
+  /**
+   * The names a `pick` setting chooses from, and anything else about what the node works on that the
+   * runtime can't see in its values (a playlist's titles, a folder's files). Merged over the facts the
+   * runtime works out itself; called whether or not the node ran (a cache hit, an error).
+   */
+  facts?(params: Params, inputs: Record<string, Value | undefined>, ctx: RunContext): Partial<NodeFacts> | undefined;
   /** Time settings the timeline can show and edit, in seconds of this node's input. */
   timeline?: NodeTimeline;
   run(inputs: Record<string, Value | undefined>, params: Params, ctx: RunContext): Promise<Record<string, Value>>;
@@ -348,4 +401,6 @@ export interface NodeResult {
   renderKey?: string;
   ms?: number;
   error?: string;
+  /** What the node found, for the inspector (see NodeFacts). */
+  facts?: NodeFacts;
 }

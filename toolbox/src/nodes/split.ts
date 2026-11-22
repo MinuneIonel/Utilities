@@ -5,7 +5,7 @@ import { FORMAT_LIST, isAudioFormat } from "../../../audio/src/engine";
 import { VIDEO_CONTAINERS, type VideoContainer } from "../../../media/src/engine/types";
 import type { AudioValue, FileValue, NodeDef, VideoValue } from "../runtime/types";
 import { audioCodec } from "./audio";
-import { clipRanges, type SplitMode } from "./clips";
+import { clipRanges, formatTime, type SplitMode } from "./clips";
 import { videoCodec } from "./video";
 
 export const splitClips: NodeDef = {
@@ -32,7 +32,16 @@ export const splitClips: NodeDef = {
       ],
     },
     { key: "every", label: "Clip length", kind: "time" },
-    { key: "count", label: "Number of clips", kind: "number", min: 1, max: 500, step: 1 },
+    {
+      key: "count",
+      label: "Number of clips",
+      kind: "number",
+      min: 1,
+      max: 500,
+      step: 1,
+      // Clips of at least a second, and how long each one is.
+      fit: (f, p) => (f.duration ? { max: Math.max(2, Math.min(500, Math.floor(f.duration))), note: `${formatTime(f.duration / Math.max(1, Number(p.count) || 1))} each` } : undefined),
+    },
     { key: "at", label: "Cut at", kind: "text", commit: true, placeholder: "0:30, 1:15, 2:40" },
     { key: "parts", label: "Parts", kind: "text", multiline: true, commit: true, placeholder: "0:10-0:25, 1:00-1:30" },
     {

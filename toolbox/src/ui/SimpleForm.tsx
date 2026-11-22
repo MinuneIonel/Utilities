@@ -21,7 +21,9 @@ function LookField({ label, value, set }: { label: string; value: unknown; set: 
   const name = value && typeof value === "object" ? String((value as { name?: unknown }).name ?? "") : "";
   return (
     <div className="field">
-      <label>{label}</label>
+      <div className="field-top">
+        <label>{label}</label>
+      </div>
       <select value={looks.some((l) => l.name === name) ? name : ""} onChange={(e) => set(structuredClone(looks.find((l) => l.name === e.target.value)))}>
         {!looks.some((l) => l.name === name) && <option value="">{name || "Your own"}</option>}
         {looks.map((l) => (
@@ -155,7 +157,7 @@ export function SimpleForm({ s, message, onOpenAsGraph }: { s: Simple; message: 
     const set = (v: unknown) => s.setField(f.node, f.param, v);
     const label = f.label ?? pd.label;
     if (pd.kind === "custom") return LOOK_PARAMS.has(`${def.type}:${f.param}`) ? <LookField key={`${f.node}.${f.param}`} label={label} value={n.data.params[f.param]} set={set} /> : null;
-    return <Field key={`${f.node}.${f.param}`} def={{ ...pd, label } as ParamDef} value={n.data.params[f.param]} set={set} />;
+    return <Field key={`${f.node}.${f.param}`} def={{ ...pd, label } as ParamDef} value={n.data.params[f.param]} set={set} facts={s.runtime[n.id]?.facts} params={n.data.params} />;
   };
 
   return (

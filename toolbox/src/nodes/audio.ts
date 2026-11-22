@@ -2,7 +2,7 @@
 // waveform drawn on audio node cards. The work happens in audio-codec.ts, loaded
 // on first use.
 import { FORMAT_LIST, FORMATS, isAudioFormat } from "../../../audio/src/engine";
-import type { AudioValue, Converter, FileValue, NodeDef } from "../runtime/types";
+import type { AudioValue, Converter, FileValue, NodeDef, NodeFacts } from "../runtime/types";
 import { fromBytes } from "./bytes";
 
 /** ffmpeg.wasm, Mediabunny and Audio Lab's job builder, loaded on first use. */
@@ -27,6 +27,9 @@ export const audioInput: NodeDef = {
   },
 };
 
+/** A fade takes at most half the sound: a short clip gets a short slider. */
+const fadeFit = (f: NodeFacts) => (f.duration && f.duration < 60 ? { max: Math.max(0.1, Math.floor(f.duration * 5) / 10) } : undefined);
+
 export const audioConvert: NodeDef = {
   type: "audio.convert",
   title: "Convert audio",
@@ -36,7 +39,7 @@ export const audioConvert: NodeDef = {
   outputs: [{ key: "audio", label: "Audio", type: "audio" }],
   params: [
     { key: "format", label: "Format", kind: "select", options: FORMAT_LIST.map((f) => ({ value: f.id, label: f.label })) },
-    { key: "bitrate", label: "Bitrate kbps (0 = default)", kind: "number", min: 0, max: 320, step: 8 },
+    { key: "bitrate", label: "Bitrate kbps (0 = default)", kind: "number", min: 0, max: 320, step: 8, log: true },
     {
       key: "sampleRate",
       label: "Sample rate",
@@ -58,8 +61,8 @@ export const audioConvert: NodeDef = {
     },
     { key: "trimStart", label: "Start", kind: "time" },
     { key: "trimEnd", label: "End (0 = to the end)", kind: "time" },
-    { key: "fadeIn", label: "Fade in s", kind: "number", min: 0, max: 30, step: 0.1 },
-    { key: "fadeOut", label: "Fade out s", kind: "number", min: 0, max: 30, step: 0.1 },
+    { key: "fadeIn", label: "Fade in s", kind: "number", min: 0, max: 30, step: 0.1, fit: fadeFit },
+    { key: "fadeOut", label: "Fade out s", kind: "number", min: 0, max: 30, step: 0.1, fit: fadeFit },
     { key: "normalize", label: "Normalize loudness", kind: "toggle" },
     { key: "gainDb", label: "Gain dB", kind: "number", min: -24, max: 24, step: 0.5 },
     { key: "name", label: "File name", kind: "text" },

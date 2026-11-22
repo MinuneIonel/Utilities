@@ -57,7 +57,7 @@ async function open(app, win) {
 const menu = (app, c) => app.evaluate(({ BrowserWindow }, c) => BrowserWindow.getAllWindows()[0].webContents.send("menu", c), c);
 const pixel = (win) => win.locator(".dither-panel .field:has(> label:text-is('Pixel size')) input[type=range]");
 const pixelShown = (win) => win.locator(".dither-panel .field:has(> label:text-is('Pixel size')) output").textContent();
-const presetSelect = (win) => win.locator(".field.presets select");
+const presetSelect = (win) => win.locator(".presets select");
 const presetShown = (win) => presetSelect(win).evaluate((s) => s.options[s.selectedIndex]?.textContent ?? "");
 const setPixel = async (win, v) => {
   await pixel(win).focus();
@@ -93,11 +93,11 @@ try {
   check((await pixelShown(win)) === "2px", "editing after undo, then undoing, lands on 2px again");
 
   // Save a preset.
-  check((await presetShown(win)) === "None saved yet", "no presets yet");
+  check((await presetShown(win)) === "My presets: none saved yet", "no presets yet");
   await setPixel(win, 5);
   await win.click(".preset-actions button:text-is('Save…')");
-  await win.fill(".field.presets input[type=text]", "Chunky");
-  await win.press(".field.presets input[type=text]", "Enter");
+  await win.fill(".presets input[type=text]", "Chunky");
+  await win.press(".presets input[type=text]", "Enter");
   await win.waitForTimeout(300);
   check((await presetShown(win)) === "Chunky", "saved preset shows as the current one");
   const name = await win.locator(".dither-panel .field:has(> label:text-is('Preset')) select option").first().textContent();
@@ -105,7 +105,7 @@ try {
 
   // Change things, then put the preset back.
   await setPixel(win, 9);
-  check((await presetShown(win)) === "Pick a preset…", "changing a setting leaves the preset");
+  check((await presetShown(win)) === "My presets…", "changing a setting leaves the preset");
   await presetSelect(win).selectOption("Chunky");
   await win.waitForTimeout(400);
   check((await pixelShown(win)) === "5px", "picking the preset puts 5px back");
@@ -128,7 +128,7 @@ try {
   await win.click(".preset-actions button:text-is('Delete')");
   await win.click(".preset-actions button:text-is('Delete?')");
   await win.waitForTimeout(200);
-  check((await presetShown(win)) === "None saved yet", "delete asks once more, then removes it");
+  check((await presetShown(win)) === "My presets: none saved yet", "delete asks once more, then removes it");
 } finally {
   await app.close();
 }

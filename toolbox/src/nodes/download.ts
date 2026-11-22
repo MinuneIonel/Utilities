@@ -233,7 +233,7 @@ export const download: NodeDef = {
       ],
     },
     { key: "which", label: "Which videos", kind: "text", commit: true, placeholder: "All, or 1-10, 15, 20-" },
-    { key: "item", label: "Show video", kind: "number", min: 1, max: 5000, step: 1 },
+    { key: "item", label: "Show video", kind: "number", min: 1, max: 5000, step: 1, pick: true },
     {
       key: "quality",
       label: "Quality",
@@ -247,9 +247,20 @@ export const download: NodeDef = {
         { value: "mp3", label: "Sound only, as MP3" },
       ],
     },
-    { key: "at", label: "Preview at %", kind: "number", min: 0, max: 100, step: 0.5 },
+    { key: "at", label: "Preview at", kind: "number", min: 0, max: 100, step: 0.5, time: true },
   ],
   defaults: () => ({ url: "", playlist: "all", which: "", item: 1, quality: "1080", at: 10 }),
+  // The playlist's videos that "Which videos" keeps, by title, for Show video.
+  facts(p) {
+    if (!wantsPlaylist(p)) return undefined;
+    const list = knownPlaylists.get(String(p.url ?? "").trim());
+    if (!list) return undefined;
+    try {
+      return { items: pickEntries(list.entries, String(p.which ?? "")).map((e) => `${e.index}. ${e.title || e.id}`) };
+    } catch {
+      return { items: [] };
+    }
+  },
   visible: (key, p) => {
     if (key === "at") return !soundOnly(p.quality);
     if (key === "playlist") return isPlaylistLink(String(p.url ?? "")) && hasOneVideo(String(p.url ?? ""));

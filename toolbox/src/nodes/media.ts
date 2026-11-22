@@ -1,7 +1,24 @@
 import type { ImageFormat, ImageJob, Resize, Rotation } from "../../../media/src/engine/types";
-import type { ImageValue, NodeDef } from "../runtime/types";
+import type { ImageValue, NodeDef, NodeFacts, NumberFit, Params } from "../runtime/types";
 import { fromBytes } from "./bytes";
 import { gpu } from "./gpu";
+
+/**
+ * A pixel size's slider for the image coming in: up to its own size (twice that with Allow upscale),
+ * with the common sizes below it and the original as one-click picks.
+ */
+function sizeFit(dim: (f: NodeFacts) => number, common: number[]) {
+  return (f: NodeFacts, p: Params): NumberFit | undefined => {
+    const d = Math.round(dim(f));
+    if (!(d >= 16)) return undefined;
+    const below = common.filter((v) => v < d).slice(-3);
+    return {
+      min: 16,
+      max: p.upscale ? d * 2 : d,
+      picks: [...below.map((v) => ({ label: String(v), value: v })), { label: `Original · ${d}`, value: d }],
+    };
+  };
+}
 
 /** Media Lab's image engine (the jsquash codecs), loaded on first use. */
 const engine = () => import("../../../media/src/engine/image");
@@ -84,9 +101,9 @@ export const imageTransform: NodeDef = {
       ],
     },
     { key: "percent", label: "Percent", kind: "number", min: 1, max: 400, step: 1 },
-    { key: "size", label: "Long edge px", kind: "number", min: 16, max: 8192, step: 16 },
-    { key: "width", label: "Box width px", kind: "number", min: 16, max: 8192, step: 16 },
-    { key: "height", label: "Box height px", kind: "number", min: 16, max: 8192, step: 16 },
+    { key: "size", label: "Long edge px", kind: "number", min: 16, max: 8192, step: 16, fit: sizeFit((f) => Math.max(f.width ?? 0, f.height ?? 0), [720, 1080, 1280, 1920, 2560, 3840]) },
+    { key: "width", label: "Box width px", kind: "number", min: 16, max: 8192, step: 16, fit: sizeFit((f) => f.width ?? 0, [640, 1280, 1920, 3840]) },
+    { key: "height", label: "Box height px", kind: "number", min: 16, max: 8192, step: 16, fit: sizeFit((f) => f.height ?? 0, [480, 720, 1080, 2160]) },
     { key: "upscale", label: "Allow upscale", kind: "toggle" },
   ],
   defaults: () => ({
@@ -149,7 +166,7 @@ export const imageEncode: NodeDef = {
     },
     { key: "quality", label: "Quality", kind: "number", min: 1, max: 100, step: 1 },
     { key: "lossless", label: "Lossless", kind: "toggle" },
-    { key: "maxKB", label: "Max size KB (0 = off)", kind: "number", min: 0, max: 10000, step: 10 },
+    { key: "maxKB", label: "Max size KB (0 = off)", kind: "number", min: 0, max: 10000, step: 10, log: true },
     { key: "pngLevel", label: "PNG effort", kind: "number", min: 0, max: 6, step: 1 },
     { key: "name", label: "File name", kind: "text" },
   ],

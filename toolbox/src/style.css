@@ -223,18 +223,58 @@ button.primary .stale-dot { display: inline-block; width: 7px; height: 7px; marg
 
 /* ------------------------------------------------------------ inspector */
 
-.field { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
-.field label { color: var(--muted); }
-.field select, .field input[type="text"] { grid-column: 2 / 4; width: 100%; }
-.field output { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 32px; text-align: right; }
+/* Each setting: its name (and a grey hint) on one line, with the value or a reset on the right, and
+   the control under it at the full width of the panel, so long names and values never wrap or cut off. */
+.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 5px; margin: 12px 0; }
+.field > * { grid-column: 1 / -1; min-width: 0; }
+.field > label { grid-row: 1; grid-column: 1; color: var(--text); opacity: 0.82; }
+.field > output { grid-row: 1; grid-column: 2; font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 32px; text-align: right; }
+.field-top { display: flex; align-items: center; gap: 6px; min-height: 22px; min-width: 0; }
+.field-top label { color: var(--text); opacity: 0.82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.field-top small, .toggle-field small { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.toggle-field small { margin-left: 6px; }
+.field-gap { flex: 1 1 0; }
+.field-note { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+.field select, .field input[type="text"], .field textarea { width: 100%; min-width: 0; }
+.field input.num, .field input.time.num {
+  flex: none; width: 64px; height: 22px; text-align: right; font: 12px var(--mono); color: var(--text);
+  background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0 4px;
+}
+.field input.num.wide { width: 76px; }
+.field input.num:hover { border-color: var(--line); }
+.field input.num:focus { border-color: var(--accent); background: var(--card); outline: none; }
+.field input.num::-webkit-inner-spin-button { display: none; }
 .field input.time { font-family: var(--mono); font-size: 12px; }
-.field input.num { width: 64px; height: 26px; font: 11px var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
-.field.stacked { grid-template-columns: 1fr; }
-.field textarea { width: 100%; resize: vertical; font: 12px/1.4 var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
-.field.presets { grid-template-columns: 92px 1fr; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-.field.presets select, .field.presets input[type="text"] { grid-column: 2; }
-.preset-actions { grid-column: 2; display: flex; gap: 6px; }
-.preset-actions button { padding: 3px 10px; font-size: 12px; }
+.field textarea { resize: vertical; font: 12px/1.4 var(--mono); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.field button.reset { height: 20px; padding: 0 5px; font-size: 13px; line-height: 1; color: var(--muted); background: transparent; border-color: transparent; }
+.field button.reset:hover { color: var(--accent); border-color: var(--line); }
+.ticks { display: flex; justify-content: space-between; margin-top: -2px; font: 10px var(--mono); color: var(--muted); }
+.quick-picks { display: flex; flex-wrap: wrap; gap: 4px; }
+.quick-picks button { height: 22px; padding: 0 8px; font-size: 11px; color: var(--muted); }
+.quick-picks button.on { color: var(--accent); border-color: var(--accent); }
+.picker { display: flex; gap: 4px; }
+.picker select { flex: 1; min-width: 0; }
+.picker .step-btn { flex: none; width: 30px; padding: 0; font-size: 15px; }
+/* On and off: a switch at the end of the line. */
+.toggle-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+.toggle-field > span { opacity: 0.82; min-width: 0; display: flex; align-items: baseline; overflow: hidden; white-space: nowrap; }
+input.switch {
+  appearance: none; flex: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: var(--line);
+  position: relative; cursor: pointer; transition: background 0.15s;
+}
+input.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text); transition: left 0.15s, background 0.15s;
+}
+input.switch:checked { background: var(--accent); }
+input.switch:checked::after { left: 14px; background: var(--accent-ink); }
+input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.presets select, .presets input[type="text"] { flex: 1 1 140px; min-width: 0; }
+.folder-row { display: flex; align-items: center; gap: 6px; }
+.folder-row .path { flex: 1; }
+.preset-actions { display: flex; gap: 6px; }
+.preset-actions button { padding: 3px 10px; }
 button.danger { border-color: #ff5a5a; color: #ff5a5a; }
 .field .path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dither-panel { margin-top: 12px; }
@@ -259,6 +299,12 @@ button.danger { border-color: #ff5a5a; color: #ff5a5a; }
 .row select { grid-column: 2 / 4; width: 100%; height: 28px; padding: 3px 6px; }
 .row output { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--muted); }
 .row.toggle-row input { justify-self: start; }
+/* In the inspector, Dither and ASCII settings put their names above their controls too. */
+.inspector .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+.inspector .row > * { grid-column: 1 / -1; }
+.inspector .row > label { grid-row: 1; grid-column: 1; color: var(--text); opacity: 0.82; }
+.inspector .row > output { grid-row: 1; grid-column: 2; }
+.inspector .row.toggle-row > input { grid-row: 1; grid-column: 2; justify-self: end; }
 .row.colors-row { align-items: start; }
 .colors { grid-column: 2 / 4; display: flex; flex-direction: column; gap: 6px; }
 .colors input[type="text"] { height: 26px; font-size: 12px; width: 100%; }
@@ -391,7 +437,7 @@ kbd { font: 10px var(--mono); padding: 1px 4px; margin-left: 4px; border: 1px so
 .simple-drop .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .simple-link { width: 100%; height: 38px; font: inherit; font-size: 14px; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
 .simple-text { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.45; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
-.simple-fields .field { grid-template-columns: minmax(150px, 34%) 1fr auto; margin: 10px 0; }
+.simple-fields .field { margin: 14px 0; }
 .simple-preview { display: grid; place-items: center; }
 .simple-preview-img { max-width: 100%; max-height: 360px; border-radius: 6px; image-rendering: pixelated; }
 .simple-preview-text { justify-self: stretch; max-height: 260px; overflow: auto; margin: 0; padding: 12px; font: 13px/1.45 var(--mono); white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
