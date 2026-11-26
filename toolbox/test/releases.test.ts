@@ -11,6 +11,7 @@ const release = (tag: string, extra = {}) => ({
   prerelease: false,
   assets: [
     asset("Toolbox-0.3.0-mac-arm64.dmg", "sha256:" + "AB".repeat(32)),
+    asset("Toolbox-0.3.0-mac-x64.dmg"),
     asset("Toolbox-0.3.0-win-x64.exe"),
     asset("Toolbox-0.3.0-linux-x86_64.AppImage"),
   ],
@@ -31,7 +32,8 @@ test("each system gets its own installer", () => {
   assert.equal(pickAsset(r, "win32", "x64")?.name, "Toolbox-0.3.0-win-x64.exe");
   assert.equal(pickAsset(r, "win32", "x64")?.sha256, null);
   assert.equal(pickAsset(r, "linux", "x64")?.name, "Toolbox-0.3.0-linux-x86_64.AppImage");
-  assert.equal(pickAsset(r, "darwin", "x64"), null); // no Intel Mac build
+  assert.equal(pickAsset(r, "darwin", "x64")?.name, "Toolbox-0.3.0-mac-x64.dmg");
+  assert.equal(pickAsset(r, "linux", "arm64"), null); // no build for it
 });
 
 test("the newest published Toolbox release, skipping drafts, prereleases and other apps", () => {
@@ -46,4 +48,5 @@ test("the newest published Toolbox release, skipping drafts, prereleases and oth
   assert.equal(r?.version, "0.3.0");
   assert.equal(r?.asset?.name, "Toolbox-0.3.0-linux-x86_64.AppImage");
   assert.equal(newestRelease(list, "0.3.0", "linux", "x64"), null);
+  assert.equal(newestRelease(list, "0.2.0", "darwin", "x64")?.asset?.name, "Toolbox-0.3.0-mac-x64.dmg");
 });

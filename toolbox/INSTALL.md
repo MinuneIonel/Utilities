@@ -5,10 +5,13 @@ Download the file for your computer from the **Assets** list below, then follow 
 | Computer | File |
 | --- | --- |
 | Mac with Apple Silicon (M1 or newer) | `Toolbox-…-mac-arm64.dmg` |
+| Mac with an Intel processor | `Toolbox-…-mac-x64.dmg` |
 | Windows 10 or 11 (64-bit) | `Toolbox-…-win-x64.exe` |
 | Linux (64-bit) | `Toolbox-…-linux-x86_64.AppImage` |
 
 ## Mac
+
+Not sure which Mac you have? Open the Apple menu → **About This Mac**. "Chip: Apple M…" means Apple Silicon (`arm64`); "Processor: … Intel" means Intel (`x64`).
 
 1. Open the `.dmg` and drag **Toolbox** into **Applications**.
 2. Open Toolbox from Applications. macOS says it can't check the app for malware: click **Done** (or **OK**).
