@@ -54,7 +54,9 @@ async function installable(asset) {
 async function check() {
   const res = await net.fetch(RELEASES, { headers: { Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-  const release = newestRelease(await res.json(), app.getVersion(), process.platform, process.arch);
+  // An Intel build running on Apple Silicon (through Rosetta) moves over to the native build.
+  const arch = app.runningUnderARM64Translation ? "arm64" : process.arch;
+  const release = newestRelease(await res.json(), app.getVersion(), process.platform, arch);
   if (!release) return null;
   found = release;
   return { version: release.version, url: release.url, canInstall: await installable(release.asset) };

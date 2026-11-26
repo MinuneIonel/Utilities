@@ -18,6 +18,7 @@
     "check:alpha": "npm run build && node test/e2e/alpha.mjs",
     "check:removebg": "npm run build && node test/e2e/removebg.mjs",
     "dist": "tsc --noEmit && vite build && electron-builder --mac dmg --arm64 --publish never",
+    "dist:mac-x64": "tsc --noEmit && vite build && electron-builder --mac dmg --x64 --publish never",
     "pack": "vite build && electron-builder --dir",
     "dist:win": "tsc --noEmit && vite build && electron-builder --win nsis --x64 --publish never",
     "dist:linux": "tsc --noEmit && vite build && electron-builder --linux AppImage --x64 --publish never",
